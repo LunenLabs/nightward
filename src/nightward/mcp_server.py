@@ -43,8 +43,10 @@ def build_server():
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
+        # mcp 2.x renamed FastMCP, so "installed but wrong major" lands here too.
         raise NightwardError(
-            "MCP support not installed - run: pip install 'nightward[mcp]'"
+            "MCP support needs the mcp 1.x SDK - run: pip install 'nightward[mcp]' "
+            "(mcp 2.x is not supported yet)"
         ) from exc
     server = FastMCP("nightward")
     for name, fn in _TOOLS.items():

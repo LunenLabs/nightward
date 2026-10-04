@@ -26,8 +26,8 @@ Homepage = "https://github.com/LunenLabs/nightward"
 Issues = "https://github.com/LunenLabs/nightward/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.5", "mcp>=1.0", "pypdf>=4", "python-docx>=1", "openpyxl>=3.1"]
-mcp = ["mcp>=1.0"]
+dev = ["pytest>=7", "ruff>=0.5", "mcp>=1.0,<2", "pypdf>=4", "python-docx>=1", "openpyxl>=3.1"]
+mcp = ["mcp>=1.0,<2"]
 judge = ["anthropic>=0.40"]
 docs = ["pypdf>=4", "python-docx>=1", "openpyxl>=3.1"]
 
