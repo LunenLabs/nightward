@@ -12,6 +12,10 @@ from ..errors import NightwardError
 # breaks paths or shell ergonomics: path separators, Windows-reserved chars,
 # control chars, and whitespace.
 _FORBIDDEN = set('/\\<>:"|?*')
+# Windows device names: "<name>.approved.json" with one of these stems can't be
+# created there, so a store committed elsewhere would break on Windows clones.
+_WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL",
+                     *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
 def validate_name(name: str) -> str:
@@ -23,6 +27,8 @@ def validate_name(name: str) -> str:
         raise NightwardError(f"invalid behavior name {name!r}: reserved name")
     if name.endswith("."):
         raise NightwardError(f"invalid behavior name {name!r}: must not end with '.'")
+    if name.split(".", 1)[0].upper() in _WINDOWS_RESERVED:
+        raise NightwardError(f"invalid behavior name {name!r}: reserved device name on Windows")
     for ch in name:
         if ch.isspace() or ch in _FORBIDDEN or ord(ch) < 0x20:
             raise NightwardError(
@@ -65,5 +71,9 @@ class Behavior:
 
     @staticmethod
     def from_dict(d: dict) -> Behavior:
+        if not isinstance(d, dict):
+            raise NightwardError(f"expected a behavior object, got {type(d).__name__}")
+        if not isinstance(d.get("name"), str) or "payload" not in d:
+            raise NightwardError("behavior object needs a string 'name' and a 'payload'")
         return Behavior(name=d["name"], payload=d["payload"], group=d.get("group"),
                         semantic=d.get("semantic", False))

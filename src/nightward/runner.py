@@ -48,6 +48,29 @@ def _pytest_cmd(path: str, dir: str) -> list[str]:
             "--nightward-record", "--nightward-dir", dir, "-q"]
 
 
+# pytest exit codes other than 0 (passed) / 1 (some failed). On these the
+# plugin keeps the previous capture, so nothing in the store moves.
+_ABORT_REASONS = {
+    2: "pytest was interrupted (collection errors or Ctrl+C)",
+    3: "pytest hit an internal error",
+    4: "pytest rejected the command line (is nightward installed in this "
+       "interpreter, so its pytest plugin is registered?)",
+    5: "pytest collected no tests",
+}
+
+
+def _abort_message(path: str, result: subprocess.CompletedProcess) -> str:
+    reason = _ABORT_REASONS.get(result.returncode,
+                                f"pytest exited with code {result.returncode}")
+    msg = f"{reason} under {path!r}; aborting - the store was left untouched"
+    # With captured output the user never saw pytest's own explanation.
+    output = (result.stderr or b"") + (result.stdout or b"")
+    if output:
+        tail = output.decode("utf-8", errors="replace").strip().splitlines()[-15:]
+        msg += "\n--- pytest output (tail) ---\n" + "\n".join(tail)
+    return msg
+
+
 def execute_run(path: str = ".", dir: str = ".nightward", *,
                 capture_output: bool = False, judge_spec: str | None = None) -> dict:
     """Run pytest in a subprocess to capture behaviors, then recompute.
@@ -61,10 +84,8 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     """
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
     result = subprocess.run(_pytest_cmd(path, dir), capture_output=capture_output)
-    if result.returncode == 5:
-        raise NightwardError(f"pytest collected no tests under {path!r}")
     if result.returncode not in (0, 1):
-        raise NightwardError(f"pytest exited with code {result.returncode}; aborting")
+        raise NightwardError(_abort_message(path, result))
     store = Store(Path(dir))
     meta = store.load_run_meta()
     if spec:

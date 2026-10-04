@@ -11,6 +11,8 @@ CHANGED = "CHANGED"
 REMOVED = "REMOVED"
 UNCHANGED = "UNCHANGED"
 
+SAME = "SAME"  # judge verdict that collapses CHANGED into UNCHANGED (see judge.py)
+
 
 @dataclass
 class Change:
@@ -57,18 +59,17 @@ def compare(baseline: dict[str, Behavior], pending: dict[str, Behavior],
             changes.append(Change(name, NEW, group=p.group, diff_text=_text_diff(None, p)))
         elif p is None:
             changes.append(Change(name, REMOVED, group=b.group, diff_text=_text_diff(b, None)))
-        elif b.fingerprint() != p.fingerprint():
+        elif (old_fp := b.fingerprint()) == (new_fp := p.fingerprint()):
+            changes.append(Change(name, UNCHANGED, group=b.group))
+        else:
             change = Change(name, CHANGED, group=p.group, diff_text=_text_diff(b, p))
             if judge is not None and p.semantic:
-                verdict = judge.equivalent(b.payload, p.payload,
-                                           b.fingerprint(), p.fingerprint(), name=name)
+                verdict = judge.equivalent(b.payload, p.payload, old_fp, new_fp, name=name)
                 if verdict is not None:
                     change.judged = True
                     change.judge_model = verdict.model
                     change.judge_reason = verdict.reason
-                    if verdict.verdict == "SAME":
+                    if verdict.verdict == SAME:
                         change.kind = UNCHANGED
             changes.append(change)
-        else:
-            changes.append(Change(name, UNCHANGED, group=b.group))
     return changes

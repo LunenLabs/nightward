@@ -123,6 +123,19 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   legacy win32 writer. `cli.py` reconfigures stdout/stderr to UTF-8
   (`backslashreplace`) and `status --json` prints `ensure_ascii=False`.
   **Do not break this when adding output paths.**
+- **Aborted runs keep the previous capture.** The plugin flushes `pending/`
+  only when pytest finished (exit 0/1). Flushing an interrupted/empty session
+  would turn everything into REMOVED and `approve --all` would wipe the baseline.
+- **Captured data is rich markup.** Every name/group/diff/path printed by the
+  CLI goes through `rich.markup.escape` — `total[eur]` vanishes and `[/x]`
+  crashes otherwise. Do this for any new output path.
+- **Names are filenames on every OS.** `Store._file` validates every name (no
+  path escape via CLI args); the Recorder rejects case-only collisions and
+  Windows device names (`CON`, `NUL`, `COM1`…).
+- **Scrub must not merge keys.** If text scrubbing collapses two dict keys into
+  one (`<TIMESTAMP>`), `scrub` raises instead of silently dropping a value.
+- **The verdict ledger is never silently reset.** A corrupt
+  `judge_verdicts.json` (e.g. merge-conflict markers) is a `NightwardError`.
 - User-causable errors must be **`NightwardError` + clear message**, never a
   traceback (CLI converts to exit 2).
 
