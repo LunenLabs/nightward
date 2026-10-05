@@ -69,3 +69,37 @@ def test_cli_typo_judge_does_not_break_approve(tmp_path):
     meta = json.loads((tmp_path / ".nightward" / "run_meta.json").read_text(encoding="utf-8"))
     assert "judge" not in meta
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+
+
+# --- R1-LLM-05: an unavailable judge says so (run output, report, status) ----
+
+
+def test_judge_records_why_it_could_not_rule(tmp_path, monkeypatch):
+    import nightward.judge as judge_mod
+    from nightward.judge import JudgeUnavailable
+
+    def down(model, old, new):
+        raise JudgeUnavailable("ANTHROPIC_API_KEY not set")
+
+    monkeypatch.setitem(judge_mod._BACKENDS, "persona", down)
+    judge = Judge("persona:editor", cache_path=tmp_path / "c.json")
+    assert judge.equivalent("a", "b", "f1", "f2", name="reply.refund") is None
+    assert judge.summary() == {"spec": "persona:editor",
+                               "unavailable": "ANTHROPIC_API_KEY not set",
+                               "compared_exactly": ["reply.refund"]}
+
+
+def test_cli_run_warns_when_the_judge_is_unavailable(tmp_path):
+    import os
+    _project(tmp_path)
+    assert cli("run", ".", cwd=tmp_path).returncode == 0
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env["REPLY"] = REWORDED
+    r = cli("run", ".", "--judge", "anthropic:claude-haiku-4-5", cwd=tmp_path, env=env)
+    assert "breached" in r.stdout                       # fails closed ...
+    assert "judge anthropic:claude-haiku-4-5 unavailable" in r.stderr   # ... loudly
+    assert "1 semantic behavior(s) compared exactly" in r.stderr
+    status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
+    assert status["judge"]["unavailable"]
+    assert status["judge"]["compared_exactly"] == ["reply.refund"]

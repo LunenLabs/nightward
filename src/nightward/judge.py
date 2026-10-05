@@ -16,9 +16,11 @@ re-judging, no key needed to *replay* a ruling), bounds token spend to one call
 per new fingerprint pair, and puts every ruling in the PR diff where a human
 can review it, exactly like a baseline change.
 
-Failure policy is conservative: if a backend can't judge (no SDK, no key, bad
-response), `equivalent` returns None and the caller keeps the fingerprint
-verdict (CHANGED). The gate closes loudly rather than opening silently.
+Failure policy is conservative: if a backend can't judge (no SDK, no key, API
+error, bad response), `equivalent` returns None and the caller keeps the
+fingerprint verdict (CHANGED). The reason is kept (`Judge.summary`) and lands
+in the report, the run output and `status --json`: the gate closes loudly
+rather than opening silently.
 """
 from __future__ import annotations
 
@@ -173,14 +175,17 @@ def _anthropic_backend(model: str, old: Any, new: Any) -> tuple[str, str]:  # pr
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise JudgeUnavailable("ANTHROPIC_API_KEY not set")
     client = anthropic.Anthropic()
-    msg = client.messages.create(
-        model=model,
-        max_tokens=200,
-        temperature=0,
-        messages=[{"role": "user",
-                   "content": _PROMPT.replace("{old}", _as_text(old))
-                                     .replace("{new}", _as_text(new))}],
-    )
+    try:
+        msg = client.messages.create(
+            model=model,
+            max_tokens=200,
+            temperature=0,
+            messages=[{"role": "user",
+                       "content": _PROMPT.replace("{old}", _as_text(old))
+                                         .replace("{new}", _as_text(new))}],
+        )
+    except anthropic.APIError as exc:  # auth, network, rate limit, unknown model
+        raise JudgeUnavailable(f"API error: {exc}") from exc
     try:
         data = json.loads(msg.content[0].text)
         verdict = data["verdict"]
@@ -228,6 +233,10 @@ class Judge:
         self.spec = spec
         self.cache_path = Path(cache_path) if cache_path else None
         self._cache: dict[str, dict] = self._load_cache()
+        # Why the backend could not rule this run, and which behaviors fell back
+        # to the exact comparison because of it - surfaced, never swallowed.
+        self.unavailable: str | None = None
+        self.compared_exactly: list[str] = []
 
     def _load_cache(self) -> dict[str, dict]:
         # The ledger is committed, so it can be corrupted by e.g. a merge
@@ -275,7 +284,9 @@ class Judge:
             return Verdict(hit["verdict"], str(hit.get("reason", "")), self.spec, cached=True)
         try:
             verdict, reason = _BACKENDS[self.provider](self.model, old_payload, new_payload)
-        except JudgeUnavailable:
+        except JudgeUnavailable as exc:
+            self.unavailable = self.unavailable or str(exc)
+            self.compared_exactly.append(name)
             return None
         self._cache[key] = {"verdict": verdict, "reason": reason,
                             "behavior": name, "model": self.spec}
@@ -283,3 +294,8 @@ class Judge:
             self._cache[key]["rules"] = _PERSONA_RULES
         self._save_cache()
         return Verdict(verdict, reason, self.spec)
+
+    def summary(self) -> dict:
+        """What the report records about this judge (see runner.recompute)."""
+        return {"spec": self.spec, "unavailable": self.unavailable,
+                "compared_exactly": sorted(self.compared_exactly)}

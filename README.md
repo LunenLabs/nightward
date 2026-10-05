@@ -111,9 +111,13 @@ Any provider:model can plug in as a backend. Each ruling is recorded once per
 fingerprint pair in `.nightward/judge_verdicts.json` — a **committed ledger**, so
 the judge's own nondeterminism can't wobble the gate, fresh clones and CI replay
 verdicts deterministically without a key, and every ruling lands in the PR diff
-for human review. Judge failures fall back to the exact comparison (the gate
-fails closed), and rulings are also surfaced in the CLI, `status --json`, and
-the dashboard.
+for human review. A judge that can't rule (SDK not installed, no
+`ANTHROPIC_API_KEY`, API error, unparseable reply) falls back to the exact
+comparison, so the gate fails closed, and says so: `nightward run` prints
+`warning: judge <spec> unavailable (<reason>); N semantic behavior(s) compared
+exactly`, and the report and `status --json` carry
+`"judge": {"spec", "unavailable", "compared_exactly"}`. Rulings are also
+surfaced in the CLI, `status --json`, and the dashboard.
 
 ## Dashboard (`nightward view`)
 

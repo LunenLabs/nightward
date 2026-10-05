@@ -43,6 +43,8 @@ def recompute(store: Store, judge=None) -> dict:
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = baseline_digest(baseline)
+    if judge is not None:
+        report["judge"] = judge.summary()
     store.write_report(report)
     return report
 

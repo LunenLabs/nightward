@@ -105,6 +105,12 @@ def _print_summary(report: dict) -> None:
     if c.get("judged_same"):
         console.print(f"[dim]{c['judged_same']} fingerprint mismatch(es) ruled "
                       f"semantically SAME by the judge[/dim]")
+    judge = report.get("judge") or {}
+    if judge.get("unavailable"):
+        err_console.print(
+            f"[yellow]warning:[/yellow] judge {escape(judge['spec'])} unavailable "
+            f"({escape(judge['unavailable'])}); {len(judge['compared_exactly'])} semantic "
+            f"behavior(s) compared exactly", soft_wrap=True)
     for group, items in report.get("blast_radius", {}).items():
         console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
         for it in items:
