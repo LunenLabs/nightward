@@ -6,9 +6,11 @@ promise when {"boundary": "intact"}.
 from __future__ import annotations
 
 
-def status_payload(report: dict | None) -> dict:
+def status_payload(report: dict | None, *, stale: bool = False) -> dict:
+    """stale=True means the baseline changed since this report; don't trust its verdict."""
     if report is None:
-        return {"boundary": "unknown", "unapproved": 0, "changes": []}
+        return {"boundary": "unknown", "unapproved": 0, "changes": [],
+                "stale": False, "generated_at": None}
 
     changes = [
         {"name": it["name"], "kind": it["kind"], "group": it.get("group")}
@@ -19,4 +21,6 @@ def status_payload(report: dict | None) -> dict:
         "boundary": report.get("boundary", "unknown"),
         "unapproved": report.get("unapproved", 0),
         "changes": changes,
+        "stale": stale,
+        "generated_at": report.get("generated_at"),
     }
