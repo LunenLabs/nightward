@@ -345,3 +345,37 @@ def test_view_warns_when_its_output_would_be_committed(tmp_path):
     r = cli("view", "--no-serve", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "not git-ignored" in r.stderr and "nightward-site" in r.stderr
+
+
+# ---- R1-OPS-08 / R1-LLM-07: status speaks human and says what it reflects -------
+
+def test_human_status_is_a_sentence_with_the_run_time(tmp_path):
+    breached_store(tmp_path / ".tw", n=2)
+    r = cli("status", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "{" not in r.stdout and "'boundary'" not in r.stdout, r.stdout
+    assert "boundary breached (2 unapproved)" in r.stdout
+    assert "[CHANGED] b0000" in r.stdout
+    assert "last run" in r.stdout and "nightward run" in r.stdout
+
+
+def test_gate_says_which_run_its_verdict_is_from(tmp_path):
+    store = Store(tmp_path / ".tw")
+    store.ensure()
+    report = recompute(store)
+    r = cli("gate", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert r.returncode == 0
+    assert report["generated_at"] in r.stdout
+
+
+def test_merge_conflict_markers_in_a_baseline_are_named(tmp_path):
+    store = Store(tmp_path / ".tw")
+    store.ensure()
+    recompute(store)
+    write(store.baseline_dir / "cfg.approved.json",
+          '{\n  "group": null,\n  "name": "cfg",\n<<<<<<< HEAD\n  "payload": 1\n=======\n'
+          '  "payload": 2\n>>>>>>> feature\n}\n')
+    r = cli("gate", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert r.returncode == 2
+    assert "merge conflict" in r.stderr and "cfg.approved.json" in r.stderr, r.stderr
+    assert "nightward approve cfg" in r.stderr

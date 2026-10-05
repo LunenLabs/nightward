@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
@@ -48,9 +49,28 @@ def _file_text(b: Behavior) -> str:
 def _read_json(path: Path) -> object:
     """Parse a store file; any unreadable content becomes a NightwardError."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        text = path.read_text(encoding="utf-8")
+        return json.loads(text)
+    except UnicodeDecodeError as exc:
         raise NightwardError(f"corrupt file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        if _CONFLICT.search(text):
+            raise NightwardError(_conflict_message(path)) from exc
+        raise NightwardError(f"corrupt file {path}: {exc}") from exc
+
+
+# git's conflict markers at the start of a line (both sides approved differently).
+_CONFLICT = re.compile(r"^(<{7}|>{7})( |$)", re.M)
+
+
+def _conflict_message(path: Path) -> str:
+    msg = (f"{path} has unresolved merge conflict markers - keep one side "
+           f"(`git checkout --ours -- {path}` or `--theirs`), then `nightward run`")
+    for suffix in (".approved.json", ".received.json", ".rejected.json"):
+        if path.name.endswith(suffix):
+            name = path.name[:-len(suffix)]
+            return msg + f" and `nightward approve {name}` if the result should stand"
+    return msg
 
 
 class Store:

@@ -63,7 +63,8 @@ nightward reject  confirm a change as a real regression (boundary stays breached
                   `approve --all` skips it as "kept (rejected)" while that payload
                   is pending - `approve <name>` overrides and clears the rejection)
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
-nightward status  machine-readable boundary signal (--json): "intact" is the only
+nightward status  boundary summary with the change list (--json: the machine
+                  signal for agent loops): "intact" is the only
                   "done"; "breached", "incomplete" (capture tests failed/errored),
                   "stale" (baseline or capture changed since the last report -
                   re-run) and "unknown" (no report) are not
@@ -82,8 +83,17 @@ the report records `incomplete: {"failed": n, "errors": m}`, and `gate` exits 1 
 a clean run.
 
 `gate` and `status` read the report of the **last run**; they don't notice code
-edited since then. Run `nightward run` again after every edit before trusting the
-verdict (`generated_at` says when the report was made).
+edited since then. "stale" only covers a baseline or capture that changed after the
+run, never your source code. Both print `(as of the last run, <generated_at>; re-run
+nightward run after code edits)` next to the verdict, and `status --json` and MCP
+carry `generated_at`. Run `nightward run` again after every edit before trusting the
+verdict.
+
+**Merge conflicts in the baseline.** Two branches that approved the same behavior
+differently leave git conflict markers in `baseline/<name>.approved.json`. Every
+command then stops with `... has unresolved merge conflict markers`. Keep one side
+(`git checkout --ours -- <file>` or `--theirs`), run `nightward run`, and
+`nightward approve <name>` if the current behavior should be the new baseline.
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,

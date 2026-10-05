@@ -592,10 +592,13 @@ def gate(dir: str = typer.Option(DEFAULT_DIR)):
     if report.get("incomplete"):
         console.print(f"[red]last run incomplete:[/red] {_incomplete_text(report['incomplete'])}")
         raise typer.Exit(1)
+    # The verdict is the last run's; code edited since then is not in it (R1-LLM-07).
+    as_of = f" [dim]{escape(_as_of(report.get('generated_at')))}[/dim]"
     if report.get("boundary") == "intact":
-        console.print("[green]boundary intact[/green]")
+        console.print(f"[green]boundary intact[/green]{as_of}")
         raise typer.Exit(0)
-    console.print(f"[red]boundary breached[/red] ({report.get('unapproved', 0)} unapproved)")
+    console.print(f"[red]boundary breached[/red] ({report.get('unapproved', 0)} "
+                  f"unapproved){as_of}")
     raise typer.Exit(1)
 
 
@@ -639,7 +642,40 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
     if json_:
         print(json.dumps(payload, ensure_ascii=False), file=_stdout)
     else:
-        console.print(payload)
+        _print_status(payload)
+
+
+def _as_of(generated_at: str | None) -> str:
+    return (f"(as of the last run, {generated_at}; re-run `nightward run` after code "
+            f"edits)")
+
+
+_STATUS_COLORS = {"intact": "green", "breached": "red", "incomplete": "red",
+                  "stale": "red", "unknown": "yellow"}
+
+
+def _print_status(payload: dict) -> None:
+    """Human form of status_payload (the --json shape is the machine contract)."""
+    boundary = payload["boundary"]
+    head = f"[{_STATUS_COLORS.get(boundary, 'yellow')}]boundary {escape(boundary)}[/]"
+    if boundary == "unknown":
+        console.print(f"{head} - no report yet; run `nightward run`")
+        return
+    if payload["unapproved"]:
+        head += f" ({payload['unapproved']} unapproved)"
+    console.print(head)
+    if boundary == "stale":
+        console.print("the baseline or the capture changed since the last report; "
+                      "re-run `nightward run`")
+    if payload.get("incomplete"):
+        console.print(f"capture incomplete: {_incomplete_text(payload['incomplete'])}")
+    for ch in payload["changes"]:
+        console.print(f"  - [[cyan]{ch['kind']}[/cyan]] {escape(ch['name'])} "
+                      f"[dim]({escape(ch.get('group') or '(ungrouped)')})[/dim]")
+    if payload.get("judged_same"):
+        console.print(f"[dim]{len(payload['judged_same'])} change(s) ruled semantically "
+                      f"SAME by the judge - audit with `nightward review`[/dim]")
+    console.print(f"[dim]{escape(_as_of(payload.get('generated_at')))}[/dim]")
 
 
 @app.command("mcp")
