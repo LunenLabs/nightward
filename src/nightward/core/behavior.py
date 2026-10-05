@@ -1,6 +1,8 @@
 """Behavior — one captured, named observation of system output."""
 from __future__ import annotations
 
+import datetime
+import decimal
 import hashlib
 import json
 from dataclasses import dataclass
@@ -45,6 +47,80 @@ def validate_name(name: str) -> str:
     return name
 
 
+def _type_name(value: Any) -> str:
+    t = type(value)
+    return t.__qualname__ if t.__module__ == "builtins" else f"{t.__module__}.{t.__qualname__}"
+
+
+def _conversion_hint(value: Any) -> str:
+    """How to turn a common non-JSON value (numpy, pandas, stdlib) into JSON."""
+    t = type(value)
+    lib, name = t.__module__.split(".")[0], t.__name__
+    if isinstance(value, float):
+        return "replace NaN/Infinity with None (or a marker string such as \"NaN\")"
+    if lib == "numpy":
+        return ("use .tolist()" if name == "ndarray"
+                else "use .item() (or int()/float()/bool())")
+    if lib == "pandas":
+        return {"DataFrame": 'use df.to_dict("records")',
+                "Series": "use .tolist() (or .to_dict())",
+                "Timestamp": "use .isoformat()"}.get(
+                    name, "convert it to plain Python first (e.g. .tolist(), str())")
+    if isinstance(value, (datetime.date, datetime.time)):
+        return "use .isoformat()"
+    if isinstance(value, decimal.Decimal):
+        return "use str(x) to keep the exact digits (float(x) may round)"
+    if isinstance(value, (set, frozenset)):
+        return "use sorted(x)"
+    if isinstance(value, (bytes, bytearray)):
+        return "use .decode() for text or .hex() for binary"
+    return "convert it to dict/list/str/number/bool/None"
+
+
+def _path(path: str, key: Any) -> str:
+    if isinstance(key, str) and key.isidentifier():
+        return f"{path}.{key}"
+    return f"{path}[{json.dumps(key, ensure_ascii=False)}]"
+
+
+def _find_unjsonable(value: Any, path: str, seen: set[int]) -> str | None:
+    """Describe the first value json.dumps rejects (path, type, fix), or None.
+
+    Only runs after a failed dump, so it costs nothing on the happy path.
+    """
+    if value is None or isinstance(value, (str, int)):   # bool is an int
+        return None
+    if isinstance(value, float):
+        if value == value and value not in (float("inf"), float("-inf")):
+            return None
+        return f"value at {path} is {value!r}, which is not JSON - {_conversion_hint(value)}."
+    if isinstance(value, (list, tuple, dict)):
+        if id(value) in seen:
+            return f"value at {path} contains itself (circular reference)."
+        seen = seen | {id(value)}
+        if isinstance(value, dict):
+            for k in value:
+                if not (k is None or isinstance(k, (str, int, float))):
+                    return (f"dict at {path} has a key of type {_type_name(k)} - keys must "
+                            f"be str (int/float/bool/None keys become strings).")
+            try:
+                sorted(value)
+            except TypeError:
+                kinds = ", ".join(sorted({_type_name(k) for k in value}))
+                return (f"dict at {path} mixes key types ({kinds}), which have no stable "
+                        f"order - convert the keys to str.")
+            items = ((_path(path, k), v) for k, v in value.items())
+        else:
+            items = ((f"{path}[{i}]", v) for i, v in enumerate(value))
+        for sub, v in items:
+            found = _find_unjsonable(v, sub, seen)
+            if found:
+                return found
+        return None
+    return (f"value at {path} is {_type_name(value)}, which is not JSON - "
+            f"{_conversion_hint(value)}.")
+
+
 def canonical_json(payload: Any) -> str:
     """Stable, human-diffable serialization (sorted keys, pretty-printed).
 
@@ -54,9 +130,10 @@ def canonical_json(payload: Any) -> str:
     try:
         text = json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)
     except (TypeError, ValueError) as exc:
+        where = _find_unjsonable(payload, "$", set()) or f"{exc}."
         raise NightwardError(
-            f"behavior payload is not JSON-serializable ({exc}). "
-            f"Capture plain dict/list/str/number/bool/None, or convert first."
+            f"payload is not JSON-serializable: {where} "
+            f"Capture plain dict/list/str/number/bool/None."
         ) from exc
     # A lone surrogate (e.g. JS code-unit slicing, "\ud83d") serializes fine
     # but can't be written as UTF-8 - it would crash the store write long after

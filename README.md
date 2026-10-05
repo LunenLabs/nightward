@@ -115,6 +115,26 @@ normalization erases, because a change there never trips the gate:
   baseline file stores one escaped string, so its git diff is one long line -
   capture `text.splitlines()` when you want per-line git diffs too.
 
+**Non-JSON values are rejected, never coerced.** A capture fails its test with the
+path, the type and a fix, e.g. `behavior 'daily': payload is not JSON-serializable: value at
+$.units is numpy.int64, which is not JSON - use .item() (or int()/float()/bool())`.
+Common conversions:
+
+| value | capture |
+|---|---|
+| numpy scalar (`np.int64`, `np.float32`, `np.bool_`) | `x.item()` |
+| `np.ndarray`, `pd.Series` | `x.tolist()` |
+| `pd.DataFrame` | `df.to_dict("records")` (or `df.to_csv(index=False).splitlines()`) |
+| `datetime`, `date`, `pd.Timestamp` | `x.isoformat()` |
+| `Decimal` | `str(x)` (keeps the exact digits) |
+| `set` | `sorted(x)` |
+| `bytes` | `x.decode()` or `x.hex()` |
+| `NaN` / `inf` (e.g. the mean of an empty group) | `None` or a marker string such as `"NaN"` |
+| dict with mixed key types (`{1: "a", "b": 2}`) | `str` keys |
+
+`np.float64` is accepted as is: it subclasses Python's `float`. `np.float32` and the
+numpy integer types don't, so convert them.
+
 Diffs are for reading, never for the verdict: the verdict comes from
 fingerprints, and a diff is capped at 2,000 lines (huge payloads end with a
 "diff truncated" marker; very large scattered changes are compared by line

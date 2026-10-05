@@ -3,6 +3,8 @@
 Each test failed on the code before its fix. A failure here is a real defect -
 fix the code, do not weaken the test.
 """
+import datetime
+import decimal
 import os
 import subprocess
 import sys
@@ -11,6 +13,8 @@ import pytest
 
 from nightward.core.baseline import Store
 from nightward.core.behavior import Behavior
+from nightward.errors import NightwardError
+from nightward.pytest_plugin import Recorder
 from nightward.runner import recompute
 
 
@@ -70,3 +74,55 @@ def test_gate_keeps_its_verdict_when_nobody_reads_it(tmp_path):
                                read_bytes=0)
     assert "Traceback" not in stderr, stderr
     assert rc == 1
+
+
+# ---- R1-DATA-03: a non-JSON value is named by path, type and conversion --------
+
+class int64:  # stands in for numpy.int64 (numpy is not a test dependency)
+    __module__ = "numpy"
+
+
+class DataFrame:  # stands in for pandas.DataFrame
+    __module__ = "pandas.core.frame"
+
+
+def capture_error(value):
+    with pytest.raises(NightwardError) as exc:
+        Recorder().add("np_case", value)
+    return str(exc.value)
+
+
+def test_non_json_value_error_names_behavior_path_type_and_fix():
+    msg = capture_error({"rows": 10, "units": int64()})
+    assert "'np_case'" in msg
+    assert "$.units" in msg
+    assert "numpy.int64" in msg
+    assert ".item()" in msg
+
+
+@pytest.mark.parametrize("value, path, words", [
+    ({"t": [1, datetime.date(2024, 1, 1)]}, "$.t[1]", ["datetime.date", ".isoformat()"]),
+    ({"price": decimal.Decimal("1.10")}, "$.price", ["decimal.Decimal", "str("]),
+    ({"tags": {"a"}}, "$.tags", ["set", "sorted("]),
+    ({"raw": b"x"}, "$.raw", ["bytes", ".decode()"]),
+    ({"df": DataFrame()}, "$.df", ["pandas", 'to_dict("records")']),
+    ([{"mean": float("nan")}], "$[0].mean", ["nan", "None"]),
+    ({"a b": {"x": float("inf")}}, '$["a b"].x', ["inf", "None"]),
+])
+def test_non_json_value_error_hints_by_type(value, path, words):
+    msg = capture_error(value)
+    assert path in msg, msg
+    for w in words:
+        assert w in msg, msg
+
+
+def test_mixed_dict_key_types_are_named_as_such():
+    msg = capture_error({"m": {1: "a", "b": 2}})
+    assert "$.m" in msg and "key" in msg and "int" in msg and "str" in msg, msg
+    assert "'<' not supported" not in msg
+
+
+def test_circular_payload_is_named():
+    loop: list = []
+    loop.append(loop)
+    assert "circular" in capture_error({"x": loop})
