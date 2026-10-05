@@ -114,6 +114,12 @@ def _print_summary(report: dict) -> None:
     if c.get("judged_same"):
         console.print(f"[dim]{c['judged_same']} fingerprint mismatch(es) ruled "
                       f"semantically SAME by the judge[/dim]")
+    judge = report.get("judge") or {}
+    if judge.get("unavailable"):
+        err_console.print(
+            f"[yellow]warning:[/yellow] judge {escape(judge['spec'])} unavailable "
+            f"({escape(judge['unavailable'])}); {len(judge['compared_exactly'])} semantic "
+            f"behavior(s) compared exactly", soft_wrap=True)
     for group, items in report.get("blast_radius", {}).items():
         console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
         for it in items:
@@ -188,7 +194,7 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
 @app.command()
 @handle_errors
 def review(dir: str = typer.Option(DEFAULT_DIR)):
-    """Show the blast radius with full diffs."""
+    """Show the blast radius with full diffs, plus what the judge ruled SAME."""
     store = _store(dir)
     report = _require_report(store)
     if is_stale(store, report):
@@ -198,13 +204,30 @@ def review(dir: str = typer.Option(DEFAULT_DIR)):
     if report.get("incomplete"):
         err_console.print(f"[yellow]warning:[/yellow] capture incomplete: "
                           f"{_incomplete_text(report['incomplete'])}")
+    judged_same = report.get("judged_same") or []
     if report.get("boundary") == "intact":
-        console.print("[green]boundary intact - nothing to review[/green]")
-        return
+        if not judged_same:
+            console.print("[green]boundary intact - nothing to review[/green]")
+            return
+        console.print("[green]boundary intact[/green] - no unapproved change")
     for group, items in report.get("blast_radius", {}).items():
         console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
         for it in items:
             console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]")
+            if it.get("judged"):
+                console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}: "
+                              f"{escape(it.get('judge_reason', ''))}[/dim]")
+            diff = it.get("diff", "")
+            console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
+    if judged_same:
+        # Outside the boundary, but a wrong SAME is a hole in the gate: show the
+        # exact wording the judge accepted so a human can audit it (R1-LLM-04).
+        console.print(f"\n[yellow]ruled semantically SAME by the judge[/yellow] "
+                      f"({len(judged_same)}) - not in the boundary; audit the wording:")
+        for it in judged_same:
+            console.print(f"\n[bold][[cyan]SAME[/cyan]] {escape(it['name'])}[/bold] "
+                          f"[dim]{escape(it.get('judge_model', ''))}: "
+                          f"{escape(it.get('judge_reason', ''))}[/dim]")
             diff = it.get("diff", "")
             console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
 
@@ -341,10 +364,17 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
                   f"Fix the code and re-run `nightward run`.")
 
 
+# doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.
+_DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "~",
+                 "content-hash": "*", "changed": "*", "structural": "!"}
+_DOCTOR_LINES = 20  # per behavior; the rest is summarized
+
+
 @app.command()
 @handle_errors
 def doctor(dir: str = typer.Option(DEFAULT_DIR)):
-    """Name the volatile fields behind CHANGED behaviors and suggest scrub rules."""
+    """Explain what moved in CHANGED behaviors; suggest scrub rules only for
+    values that are volatile by evidence (timestamps, random tokens)."""
     from .core.doctor import diagnose
     store = _store(dir)
     pending = store.load_pending()
@@ -354,26 +384,36 @@ def doctor(dir: str = typer.Option(DEFAULT_DIR)):
     if not diag["changed"]:
         console.print("[green]no CHANGED behaviors - nothing to diagnose[/green]")
         return
-    for name, info in diag["behaviors"].items():
+    looks_real = False
+    for name, found in diag["behaviors"].items():
         console.print(f"\n[bold]{escape(name)}[/bold]")
-        for p in info["volatile"]:
-            console.print(f"  ~ {escape(p)}")
-        for p in info["structural"]:
-            console.print(f"  ! {escape(p)} [dim](structural - scrub cannot hide this)[/dim]")
+        for f in found[:_DOCTOR_LINES]:
+            mark = _DOCTOR_MARKS[f["kind"]]
+            looks_real |= mark != "~"
+            count = f" ({f['count']} values)" if f["count"] > 1 else ""
+            detail = f"  {f['detail']}" if f["detail"] else ""
+            console.print(f"  {mark} {escape(f['path'])}{count}  [dim]{escape(f['note'])}"
+                          f"{escape(detail)}[/dim]", soft_wrap=True)
+        if len(found) > _DOCTOR_LINES:
+            console.print(f"  [dim]... {len(found) - _DOCTOR_LINES} more path(s)[/dim]")
     if diag["suggestions"]:
-        console.print("\n[bold]if these fields are noise, not regressions[/bold] "
-                      "(volatile by design), tame them in conftest.py:")
+        console.print("\n[bold]volatile by evidence[/bold] - if this is noise, tame it in "
+                      "conftest.py:")
         console.print("  [cyan]from nightward import scrub[/cyan]")
-        for line in diag["suggestions"]:
-            console.print(f"  [cyan]{escape(line)}[/cyan]")
-        console.print("then re-run [cyan]nightward run[/cyan]. If they are real "
-                      "changes, approve or fix instead - never scrub a regression.")
-        console.print("[yellow]caution:[/yellow] register_field masks that key in "
-                      "[bold]every[/bold] behavior, not just the noisy one - a real "
-                      "regression in the same field elsewhere would be hidden too.")
-    else:
-        console.print("\nno field-level suggestions - the changes look structural "
-                      "(or whole-value); review and approve/fix instead")
+        for s in diag["suggestions"]:
+            console.print(f"  [cyan]{escape(s['rule'])}[/cyan]  [dim]# {escape(s['reason'])}"
+                          f"[/dim]", soft_wrap=True)
+        console.print("then re-run [cyan]nightward run[/cyan] and review what is left.")
+        if any("register_field" in s["rule"] for s in diag["suggestions"]):
+            console.print("[yellow]caution:[/yellow] register_field masks that key in "
+                          "[bold]every[/bold] behavior - doctor offers it only for keys "
+                          "that are not stable anywhere else in this capture.")
+    if looks_real:
+        console.print("\n[bold]*[/bold] / [bold]![/bold] look like real changes: "
+                      "`nightward review`, then approve or fix - never scrub a regression. "
+                      "doctor calls a value volatile only when the value shows it. If one of "
+                      "these changes again on a re-run with no code edits, it is volatile: "
+                      "mask it at capture time in that test.", soft_wrap=True)
 
 
 @app.command()
@@ -434,10 +474,12 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
 
 @app.command("mcp")
 @handle_errors
-def mcp_cmd():
+def mcp_cmd(judge: str | None = typer.Option(
+        None, help="Semantic judge for nightward_run, as provider:model. The agent "
+                   "can't choose it. Default: $NIGHTWARD_JUDGE, else the last run's judge")):
     """Start the MCP server (stdio) for AI agents - exposes run/status, NOT approve."""
     from .mcp_server import serve
-    serve()
+    serve(judge=judge)
 
 
 if __name__ == "__main__":

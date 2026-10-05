@@ -13,11 +13,13 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
     """stale=True means the baseline or capture changed since this report; its
     verdict no longer applies, so boundary reads "stale" instead of intact/breached."""
     if report is None:
-        return {"boundary": "unknown", "unapproved": 0, "changes": [],
-                "stale": False, "incomplete": None, "generated_at": None}
+        return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
+                "stale": False, "incomplete": None, "generated_at": None, "judge": None}
 
+    # Every field of a change except its (possibly large) diff, so judged
+    # rulings (judged / judge_model / judge_reason) reach agents and CI.
     changes = [
-        {"name": it["name"], "kind": it["kind"], "group": it.get("group")}
+        {k: v for k, v in it.items() if k != "diff"}
         for items in report.get("blast_radius", {}).values()
         for it in items
     ]
@@ -27,11 +29,17 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
         boundary = "stale"
     elif incomplete and boundary == "intact":
         boundary = "incomplete"   # a failing capture test is never "done"
+    judged_same = [
+        {k: it.get(k) for k in ("name", "group", "judge_model", "judge_reason")}
+        for it in report.get("judged_same", [])
+    ]
     return {
         "boundary": boundary,
         "unapproved": report.get("unapproved", 0),
         "changes": changes,
+        "judged_same": judged_same,
         "stale": stale,
         "incomplete": incomplete,
         "generated_at": report.get("generated_at"),
+        "judge": report.get("judge"),
     }

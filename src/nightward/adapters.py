@@ -51,8 +51,9 @@ def from_text(path: str | Path, encodings: tuple[str, ...] = ("utf-8", "cp949"))
     """Plain text with unknown encoding; falls back to the artifact fingerprint.
 
     Tries `encodings` in order (default covers UTF-8 and Korean legacy cp949).
-    The text hash is over the *decoded* text re-encoded as UTF-8, so the same
-    content stored in different encodings gates as equal.
+    The text hash is over the *decoded* text re-encoded as UTF-8, with line
+    endings normalized to "\\n" and a leading BOM dropped, so the same content
+    stored in different encodings, or written on Windows vs Linux, gates as equal.
     """
     raw = _read(path)
     for enc in encodings:
@@ -60,7 +61,9 @@ def from_text(path: str | Path, encodings: tuple[str, ...] = ("utf-8", "cp949"))
             text = raw.decode(enc)
         except UnicodeDecodeError:
             continue
-        return {"encoding": enc, "chars": len(text), "lines": text.count("\n") + 1,
+        text = text.removeprefix("﻿").replace("\r\n", "\n").replace("\r", "\n")
+        lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+        return {"encoding": enc, "chars": len(text), "lines": lines,
                 "text_sha256": _sha(text.encode("utf-8"))}
     return {"encoding": "unknown"} | from_file(path)
 

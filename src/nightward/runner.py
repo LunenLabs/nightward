@@ -54,6 +54,8 @@ def recompute(store: Store, judge=None) -> dict:
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)
     report["pending_digest"] = digest(pending)
+    if judge is not None:
+        report["judge"] = judge.summary()
     store.write_report(report)
     return report
 
@@ -137,6 +139,10 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     """
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
     run_id = uuid.uuid4().hex
+    store = Store(Path(dir))
+    # Build (= validate) the judge before pytest: a typo'd spec or a corrupt
+    # ledger must fail in a second, not after the whole suite (R1-LLM-06).
+    judge = make_judge(spec, store)
     try:
         # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
         # child inheriting it hangs on Windows while the server reads it.
@@ -148,7 +154,6 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         ) from exc
     if result.returncode not in (0, 1):
         raise NightwardError(_abort_message(path, result))
-    store = Store(Path(dir))
     meta = store.load_run_meta()
     if meta.get("run_id") != run_id:
         # Exit 1 is also what a crash inside the plugin's flush looks like. Then
@@ -159,12 +164,13 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
                f"finish writing it - see pytest's error output); the last report was "
                f"invalidated. Fix the error and re-run `nightward run`.")
         raise NightwardError(_with_tail(msg, result))
+    report = recompute(store, judge=judge)
+    # Persist the spec only once it has judged this run, so approve reuses it.
     if spec:
         meta["judge"] = spec
     else:
         meta.pop("judge", None)
     store.write_run_meta(meta)
-    report = recompute(store, judge=make_judge(spec, store))
     return {
         "report": report,
         "skipped": meta.get("skipped", 0),

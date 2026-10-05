@@ -216,6 +216,10 @@ surface, and tests freeze that approve is absent
 `execute_run(capture_output=True)` so pytest stdout can't break the MCP
 protocol channel (diagnostics to stderr only). `mcp` is an optional extra;
 tool functions don't depend on the SDK, so they're testable without it.
+**The judge is the human's choice too**: `nightward_run` takes no judge argument
+(an agent could pick `persona:lenient`); it uses `nightward mcp --judge`, else
+`$NIGHTWARD_JUDGE`, else the judge recorded in run_meta by the last run, so it
+gives the same verdict as the team's CLI run (`tests/test_beta_judge.py::test_mcp_*`).
 Design rationale: `docs/superpowers/specs/2026-06-07-nightward-mcp-agent-gate-design.md`.
 
 ---

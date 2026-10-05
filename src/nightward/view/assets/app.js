@@ -311,6 +311,41 @@ function renderLegend() {
   });
 }
 
+// Fingerprint mismatches a judge ruled semantically SAME. They are not in the
+// boundary, but a wrong SAME is a hole in the gate, so list each one with the
+// wording the judge accepted for a human to audit.
+function renderJudgedSame(report) {
+  const box = $("judged");
+  clear(box);
+  const items = report.judged_same || [];
+  box.hidden = !items.length;
+  if (!items.length) return;
+  const details = el("details", { cls: "group" });
+  details.open = true;
+  const summary = el("summary", { cls: "group-head" });
+  summary.appendChild(el("span", { cls: "group-name", text: "ruled semantically SAME by the judge — audit the wording" }));
+  summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
+  details.appendChild(summary);
+  for (const it of items) {
+    const card = el("article", { cls: "card" });
+    const head = el("div", { cls: "card-head" });
+    head.appendChild(el("span", {
+      cls: "badge badge-judged",
+      text: "judged SAME",
+      title: "Not in the boundary: an LLM judge ruled this fingerprint mismatch semantically SAME — verdict by " + (it.judge_model || "unknown model"),
+    }));
+    head.appendChild(el("span", { cls: "card-name", text: it.name }));
+    card.appendChild(head);
+    const j = el("p", { cls: "judge-note" });
+    j.appendChild(el("strong", { text: (it.judge_model || "judge") + ": " }));
+    j.appendChild(document.createTextNode(it.judge_reason || "ruled SAME"));
+    card.appendChild(j);
+    renderDiff(card, it.diff);
+    details.appendChild(card);
+  }
+  box.appendChild(details);
+}
+
 // ---- entry ----------------------------------------------------------------
 function render(data) {
   renderMeta(data.meta);
@@ -326,6 +361,7 @@ function render(data) {
   const state = bannerState(report, data.meta);
   renderBanner(report, state);
   renderWarnings(report, data.meta);
+  renderJudgedSame(report);
 
   if (state === "stale") {
     showEmpty("Re-run to refresh this report",

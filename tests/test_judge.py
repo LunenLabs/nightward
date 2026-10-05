@@ -31,9 +31,8 @@ def test_parse_spec_rejects_bad_specs(bad):
 
 
 def test_unknown_persona_is_clean_error(tmp_path):
-    judge = Judge("persona:nope", cache_path=tmp_path / "c.json")
-    with pytest.raises(NightwardError):
-        judge.equivalent("a", "b", "f1", "f2")
+    with pytest.raises(NightwardError):  # at construction, before any run (R1-LLM-06)
+        Judge("persona:nope", cache_path=tmp_path / "c.json")
 
 
 # --- persona verdicts ----------------------------------------------------------
@@ -233,3 +232,88 @@ def test_cli_run_with_persona_judge_keeps_boundary_intact(tmp_path):
     report = json.loads((tmp_path / ".nightward" / "report.json").read_text(encoding="utf-8"))
     assert report["counts"]["judged_same"] == 1
     assert (tmp_path / ".nightward" / "judge_verdicts.json").exists()
+
+
+# --- D8: key-free personas fail closed on meaning-bearing characters ------------
+# R1-FIN-03 / R1-LLM-02: persona:editor collapsed sign flips, currency swaps,
+# decimal separators, operators and emoji because it dropped every non-word char.
+
+MEANING_CHANGES = [
+    ("Your balance is -$120.00 after the refund of $19.99.",
+     "Your balance is $120.00 after the refund of $19.99."),           # sign flip
+    ("Your balance is -$120.00 after the refund of $19.99.",
+     "Your balance is -€120.00 after the refund of €19.99."),          # currency swap
+    ("Your balance is -$120.00 after the refund of $19.99.",
+     "Your balance is -$120,00 after the refund of $19,99."),          # decimal separator
+    ("Your loyalty discount is 15% off.", "Your loyalty discount is $15 off."),
+    ("def net(price, fee):\n    return price - fee",
+     "def net(price, fee):\n    return price + fee"),                  # operator
+    ("if user.age >= 18: allow()", "if user.age <= 18: allow()"),      # comparison
+    ("if a != b: stop()", "if a = b: stop()"),                         # negated operator
+    ("Customer mood: 👍", "Customer mood: 👎"),                          # emoji
+    ("The refund was approved.", "The refund was not approved."),     # negation
+    ("Output power is 5 mW.", "Output power is 5 MW."),                # unit symbol case
+    ("Is the order shipped.", "Is the order shipped?"),                # statement -> question
+]
+
+
+@pytest.mark.parametrize("spec", ["persona:editor", "persona:lenient"])
+@pytest.mark.parametrize("old,new", MEANING_CHANGES)
+def test_personas_rule_meaning_changes_different(spec, old, new, tmp_path):
+    assert _verdict(spec, old, new, tmp_path).verdict == DIFFERENT
+
+
+@pytest.mark.parametrize("spec", ["persona:editor", "persona:lenient"])
+@pytest.mark.parametrize("old,new", [
+    ({"amount": 49.99}, {"amount": "49.99"}),                          # number -> string
+    ({"items": ["cable", "adapter"]}, {"items": "cable adapter"}),     # list -> string
+    ({"n": 1}, {"n": 1.0}),                                            # int -> float
+    ({"ok": True}, {"ok": 1}),                                         # bool -> int
+    ({"a": "x"}, {"b": "x"}),                                          # key renamed
+])
+def test_personas_rule_value_type_changes_different(spec, old, new, tmp_path):
+    verdict = Judge(spec, cache_path=tmp_path / "c.json").equivalent(old, new, "f1", "f2")
+    assert verdict.verdict == DIFFERENT
+
+
+@pytest.mark.parametrize("old,new", [
+    ("The Total is 42.", "the total   is 42"),
+    ("Your refund of $50 has been approved.", "your refund of $50 has been approved!"),
+    ("Hello, world; bye", "hello world bye"),
+    ("결제가 완료되었습니다.", "결제가 완료되었습니다"),
+])
+def test_editor_collapses_only_cosmetic_rewording(old, new, tmp_path):
+    assert _verdict("persona:editor", old, new, tmp_path).verdict == SAME
+
+
+def test_editor_judges_strings_inside_structured_payloads(tmp_path):
+    judge = Judge("persona:editor", cache_path=tmp_path / "c.json")
+    same = judge.equivalent({"reply": "Approved.", "n": 2}, {"reply": "approved", "n": 2},
+                            "f1", "f2")
+    diff = judge.equivalent({"reply": "Approved.", "n": 2}, {"reply": "approved", "n": 3},
+                            "f1", "f3")
+    assert (same.verdict, diff.verdict) == (SAME, DIFFERENT)
+
+
+def test_lenient_tolerates_word_changes_but_not_facts(tmp_path):
+    assert _verdict("persona:lenient", "market went up today",
+                    "today the market rose", tmp_path).verdict == SAME
+    assert _verdict("persona:lenient", "Total: 120 USD", "Total: 120 EUR",
+                    tmp_path).verdict == DIFFERENT
+
+
+def test_persona_rulings_from_older_rules_are_rejudged(tmp_path):
+    # R1-FIN-03: a committed ledger replayed the old editor's SAME for a sign flip
+    # forever. Persona rulings recorded under older rules must not replay.
+    ledger = tmp_path / "judge_verdicts.json"
+    ledger.write_text(json.dumps({"f1:f2:persona:editor": {
+        "verdict": SAME, "reason": "same words modulo case/punctuation/whitespace",
+        "behavior": "statement.notice", "model": "persona:editor"}}), encoding="utf-8")
+    verdict = Judge("persona:editor", cache_path=ledger).equivalent(
+        "Your balance is -$120.00.", "Your balance is $120.00.", "f1", "f2")
+    assert (verdict.verdict, verdict.cached) == (DIFFERENT, False)
+
+
+def test_lenient_keeps_currency_codes_before_numbers(tmp_path):
+    assert _verdict("persona:lenient", "Total: USD 120", "Total: EUR 120",
+                    tmp_path).verdict == DIFFERENT

@@ -75,8 +75,10 @@ call per new fingerprint pair:
 ```
 
 No key available (forks, dry runs)? `--judge persona:editor` is a deterministic,
-key-free stand-in: it collapses pure case/punctuation/whitespace rewording and
-keeps everything else breached. Judge failures always fall back to the exact
+key-free stand-in: it collapses only letter case, whitespace, and sentence
+punctuation, and keeps everything else breached, including any change to a number,
+sign, currency or unit symbol, operator, emoji, or value type (README "Semantic
+judge"). Never use `persona:lenient` for real gating. Judge failures always fall back to the exact
 comparison — the gate fails closed.
 
 ## Rules worth keeping

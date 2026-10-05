@@ -46,7 +46,8 @@ nightward view              # builds a static site + serves it on localhost
 ```
 nightward run     re-run tests → capture → compute blast radius
 nightward review  show changed behaviors with diffs
-nightward doctor  name the volatile fields behind CHANGED behaviors, suggest scrub rules
+nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
+                  for values that are volatile by evidence (see below)
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
 nightward reject  confirm a change as a real regression (boundary stays breached;
@@ -58,12 +59,17 @@ nightward status  machine-readable boundary signal (--json): "intact" is the onl
                   "stale" (baseline or capture changed since the last report -
                   re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
+nightward mcp     stdio MCP server for AI agents: run + status, never approve
 ```
 
 A failing or erroring capture test means its behaviors are missing from the blast
 radius, so the run is **incomplete**: `nightward run` prints the summary and exits 1,
 the report records `incomplete: {"failed": n, "errors": m}`, and `gate` exits 1 until
 a clean run.
+
+`gate` and `status` read the report of the **last run**; they don't notice code
+edited since then. Run `nightward run` again after every edit before trusting the
+verdict (`generated_at` says when the report was made).
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
@@ -123,8 +129,21 @@ scrub.register_field("request_id")                 # mask this key at any depth
 scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
 ```
 
-`nightward doctor` names the volatile fields behind CHANGED behaviors and
-suggests rules - but never scrub a real regression.
+`nightward doctor` sees one before/after pair, which is no evidence that a value is
+noise, so it only calls a value volatile when the value itself shows it, and then
+suggests the narrowest rule that hides exactly that:
+
+| doctor sees | it suggests |
+|---|---|
+| a date-time or HTTP date | a `scrub.register(...)` pattern for that date shape |
+| a random token behind a stable prefix (`chatcmpl-…`, `call_…`, a CSRF value in HTML) | a `scrub.register(...)` pattern anchored on that prefix, never the whole field or body |
+| a Unix epoch under a time-like key (`created`, `updated_at`) | `scrub.register_field(key)`, only if that key is not stable in any other behavior |
+| a float that moved only in its last digits | round it before capturing (`round(x, 10)`), no mask |
+| a list with the same elements in a new order | sort it before capturing, no mask |
+| a changed content hash, a type change, a new key, anything else | "looks like a real change": review, then approve or fix |
+
+If a value marked as a real change changes again on a re-run with no code edits, it
+is volatile: mask it at capture time in that test.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 
@@ -139,17 +158,88 @@ def test_summary(behavior):
 
 ```bash
 nightward run . --judge anthropic:claude-haiku-4-5   # real LLM (pip install nightward[judge])
-nightward run . --judge persona:editor               # deterministic, key-free stand-in
+nightward run . --judge persona:editor               # deterministic, key-free (see below)
 NIGHTWARD_JUDGE=anthropic:claude-haiku-4-5 nightward run .   # or via env
 ```
+
+The `persona:*` judges are deterministic and need no key. Both judging personas
+**fail closed**: a change to any digit or number, sign, currency or unit symbol,
+operator (`+ - < > = !=` ...), emoji, negation word, JSON key, or value type
+(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT. In structured payloads
+only string values are compared loosely.
+
+| persona | rules SAME when... | use it for |
+|---|---|---|
+| `persona:editor` | only letter case, whitespace, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
+| `persona:strict` | never | forcing every mismatch to stay breached |
 
 Any provider:model can plug in as a backend. Each ruling is recorded once per
 fingerprint pair in `.nightward/judge_verdicts.json` — a **committed ledger**, so
 the judge's own nondeterminism can't wobble the gate, fresh clones and CI replay
 verdicts deterministically without a key, and every ruling lands in the PR diff
-for human review. Judge failures fall back to the exact comparison (the gate
-fails closed), and rulings are also surfaced in the CLI, `status --json`, and
-the dashboard.
+for human review: each entry records the behavior, model, verdict, reason, and
+the old and new wording it ruled on (up to 1,000 chars each).
+
+Rulings are visible wherever the verdict is:
+
+- `nightward review` lists every behavior the judge ruled SAME, with its diff,
+  even when the boundary is intact. A wrong SAME is a hole in the gate, so audit them.
+- `status --json` (and MCP) carry `judged`, `judge_model` and `judge_reason` on each
+  change, and a `judged_same` list of `{name, group, judge_model, judge_reason}`.
+- The dashboard has a "ruled semantically SAME" section with the diffs.
+
+A judge that can't rule (SDK not installed, no
+`ANTHROPIC_API_KEY`, API error, unparseable reply) falls back to the exact
+comparison, so the gate fails closed, and says so: `nightward run` prints
+`warning: judge <spec> unavailable (<reason>); N semantic behavior(s) compared
+exactly`, and the report and `status --json` carry
+`"judge": {"spec", "unavailable", "compared_exactly"}`.
+
+## AI agents (`nightward mcp`)
+
+An agent loop needs a definition of "done" that it can check but not change.
+`nightward mcp` is a stdio [MCP](https://modelcontextprotocol.io) server that lets
+the agent **run** the gate and **read** its verdict. It can't approve anything.
+
+```bash
+pip install "nightward[mcp]"                      # the mcp 1.x SDK (2.x is not supported yet)
+claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in the project root
+```
+
+Other hosts take the usual JSON entry. Start the server in the project root: it
+resolves `path` and `dir` against its own working directory.
+
+```json
+{"mcpServers": {"nightward": {"command": "nightward", "args": ["mcp"], "cwd": "/path/to/project"}}}
+```
+
+| tool | arguments | what it does |
+|---|---|---|
+| `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the store is left untouched) | runs the tests, captures behaviors, recomputes the boundary |
+| `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
+
+Both return the `status --json` shape: `boundary` (`intact` / `breached` /
+`unknown`), `unapproved`, `changes` (`name`, `kind`, `group`, plus `judged`,
+`judge_model`, `judge_reason` when a judge ruled), `judged_same`, `stale`,
+`generated_at`, and `judge`. `nightward_run` adds `warnings`: `skipped`, `failed`,
+`pytest_returncode`, and `pytest_output_tail` (pytest's last lines, so the agent can
+see why tests failed). The agent is done when `boundary` is `"intact"` and `stale`
+is false.
+
+Rules for the loop:
+
+- **Call `nightward_run` after every code edit.** `nightward_status` and `gate` only
+  report the last run. They don't notice code edited since then, and `stale` only
+  covers a baseline that changed after the run.
+- **The agent can't approve.** `approve` and `reject` are not exposed. If the agent
+  that makes a change could also approve it, the gate would turn into a changelog.
+  A human approves with the CLI and commits the baseline.
+- **The judge is the human's choice.** `semantic=True` behaviors are judged by
+  `nightward mcp --judge <provider:model>`, else `$NIGHTWARD_JUDGE` in the server's
+  environment, else the judge the last run used (for example the team's
+  `nightward run --judge persona:editor`). The tool has no judge argument, so the agent
+  can't pick a lenient judge, and it gets the same verdict as the CLI.
 
 ## Dashboard (`nightward view`)
 
@@ -212,6 +302,11 @@ def test_monthly_artifacts(behavior):
     behavior("notice", from_text("out/notice.txt"), group="data")  # utf-8/cp949 auto
 ```
 
+`from_text` hashes the decoded text with line endings normalized (CRLF, CR -> LF)
+and a UTF-8 BOM dropped, so a file written on a Windows laptop and on a Linux CI
+runner gates as equal. Content hashes (`text_sha256`, `content_sha256`, `sha256`)
+are the gate's view of the content: never scrub them.
+
 `from_pdf` / `from_docx` / `from_xlsx` need `pip install "nightward[docs]"`.
 Validated on real-world files (Korean PDF/XLSX/DOCX/HWP/legacy-encoded TXT):
 see `docs/experiments/2026-06-10-document-input-adapters.md`.
@@ -219,5 +314,6 @@ see `docs/experiments/2026-06-10-document-input-adapters.md`.
 ## v0 scope (intentionally small)
 
 In: pytest capture, blast-radius diff, gate, loop signal, field-aware scrub + doctor,
-static dashboard, LLM-as-judge semantic diff (v0.2, multi-model).
+static dashboard, MCP agent gate (run + status, no approve), LLM-as-judge semantic diff
+(v0.2, multi-model).
 Out (v1): PR-comment summaries, call-graph grouping, multi-language.
