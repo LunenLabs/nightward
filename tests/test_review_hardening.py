@@ -214,9 +214,11 @@ def test_r9_corrupt_ledger_fails_loudly_and_is_preserved(tmp_path):
 
 
 def test_r9_hand_edited_entry_without_reason_still_replays(tmp_path):
+    # A model ruling (persona rulings re-judge under new rules: R1-FIN-03).
     ledger = tmp_path / "judge_verdicts.json"
-    write(ledger, json.dumps({"f1:f2:persona:strict": {"verdict": "SAME"}}))
-    v = Judge("persona:strict", cache_path=ledger).equivalent("a", "b", "f1", "f2")
+    spec = "anthropic:claude-haiku-4-5"
+    write(ledger, json.dumps({f"f1:f2:{spec}": {"verdict": "SAME"}}))
+    v = Judge(spec, cache_path=ledger).equivalent("a", "b", "f1", "f2")
     assert v.verdict == "SAME" and v.cached
 
 

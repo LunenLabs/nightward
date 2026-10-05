@@ -58,28 +58,88 @@ class JudgeUnavailable(Exception):
 
 
 # ---- persona backend: deterministic, key-free judge personas ---------------
-# Stand-ins that make the judge path fully testable without any API key. Each
-# persona is a fixed judging temperament, not a heuristic to trust in prod.
+# Stand-ins that make the judge path testable without any API key (and give CI
+# without a key a conservative option). Both judging personas fail closed (D8):
+# a change to any digit or number, sign, currency/unit symbol, operator, emoji,
+# negation, key, or value type is DIFFERENT. What each one lets through:
+#   editor   collapses case, whitespace, and sentence punctuation (. , ; : !
+#            followed by a space or the end). Every word must still match.
+#   lenient  also lets ordinary words change ("went up" -> "rose"), so it can
+#            pass "approved" -> "denied". Tests and demos only, never real gating.
+#   strict   rules every difference DIFFERENT.
+# Bump _PERSONA_RULES when these rules change: ledger rulings recorded under
+# older rules are re-judged instead of replayed.
 
-_WORD_RE = re.compile(r"[^\w]+", re.UNICODE)
+_PERSONA_RULES = 2
+
+# One token per match: a number keeps its separators ("120.00" != "120,00"), a
+# word is letters only, sentence punctuation counts only before a space or the
+# end ("." in "a.b" and "!" in "!=" stay significant), and every other non-space
+# character (sign, currency, %, operator, quote, emoji) is a token of its own.
+_TOKEN_RE = re.compile(
+    r"(?P<num>\d+(?:[.,]\d+)*)|(?P<word>[^\W\d_]+)|(?P<punct>[.,;:!](?=\s|$))|(?P<sym>\S)"
+)
+_NEGATIONS = frozenset({"not", "no", "never", "none", "nobody", "nothing", "neither",
+                        "nor", "nowhere", "cannot", "without"})
 
 
-def _normalize(text: str) -> str:
-    return " ".join(_WORD_RE.split(text.casefold())).strip()
+def _tokens(text: str) -> list[tuple[str, str]]:
+    """(kind, text) tokens with sentence punctuation dropped. A word right after
+    a number is a unit ("5 mW", "120 USD")."""
+    out: list[tuple[str, str]] = []
+    for m in _TOKEN_RE.finditer(text):
+        kind = m.lastgroup
+        if kind == "punct":
+            continue
+        if kind == "word" and out and out[-1][0] == "num":
+            kind = "unit"
+        out.append((kind, m.group()))
+    return out
 
 
-def _persona_lenient(old: str, new: str) -> tuple[str, str]:
-    return SAME, "persona:lenient treats every rewording as equivalent"
+def _editor_key(text: str) -> list[tuple[str, str]]:
+    # Case-insensitive words; units keep their case ("5 mW" != "5 MW").
+    return [(k, t.casefold() if k == "word" else t) for k, t in _tokens(text)]
 
 
-def _persona_strict(old: str, new: str) -> tuple[str, str]:
+def _lenient_key(text: str) -> list[tuple[str, str]]:
+    # Ordinary words may change; numbers, symbols, units, negations, and a code
+    # naming the next number ("USD 120") may not.
+    toks = _tokens(text)
+    return [(k, t.casefold() if k == "word" else t) for i, (k, t) in enumerate(toks)
+            if k != "word" or t.casefold() in _NEGATIONS
+            or (t.isupper() and len(t) > 1 and i + 1 < len(toks) and toks[i + 1][0] == "num")]
+
+
+def _same_by(old: Any, new: Any, key) -> bool:
+    """Strings compare by `key`; everything else (keys, structure, value types,
+    numbers, booleans) must match exactly."""
+    if isinstance(old, str) and isinstance(new, str):
+        return key(old) == key(new)
+    if type(old) is not type(new):
+        return False
+    if isinstance(old, dict):
+        return old.keys() == new.keys() and all(_same_by(old[k], new[k], key) for k in old)
+    if isinstance(old, list):
+        return len(old) == len(new) and all(
+            _same_by(o, n, key) for o, n in zip(old, new, strict=True))
+    return old == new
+
+
+def _persona_lenient(old: Any, new: Any) -> tuple[str, str]:
+    if _same_by(old, new, _lenient_key):
+        return SAME, "only wording differs; numbers, symbols, negations and types match"
+    return DIFFERENT, "numbers, symbols, units, negations, keys or value types differ"
+
+
+def _persona_strict(old: Any, new: Any) -> tuple[str, str]:
     return DIFFERENT, "persona:strict treats any byte difference as a change"
 
 
-def _persona_editor(old: str, new: str) -> tuple[str, str]:
-    if _normalize(old) == _normalize(new):
-        return SAME, "same words modulo case/punctuation/whitespace"
-    return DIFFERENT, "wording differs beyond case/punctuation/whitespace"
+def _persona_editor(old: Any, new: Any) -> tuple[str, str]:
+    if _same_by(old, new, _editor_key):
+        return SAME, "only case, whitespace or sentence punctuation differ"
+    return DIFFERENT, "content differs beyond case/whitespace/sentence punctuation"
 
 
 _PERSONAS = {
@@ -89,19 +149,20 @@ _PERSONAS = {
 }
 
 
-def _persona_backend(model: str, old: str, new: str) -> tuple[str, str]:
+def _persona_backend(model: str, old: Any, new: Any) -> tuple[str, str]:
     try:
-        return _PERSONAS[model](old, new)
+        persona = _PERSONAS[model]
     except KeyError:
         raise NightwardError(
             f"unknown judge persona {model!r}; available: {', '.join(sorted(_PERSONAS))}"
         ) from None
+    return persona(old, new)
 
 
 # ---- anthropic backend ------------------------------------------------------
 
 
-def _anthropic_backend(model: str, old: str, new: str) -> tuple[str, str]:  # pragma: no cover
+def _anthropic_backend(model: str, old: Any, new: Any) -> tuple[str, str]:  # pragma: no cover
     # Needs network + ANTHROPIC_API_KEY; exercised manually, not in CI.
     try:
         import anthropic
@@ -117,7 +178,8 @@ def _anthropic_backend(model: str, old: str, new: str) -> tuple[str, str]:  # pr
         max_tokens=200,
         temperature=0,
         messages=[{"role": "user",
-                   "content": _PROMPT.replace("{old}", old).replace("{new}", new)}],
+                   "content": _PROMPT.replace("{old}", _as_text(old))
+                                     .replace("{new}", _as_text(new))}],
     )
     try:
         data = json.loads(msg.content[0].text)
@@ -201,15 +263,18 @@ class Judge:
         """
         key = f"{old_fp}:{new_fp}:{self.spec}"
         hit = self._cache.get(key)
+        if (self.provider == "persona" and isinstance(hit, dict)
+                and hit.get("rules") != _PERSONA_RULES):
+            hit = None  # ruled under older persona rules: re-judge (free, deterministic)
         if isinstance(hit, dict) and hit.get("verdict") in (SAME, DIFFERENT):
             return Verdict(hit["verdict"], str(hit.get("reason", "")), self.spec, cached=True)
         try:
-            verdict, reason = _BACKENDS[self.provider](
-                self.model, _as_text(old_payload), _as_text(new_payload)
-            )
+            verdict, reason = _BACKENDS[self.provider](self.model, old_payload, new_payload)
         except JudgeUnavailable:
             return None
         self._cache[key] = {"verdict": verdict, "reason": reason,
                             "behavior": name, "model": self.spec}
+        if self.provider == "persona":
+            self._cache[key]["rules"] = _PERSONA_RULES
         self._save_cache()
         return Verdict(verdict, reason, self.spec)

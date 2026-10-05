@@ -74,9 +74,21 @@ def test_summary(behavior):
 
 ```bash
 nightward run . --judge anthropic:claude-haiku-4-5   # real LLM (pip install nightward[judge])
-nightward run . --judge persona:editor               # deterministic, key-free stand-in
+nightward run . --judge persona:editor               # deterministic, key-free (see below)
 NIGHTWARD_JUDGE=anthropic:claude-haiku-4-5 nightward run .   # or via env
 ```
+
+The `persona:*` judges are deterministic and need no key. Both judging personas
+**fail closed**: a change to any digit or number, sign, currency or unit symbol,
+operator (`+ - < > = !=` ...), emoji, negation word, JSON key, or value type
+(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT. In structured payloads
+only string values are compared loosely.
+
+| persona | rules SAME when... | use it for |
+|---|---|---|
+| `persona:editor` | only letter case, whitespace, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
+| `persona:strict` | never | forcing every mismatch to stay breached |
 
 Any provider:model can plug in as a backend. Each ruling is recorded once per
 fingerprint pair in `.nightward/judge_verdicts.json` — a **committed ledger**, so
