@@ -257,10 +257,17 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
                   f"Fix the code and re-run `nightward run`.")
 
 
+# doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.
+_DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "~",
+                 "content-hash": "*", "changed": "*", "structural": "!"}
+_DOCTOR_LINES = 20  # per behavior; the rest is summarized
+
+
 @app.command()
 @handle_errors
 def doctor(dir: str = typer.Option(DEFAULT_DIR)):
-    """Name the volatile fields behind CHANGED behaviors and suggest scrub rules."""
+    """Explain what moved in CHANGED behaviors; suggest scrub rules only for
+    values that are volatile by evidence (timestamps, random tokens)."""
     from .core.doctor import diagnose
     store = _store(dir)
     pending = store.load_pending()
@@ -270,26 +277,36 @@ def doctor(dir: str = typer.Option(DEFAULT_DIR)):
     if not diag["changed"]:
         console.print("[green]no CHANGED behaviors - nothing to diagnose[/green]")
         return
-    for name, info in diag["behaviors"].items():
+    looks_real = False
+    for name, found in diag["behaviors"].items():
         console.print(f"\n[bold]{escape(name)}[/bold]")
-        for p in info["volatile"]:
-            console.print(f"  ~ {escape(p)}")
-        for p in info["structural"]:
-            console.print(f"  ! {escape(p)} [dim](structural - scrub cannot hide this)[/dim]")
+        for f in found[:_DOCTOR_LINES]:
+            mark = _DOCTOR_MARKS[f["kind"]]
+            looks_real |= mark != "~"
+            count = f" ({f['count']} values)" if f["count"] > 1 else ""
+            detail = f"  {f['detail']}" if f["detail"] else ""
+            console.print(f"  {mark} {escape(f['path'])}{count}  [dim]{escape(f['note'])}"
+                          f"{escape(detail)}[/dim]", soft_wrap=True)
+        if len(found) > _DOCTOR_LINES:
+            console.print(f"  [dim]... {len(found) - _DOCTOR_LINES} more path(s)[/dim]")
     if diag["suggestions"]:
-        console.print("\n[bold]if these fields are noise, not regressions[/bold] "
-                      "(volatile by design), tame them in conftest.py:")
+        console.print("\n[bold]volatile by evidence[/bold] - if this is noise, tame it in "
+                      "conftest.py:")
         console.print("  [cyan]from nightward import scrub[/cyan]")
-        for line in diag["suggestions"]:
-            console.print(f"  [cyan]{escape(line)}[/cyan]")
-        console.print("then re-run [cyan]nightward run[/cyan]. If they are real "
-                      "changes, approve or fix instead - never scrub a regression.")
-        console.print("[yellow]caution:[/yellow] register_field masks that key in "
-                      "[bold]every[/bold] behavior, not just the noisy one - a real "
-                      "regression in the same field elsewhere would be hidden too.")
-    else:
-        console.print("\nno field-level suggestions - the changes look structural "
-                      "(or whole-value); review and approve/fix instead")
+        for s in diag["suggestions"]:
+            console.print(f"  [cyan]{escape(s['rule'])}[/cyan]  [dim]# {escape(s['reason'])}"
+                          f"[/dim]", soft_wrap=True)
+        console.print("then re-run [cyan]nightward run[/cyan] and review what is left.")
+        if any("register_field" in s["rule"] for s in diag["suggestions"]):
+            console.print("[yellow]caution:[/yellow] register_field masks that key in "
+                          "[bold]every[/bold] behavior - doctor offers it only for keys "
+                          "that are not stable anywhere else in this capture.")
+    if looks_real:
+        console.print("\n[bold]*[/bold] / [bold]![/bold] look like real changes: "
+                      "`nightward review`, then approve or fix - never scrub a regression. "
+                      "doctor calls a value volatile only when the value shows it. If one of "
+                      "these changes again on a re-run with no code edits, it is volatile: "
+                      "mask it at capture time in that test.", soft_wrap=True)
 
 
 @app.command()

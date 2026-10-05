@@ -46,7 +46,8 @@ nightward view              # builds a static site + serves it on localhost
 ```
 nightward run     re-run tests → capture → compute blast radius
 nightward review  show changed behaviors with diffs
-nightward doctor  name the volatile fields behind CHANGED behaviors, suggest scrub rules
+nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
+                  for values that are volatile by evidence (see below)
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
 nightward reject  confirm a change as a real regression (boundary stays breached)
@@ -60,6 +61,22 @@ the behaviors it didn't reach, so they read as REMOVED. That is why `approve --a
 leaves removals alone, and `--include-removed` refuses after a run with skipped or
 failed tests. Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
+
+`nightward doctor` sees one before/after pair, which is no evidence that a value is
+noise, so it only calls a value volatile when the value itself shows it, and then
+suggests the narrowest rule that hides exactly that:
+
+| doctor sees | it suggests |
+|---|---|
+| a date-time or HTTP date | a `scrub.register(...)` pattern for that date shape |
+| a random token behind a stable prefix (`chatcmpl-…`, `call_…`, a CSRF value in HTML) | a `scrub.register(...)` pattern anchored on that prefix, never the whole field or body |
+| a Unix epoch under a time-like key (`created`, `updated_at`) | `scrub.register_field(key)`, only if that key is not stable in any other behavior |
+| a float that moved only in its last digits | round it before capturing (`round(x, 10)`), no mask |
+| a list with the same elements in a new order | sort it before capturing, no mask |
+| a changed content hash, a type change, a new key, anything else | "looks like a real change": review, then approve or fix |
+
+If a value marked as a real change changes again on a re-run with no code edits, it
+is volatile: mask it at capture time in that test.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 
