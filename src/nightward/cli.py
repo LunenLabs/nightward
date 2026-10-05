@@ -168,6 +168,12 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
                           "behaviors they capture appear as REMOVED; blast radius may show "
                           "false positives")
+    scrubbed = result["scrubbed"]
+    if scrubbed["values"]:
+        # Masking is noise control, but it can also hide a real datetime change.
+        err_console.print(f"[dim]note: default scrubbers masked {scrubbed['values']} value(s) "
+                          f"in {scrubbed['behaviors']} behavior(s) (timestamps/uuids) - opt "
+                          f"out with scrub=False[/dim]", soft_wrap=True)
     _print_summary(result["report"])
     incomplete = result["report"].get("incomplete")
     if incomplete or result["pytest_returncode"] == 1:

@@ -366,3 +366,36 @@ def test_legacy_baseline_without_source_needs_a_clean_run(suite):
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert (tw / "baseline" / "slow_report.approved.json").exists()
     assert "deselected" in r.stdout
+
+
+# ---- R1-DATA-01: business datetimes can opt out of default scrubbing -----------
+
+DUE = ('import os\n'
+       'DUE = os.environ.get("DUE", "2024-01-05T09:00:00+00:00")\n'
+       'def test_due(behavior):\n'
+       '    behavior("due", {"due_utc": DUE}, group="ship", scrub=False)\n'
+       'def test_seen(behavior):\n'
+       '    behavior("seen", {"at": DUE}, group="ship")\n')
+
+
+def test_scrub_false_lets_a_datetime_change_breach(tmp_path):
+    write(tmp_path / "test_d.py", DUE)
+    tw = tmp_path / ".tw"
+    r = cli("run", "test_d.py", "--dir", str(tw), cwd=tmp_path)
+    assert "default scrubbers masked 1 value(s) in 1 behavior(s)" in r.stderr
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    cli("run", "test_d.py", "--dir", str(tw), cwd=tmp_path,
+        env={"DUE": "2031-12-25T23:59:59+09:00"})
+    report = json.loads((tw / "report.json").read_text(encoding="utf-8"))
+    assert [it["name"] for it in report["blast_radius"]["ship"]] == ["due"]
+    assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 1
+
+
+def test_disable_defaults_in_conftest(tmp_path):
+    write(tmp_path / "conftest.py", "from nightward import scrub\nscrub.disable_defaults()\n")
+    write(tmp_path / "test_d.py", DUE)
+    tw = tmp_path / ".tw"
+    r = cli("run", "test_d.py", "--dir", str(tw), cwd=tmp_path)
+    assert "masked" not in r.stderr
+    seen = json.loads((tw / "pending" / "seen.received.json").read_text(encoding="utf-8"))
+    assert seen["payload"] == {"at": "2024-01-05T09:00:00+00:00"}

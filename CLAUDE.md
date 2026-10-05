@@ -163,6 +163,11 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **Names are filenames on every OS.** `Store._file` validates every name (no
   path escape via CLI args); the Recorder rejects case-only collisions and
   Windows device names (`CON`, `NUL`, `COM1`…).
+- **Default scrubbing is opt-out and counted.** `behavior(..., scrub=False)`
+  skips every scrubber (payload still JSON-normalized); `scrub.disable_defaults()`
+  turns off only the built-in timestamp/uuid rules (`scrub._reset()` re-enables).
+  The Recorder counts default masks per behavior -> run_meta `scrubbed` ->
+  `nightward run` prints a note and MCP `warnings.scrubbed`.
 - **Scrub must not merge keys.** If text scrubbing collapses two dict keys into
   one (`<TIMESTAMP>`), `scrub` raises instead of silently dropping a value.
 - **The verdict ledger is never silently reset.** A corrupt

@@ -76,6 +76,49 @@ sources existed need a run with nothing skipped, failed, errored, deselected or
 xfailed. Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 
+## What nightward normalizes (what counts as "the same payload")
+
+Two captures are equal when their **normalized JSON** is equal. Know what the
+normalization erases, because a change there never trips the gate:
+
+- **Timestamps and UUIDs (default scrubbers).** Every ISO-8601 datetime with a `T`
+  (`2024-01-05T09:00:00+00:00`) becomes `"<TIMESTAMP>"` and every UUID becomes
+  `"<UUID>"`, anywhere in the payload (values *and* keys). This stops run-to-run
+  noise, and the placeholders are visible in `baseline/*.approved.json`.
+  `nightward run` prints how many values were masked. If datetimes or UUIDs are
+  your **output** (deadlines, event times, `uuid5` ids), opt out:
+
+  ```python
+  behavior("sla_deadlines", deadlines, scrub=False)   # this behavior: no scrubbing at all
+
+  # conftest.py - every behavior: built-in timestamp/uuid scrubbers off,
+  # your own register/register_field rules still apply
+  from nightward import scrub
+  scrub.disable_defaults()
+  ```
+
+- **Dict key order.** Keys are sorted, so `{"b": 1, "a": 2}` equals `{"a": 2, "b": 1}`.
+  If order is part of the contract (CSV column order, `df.to_dict("records")`
+  feeding a positional loader), capture it explicitly: `list(df.columns)` or
+  `df.to_csv(index=False).splitlines()`.
+- **Key types and containers (JSON semantics).** Non-string keys become strings
+  (`{3: 2}` equals `{"3": 2}`) and tuples become lists. Capture `type(k).__name__`
+  or a list of pairs if the type matters.
+- **Multi-line strings** are one JSON value. Capture `text.splitlines()` to get a
+  per-line baseline file and per-line git diffs.
+
+Add your own rules for project-specific noise (prefer `register_field` - it
+replaces a JSON value and can't corrupt the payload):
+
+```python
+from nightward import scrub
+scrub.register_field("request_id")                 # mask this key at any depth
+scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
+```
+
+`nightward doctor` names the volatile fields behind CHANGED behaviors and
+suggests rules - but never scrub a real regression.
+
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 
 Free-text AI output breaches the fingerprint gate on every rewording (measured:
@@ -118,7 +161,7 @@ deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered 
 ## Threat model — what this gate does and does not protect against
 
 Be precise about the guarantee: **"boundary intact" means no *captured* behavior
-changed** — nothing more. Read these three limits before trusting the green light:
+changed** — nothing more. Read these four limits before trusting the green light:
 
 1. **Coverage is your instrumentation.** The gate only sees what `behavior()`
    calls capture. An agent can break an uncaptured code path and the boundary
@@ -141,6 +184,9 @@ changed** — nothing more. Read these three limits before trusting the green li
    (unsure → DIFFERENT), failures fall back to exact comparison, and every
    ruling is recorded in the committed `judge_verdicts.json` for human review.
    If a behavior must never be judged leniently, don't mark it `semantic=True`.
+4. **Normalization defines "the same".** Default timestamp/UUID scrubbing, key
+   order and JSON key coercion erase some differences by design — see
+   [What nightward normalizes](#what-nightward-normalizes-what-counts-as-the-same-payload).
 
 ## Document & artifact inputs (`nightward.adapters`)
 

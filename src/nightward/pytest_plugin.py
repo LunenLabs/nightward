@@ -13,13 +13,14 @@ import pytest
 from .core.baseline import Store
 from .core.behavior import Behavior, validate_name
 from .errors import NightwardError
-from .scrub import scrub
+from .scrub import scrub_counted
 
 
 class Recorder:
     def __init__(self) -> None:
         self.behaviors: list[Behavior] = []
         self._seen: dict[str, str] = {}  # casefolded name -> name as captured
+        self.masked: dict[str, int] = {}  # name -> values the default scrubbers masked
         # Removal evidence: tests whose every phase passed this run. Only such a
         # test proves that a behavior it no longer captures is really gone.
         self._passed: set[str] = set()
@@ -38,7 +39,8 @@ class Recorder:
             self._passed.add(report.nodeid)
 
     def add(self, name: str, value, group: str | None = None,
-            semantic: bool = False, source: str | None = None) -> None:
+            semantic: bool = False, source: str | None = None,
+            scrub: bool = True) -> None:
         validate_name(name)
         # Names are filenames: "Total" and "total" are the same file on
         # Windows/macOS, so one would silently overwrite the other.
@@ -56,9 +58,11 @@ class Recorder:
         # scrub() -> canonical_json may raise NightwardError on bad payloads;
         # let it surface (naming the behavior) so the offending test fails loudly.
         try:
-            payload = scrub(value)
+            payload, masked = scrub_counted(value, enabled=scrub)
         except NightwardError as exc:
             raise NightwardError(f"behavior {name!r}: {exc}") from exc
+        if masked:
+            self.masked[name] = masked
         self.behaviors.append(
             Behavior(name=name, payload=payload, group=group, semantic=semantic,
                      source=source)
@@ -94,12 +98,16 @@ def behavior(request):
     semantic=True opts the behavior into LLM-judge equivalence (v0.2): on a
     fingerprint mismatch the configured judge may rule the change SAME-by-meaning.
     Use it only for nondeterministic free text; deterministic payloads stay exact.
+
+    scrub=False skips all scrubbing for this behavior (built-in timestamp/uuid
+    masking and custom rules) - use it when datetimes or uuids ARE the output.
     """
     rec = request.config._nightward_recorder
 
     def capture(name: str, value, *, group: str | None = None,
-                semantic: bool = False) -> None:
-        rec.add(name, value, group=group, semantic=semantic, source=request.node.nodeid)
+                semantic: bool = False, scrub: bool = True) -> None:
+        rec.add(name, value, group=group, semantic=semantic, source=request.node.nodeid,
+                scrub=scrub)
 
     return capture
 
@@ -141,6 +149,7 @@ def pytest_sessionfinish(session, exitstatus):
     stats = reporter.stats if reporter else {}
     meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
     meta["completed"] = rec.completed()
+    meta["scrubbed"] = {"values": sum(rec.masked.values()), "behaviors": len(rec.masked)}
     # Written last: its presence proves to the runner that THIS run's flush landed.
     run_id = config.getoption("--nightward-run-id")
     if run_id:
