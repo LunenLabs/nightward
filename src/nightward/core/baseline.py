@@ -13,11 +13,30 @@ no CLI argument can address a file outside the store.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
+from collections.abc import Iterable
 from pathlib import Path
 
 from ..errors import NightwardError
 from .behavior import Behavior, canonical_json, validate_name
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a sibling temp file + os.replace, so readers never see a torn file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def baseline_digest(baseline: dict[str, Behavior]) -> str:
+    """Identity of an approved boundary: changes iff any approved behavior does."""
+    h = hashlib.sha256()
+    for name, b in sorted(baseline.items()):
+        h.update(canonical_json([name, b.group, b.fingerprint()]).encode("utf-8"))
+    return h.hexdigest()
 
 
 def _read_json(path: Path) -> object:
@@ -57,6 +76,24 @@ class Store:
             for f in self.pending_dir.glob("*.received.json"):
                 f.unlink()
 
+    def replace_pending(self, behaviors: Iterable[Behavior]) -> None:
+        """Swap in a complete new capture: build it aside, then replace pending/.
+
+        A crash mid-write leaves the previous capture intact instead of a partial
+        one (which would surface as mass false REMOVED).
+        """
+        staging = self.root / "pending.tmp"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        for b in behaviors:
+            self._file(staging, b.name, "received").write_text(
+                canonical_json(b.to_dict()), encoding="utf-8"
+            )
+        if self.pending_dir.exists():
+            shutil.rmtree(self.pending_dir)
+        staging.rename(self.pending_dir)
+
     # ---- loading -------------------------------------------------------
     def _load_dir(self, dir_: Path, suffix: str) -> dict[str, Behavior]:
         out: dict[str, Behavior] = {}
@@ -84,9 +121,8 @@ class Store:
         if not src.exists():
             raise NightwardError(f"no pending behavior named {name!r} to approve")
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
-        self._file(self.baseline_dir, name, "approved").write_text(
-            src.read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        _atomic_write(self._file(self.baseline_dir, name, "approved"),
+                      src.read_text(encoding="utf-8"))
 
     def approve_removal(self, name: str) -> None:
         """Accept that a behavior is gone: drop it from the baseline."""
@@ -107,16 +143,13 @@ class Store:
         if not src.exists():
             raise NightwardError(f"no pending or baseline behavior named {name!r} to reject")
         self.rejected_dir.mkdir(parents=True, exist_ok=True)
-        self._file(self.rejected_dir, name, "rejected").write_text(
-            src.read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        _atomic_write(self._file(self.rejected_dir, name, "rejected"),
+                      src.read_text(encoding="utf-8"))
 
     # ---- report --------------------------------------------------------
     def write_report(self, report: dict) -> None:
         self.report_path.parent.mkdir(parents=True, exist_ok=True)
-        self.report_path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _atomic_write(self.report_path, json.dumps(report, indent=2, ensure_ascii=False))
 
     def load_report(self) -> dict | None:
         if not self.report_path.exists():
@@ -129,7 +162,7 @@ class Store:
     # ---- run metadata (skipped/failed counts from the last run) ---------
     def write_run_meta(self, meta: dict) -> None:
         self.meta_path.parent.mkdir(parents=True, exist_ok=True)
-        self.meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        _atomic_write(self.meta_path, json.dumps(meta))
 
     def load_run_meta(self) -> dict:
         # Advisory only (warning counts, judge spec): unreadable -> treat as absent.

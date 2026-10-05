@@ -10,25 +10,35 @@ from pathlib import Path
 
 from .core.baseline import Store
 from .errors import NightwardError
-from .runner import execute_run
+from .runner import execute_run, is_stale
 from .signal import status_payload
 
 
-def run_tool(path: str = ".", dir: str = ".nightward") -> dict:
-    """Capture behaviors, recompute the blast radius, return the boundary signal."""
-    result = execute_run(path, dir, capture_output=True)
+def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> dict:
+    """Capture behaviors, recompute the blast radius, return the boundary signal.
+
+    timeout (seconds) bounds the pytest run so a hung suite can't hang the server.
+    """
+    result = execute_run(path, dir, capture_output=True, timeout=timeout)
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],
         "failed": result["failed"],
         "pytest_returncode": result["pytest_returncode"],
+        "pytest_output_tail": result["output_tail"],
     }
     return payload
 
 
 def status_tool(dir: str = ".nightward") -> dict:
-    """Read the last boundary status without re-running (report absent -> unknown)."""
-    return status_payload(Store(Path(dir)).load_report())
+    """Read the last boundary status without re-running (report absent -> unknown).
+
+    stale=True: the baseline changed since that run. Code edits are NOT detected -
+    after changing code, call nightward_run for a fresh verdict.
+    """
+    store = Store(Path(dir))
+    report = store.load_report()
+    return status_payload(report, stale=is_stale(store, report))
 
 
 # The agent-facing surface. approve / reject / init / view are intentionally ABSENT.

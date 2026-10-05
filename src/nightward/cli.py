@@ -11,9 +11,9 @@ from rich.console import Console
 from rich.markup import escape
 
 from .core.baseline import Store
-from .core.diff import UNCHANGED, compare
+from .core.diff import REMOVED, UNCHANGED, compare
 from .errors import NightwardError
-from .runner import execute_run, judge_from_meta, recompute
+from .runner import execute_run, is_stale, judge_from_meta, recompute
 from .signal import status_payload
 from .view import build_site
 
@@ -40,7 +40,8 @@ DEFAULT_DIR = ".nightward"
 # Store entries that are per-run state, relative to the store dir.
 # judge_verdicts.json is deliberately NOT here: it is the committed ledger that
 # keeps judged-SAME boundaries deterministic on fresh clones / CI.
-TRANSIENT_ENTRIES = ("pending/", "rejected/", "report.json", "run_meta.json")
+TRANSIENT_ENTRIES = ("pending/", "rejected/", "report.json", "run_meta.json",
+                     "pending.tmp/", "**/*.tmp")
 GITIGNORE_HEADER = "# nightward: approved baseline IS committed; transient state is not"
 
 # Everything rich prints is parsed as markup, so captured data (names, groups,
@@ -192,7 +193,10 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
 @app.command()
 @handle_errors
 def approve(name: str | None = typer.Argument(None),
-            all_: bool = typer.Option(False, "--all", help="Approve every pending change"),
+            all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
+            include_removed: bool = typer.Option(
+                False, "--include-removed",
+                help="With --all, also accept REMOVED behaviors (drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
     if all_ and name:
@@ -206,20 +210,40 @@ def approve(name: str | None = typer.Argument(None),
     # judged-SAME rewording explicitly by name still re-anchors it.
     judge = judge_from_meta(store)
 
+    held: list[str] = []
     if all_:
-        targets = [c.name for c in compare(baseline, pending, judge=judge)
-                   if c.kind != UNCHANGED]
+        changes = [c for c in compare(baseline, pending, judge=judge) if c.kind != UNCHANGED]
+        removed = [c.name for c in changes if c.kind == REMOVED]
+        if removed and include_removed:
+            # A skipped/failed test captures nothing and looks REMOVED; approving
+            # that would silently shrink the boundary. Demand a complete run.
+            meta = store.load_run_meta()
+            if meta.get("skipped") or meta.get("failed"):
+                raise NightwardError(
+                    f"refusing --include-removed: the last run had "
+                    f"{meta.get('skipped', 0)} skipped and {meta.get('failed', 0)} failed "
+                    f"test(s), so REMOVED may be false. Re-run cleanly, or approve "
+                    f"removals one by name."
+                )
+        if not include_removed:
+            held = removed
+        targets = [c.name for c in changes if c.name not in held]
     elif name:
         targets = [name]
     else:
         raise NightwardError("specify a behavior name or --all")
-    if not targets:
+    if not targets and not held:
         console.print("nothing to approve - boundary already intact")
         return
 
     for n in targets:
         verb = _approve_one(store, n, baseline, pending)
         console.print(f"[green]{verb}[/green] {escape(n)}")
+    if held:
+        console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
+                      f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
+                      f"a partial path. Accept them with `nightward approve <name>` or "
+                      f"`--all --include-removed`.", soft_wrap=True)
     _print_summary(recompute(store, judge=judge))
 
 
@@ -272,7 +296,12 @@ def doctor(dir: str = typer.Option(DEFAULT_DIR)):
 @handle_errors
 def gate(dir: str = typer.Option(DEFAULT_DIR)):
     """Exit 0 if the boundary is intact, 1 otherwise (for CI / agent loops)."""
-    report = _require_report(_store(dir))
+    store = _store(dir)
+    report = _require_report(store)
+    if is_stale(store, report):
+        console.print("[red]report is stale[/red] - the baseline changed since the last run; "
+                      "re-run `nightward run`")
+        raise typer.Exit(1)
     if report.get("boundary") == "intact":
         console.print("[green]boundary intact[/green]")
         raise typer.Exit(0)
@@ -308,7 +337,9 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
 def status(dir: str = typer.Option(DEFAULT_DIR),
            json_: bool = typer.Option(False, "--json", help="Machine-readable output")):
     """Print boundary status - the stop-condition signal for agent loops."""
-    payload = status_payload(_store(dir).load_report())
+    store = _store(dir)
+    report = store.load_report()
+    payload = status_payload(report, stale=is_stale(store, report))
     if json_:
         print(json.dumps(payload, ensure_ascii=False))
     else:

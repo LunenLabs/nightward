@@ -60,7 +60,13 @@ def compare(baseline: dict[str, Behavior], pending: dict[str, Behavior],
         elif p is None:
             changes.append(Change(name, REMOVED, group=b.group, diff_text=_text_diff(b, None)))
         elif (old_fp := b.fingerprint()) == (new_fp := p.fingerprint()):
-            changes.append(Change(name, UNCHANGED, group=b.group))
+            if b.group != p.group:
+                # Same output, moved to another feature: the blast radius would
+                # keep pointing at the old group until someone approves the move.
+                changes.append(Change(name, CHANGED, group=p.group,
+                                      diff_text=f"group: {b.group!r} -> {p.group!r}"))
+            else:
+                changes.append(Change(name, UNCHANGED, group=b.group))
         else:
             change = Change(name, CHANGED, group=p.group, diff_text=_text_diff(b, p))
             if judge is not None and p.semantic:

@@ -149,8 +149,9 @@ def test_r6_init_gitignore_follows_dir(tmp_path):
 def test_r6_init_default_dir_lines_unchanged(tmp_path):
     cli("init", cwd=tmp_path)
     gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert gi[-4:] == [".nightward/pending/", ".nightward/rejected/",
-                       ".nightward/report.json", ".nightward/run_meta.json"]
+    assert gi[-6:] == [".nightward/pending/", ".nightward/rejected/",
+                       ".nightward/report.json", ".nightward/run_meta.json",
+                       ".nightward/pending.tmp/", ".nightward/**/*.tmp"]
 
 
 def test_r6_init_store_outside_cwd_is_not_ignored_here(tmp_path):

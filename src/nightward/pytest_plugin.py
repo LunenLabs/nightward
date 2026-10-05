@@ -53,6 +53,12 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    # xdist splits tests across workers, each with its own Recorder; the
+    # controller would flush an empty set and every behavior would read REMOVED.
+    if config.getoption("--nightward-record") and getattr(config.option, "numprocesses", None):
+        raise pytest.UsageError(
+            "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
+        )
     config._nightward_recorder = Recorder()
 
 
@@ -90,9 +96,7 @@ def pytest_sessionfinish(session, exitstatus):
         return
     store = Store(Path(config.getoption("--nightward-dir")))
     store.ensure()
-    store.clear_pending()
-    for b in rec.behaviors:
-        store.write_pending(b)
+    store.replace_pending(rec.behaviors)
 
     # Skipped tests don't capture their behavior -> it shows up as a false
     # REMOVED. Record the counts so `nightward run` can warn about it.

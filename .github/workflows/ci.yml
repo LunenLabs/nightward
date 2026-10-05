@@ -35,12 +35,19 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .
-      - name: nightward gates its own example
+      # Gate against the COMMITTED baselines - never approve first, or the gate
+      # only checks itself and can't fail.
+      - name: committed examples stay intact
         run: |
+          nightward run example && nightward gate
+          (cd examples/petshop && nightward run . && nightward gate)
+          (cd examples/inbox && nightward run . && nightward gate)
+      - name: gate blocks a real regression
+        run: |
+          sed -i 's/subtotal \* 0.1/subtotal * 0.2/' example/app.py
           nightward run example
-          nightward approve --all
-          nightward run example
-          nightward gate
+          if nightward gate; then echo "gate passed a regression"; exit 1; fi
+          git checkout -- example/app.py
       - name: semantic judge contract (examples/newsroom, key-free personas)
         working-directory: examples/newsroom
         run: |
