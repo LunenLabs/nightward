@@ -45,9 +45,11 @@ nightward view              # builds a static site + serves it on localhost
 
 ```
 nightward run     re-run tests → capture → compute blast radius
-nightward review  show changed behaviors with diffs
+nightward review  show changed behaviors with diffs; scope with `review NAME...` or
+                  `--group G`; each diff shows 60 lines (`--max-lines N`, 0 = all)
 nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
-                  for values that are volatile by evidence (see below)
+                  for values that are volatile by evidence (see below); takes the
+                  same NAME... / --group scope as review
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
 nightward reject  confirm a change as a real regression (boundary stays breached;

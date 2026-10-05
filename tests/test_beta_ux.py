@@ -126,3 +126,65 @@ def test_circular_payload_is_named():
     loop: list = []
     loop.append(loop)
     assert "circular" in capture_error({"x": loop})
+
+
+# ---- R1-DATA-05: review / doctor can be scoped and are capped per behavior -----
+
+def big_change_store(tw):
+    """One table-wide change (500 rows) next to two small ones in other groups."""
+    store = Store(tw)
+    store.ensure()
+    rows = [{"id": i, "score": i / 7} for i in range(500)]
+    for name, group, old, new in [
+        ("scored_rows", "big", rows, [r | {"score": r["score"] + 1} for r in rows]),
+        ("metric_a", "m", {"v": 1}, {"v": 2}),
+        ("metric_b", "n", {"v": 1}, {"v": 3}),
+    ]:
+        store.write_pending(Behavior(name=name, payload=old, group=group))
+        store.approve(name)
+        store.write_pending(Behavior(name=name, payload=new, group=group))
+    recompute(store)
+
+
+def test_review_filters_by_name(tmp_path):
+    big_change_store(tmp_path / ".tw")
+    r = cli("review", "metric_a", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "metric_a" in r.stdout
+    assert "metric_b" not in r.stdout and "scored_rows" not in r.stdout
+
+
+def test_review_filters_by_group(tmp_path):
+    big_change_store(tmp_path / ".tw")
+    r = cli("review", "--group", "n", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "metric_b" in r.stdout
+    assert "metric_a" not in r.stdout and "scored_rows" not in r.stdout
+
+
+def test_review_unknown_name_is_a_clean_error(tmp_path):
+    big_change_store(tmp_path / ".tw")
+    r = cli("review", "metric_zz", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert r.returncode == 2
+    assert "metric_zz" in r.stderr and "Traceback" not in r.stderr
+
+
+def test_review_caps_each_diff_and_says_how_to_see_the_rest(tmp_path):
+    big_change_store(tmp_path / ".tw")
+    capped = cli("review", "scored_rows", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert capped.returncode == 0, capped.stderr
+    assert len(capped.stdout.splitlines()) < 100
+    assert "more diff line" in capped.stdout and "--max-lines 0" in capped.stdout
+    full = cli("review", "scored_rows", "--max-lines", "0", "--dir", str(tmp_path / ".tw"),
+               cwd=tmp_path)
+    assert len(full.stdout.splitlines()) > 500
+    assert "more diff line" not in full.stdout
+
+
+def test_doctor_filters_by_name_and_group(tmp_path):
+    big_change_store(tmp_path / ".tw")
+    by_name = cli("doctor", "metric_a", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert by_name.returncode == 0, by_name.stderr
+    assert "metric_a" in by_name.stdout and "metric_b" not in by_name.stdout
+    by_group = cli("doctor", "--group", "big", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
+    assert "scored_rows" in by_group.stdout and "metric_a" not in by_group.stdout

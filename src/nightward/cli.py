@@ -235,10 +235,50 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         raise typer.Exit(1)
 
 
+NAMES_ARG = typer.Argument(None, help="Only these behaviors (default: all)",
+                           show_default=False)
+GROUP_OPT = typer.Option(None, "--group", help="Only behaviors in this group (repeatable)",
+                         show_default=False)
+
+
+def _scope(names: list[str] | None, groups: list[str] | None, candidates: dict[str, str],
+           what: str) -> set[str]:
+    """Names (of `candidates`: name -> group) selected by NAME args and --group.
+
+    A NAME that isn't a candidate is an error, not an empty result: a typo
+    must not read as "nothing changed".
+    """
+    if names:
+        unknown = [n for n in names if n not in candidates]
+        if unknown:
+            raise NightwardError(f"not {what}: {', '.join(unknown)}")
+    return {n for n, g in candidates.items()
+            if (not names or n in names) and (not groups or g in groups)}
+
+
+def _print_diff(it: dict, max_lines: int) -> None:
+    diff = it.get("diff", "")
+    if not diff:
+        console.print("[dim](no text diff)[/dim]")
+        return
+    lines = diff.splitlines()
+    if max_lines <= 0 or len(lines) <= max_lines:
+        console.print(escape(diff))
+        return
+    console.print(escape("\n".join(lines[:max_lines])))
+    console.print(f"[dim]... {len(lines) - max_lines:,} more diff line(s) - see all with "
+                  f"`nightward review {escape(it['name'])} --max-lines 0`[/dim]",
+                  soft_wrap=True)
+
+
 @app.command()
 @handle_errors
-def review(dir: str = typer.Option(DEFAULT_DIR)):
-    """Show the blast radius with full diffs, plus what the judge ruled SAME."""
+def review(names: list[str] | None = NAMES_ARG,
+           group: list[str] | None = GROUP_OPT,
+           max_lines: int = typer.Option(60, "--max-lines",
+                                         help="Diff lines shown per behavior; 0 = all"),
+           dir: str = typer.Option(DEFAULT_DIR)):
+    """Show the blast radius with diffs, plus what the judge ruled SAME."""
     store = _store(dir)
     report = _require_report(store)
     if is_stale(store, report):
@@ -248,21 +288,31 @@ def review(dir: str = typer.Option(DEFAULT_DIR)):
     if report.get("incomplete"):
         err_console.print(f"[yellow]warning:[/yellow] capture incomplete: "
                           f"{_incomplete_text(report['incomplete'])}")
+    blast = report.get("blast_radius", {})
     judged_same = report.get("judged_same") or []
-    if report.get("boundary") == "intact":
+    candidates = {it["name"]: g for g, items in blast.items() for it in items}
+    candidates |= {it["name"]: it.get("group") or "(ungrouped)" for it in judged_same}
+    wanted = _scope(names, group, candidates,
+                    "in the last report's blast radius (unchanged behaviors have no diff)")
+    blast = {g: kept for g, items in blast.items()
+             if (kept := [it for it in items if it["name"] in wanted])}
+    judged_same = [it for it in judged_same if it["name"] in wanted]
+    intact = report.get("boundary") == "intact"
+    if not blast:
         if not judged_same:
-            console.print("[green]boundary intact - nothing to review[/green]")
+            console.print("[green]boundary intact - nothing to review[/green]" if intact
+                          else "[green]nothing to review in that selection[/green]")
             return
-        console.print("[green]boundary intact[/green] - no unapproved change")
-    for group, items in report.get("blast_radius", {}).items():
-        console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
+        console.print("[green]boundary intact[/green] - no unapproved change" if intact
+                      else "no unapproved change in that selection")
+    for g, items in blast.items():
+        console.print(f"\n[yellow]group: {escape(g)}[/yellow]")
         for it in items:
             console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]")
             if it.get("judged"):
                 console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}: "
                               f"{escape(it.get('judge_reason', ''))}[/dim]")
-            diff = it.get("diff", "")
-            console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
+            _print_diff(it, max_lines)
     if judged_same:
         # Outside the boundary, but a wrong SAME is a hole in the gate: show the
         # exact wording the judge accepted so a human can audit it (R1-LLM-04).
@@ -272,8 +322,7 @@ def review(dir: str = typer.Option(DEFAULT_DIR)):
             console.print(f"\n[bold][[cyan]SAME[/cyan]] {escape(it['name'])}[/bold] "
                           f"[dim]{escape(it.get('judge_model', ''))}: "
                           f"{escape(it.get('judge_reason', ''))}[/dim]")
-            diff = it.get("diff", "")
-            console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
+            _print_diff(it, max_lines)
 
 
 def _standing_rejections(store: Store, baseline, pending) -> set[str]:
@@ -416,7 +465,9 @@ _DOCTOR_LINES = 20  # per behavior; the rest is summarized
 
 @app.command()
 @handle_errors
-def doctor(dir: str = typer.Option(DEFAULT_DIR)):
+def doctor(names: list[str] | None = NAMES_ARG,
+           group: list[str] | None = GROUP_OPT,
+           dir: str = typer.Option(DEFAULT_DIR)):
     """Explain what moved in CHANGED behaviors; suggest scrub rules only for
     values that are volatile by evidence (timestamps, random tokens)."""
     from .core.doctor import diagnose
@@ -424,9 +475,12 @@ def doctor(dir: str = typer.Option(DEFAULT_DIR)):
     pending = store.load_pending()
     if not pending:
         raise NightwardError("no pending capture - run `nightward run` first")
-    diag = diagnose(store.load_baseline(), pending)
+    wanted = (_scope(names, group, {n: b.group or "(ungrouped)" for n, b in pending.items()},
+                     "in the current capture") if names or group else None)
+    diag = diagnose(store.load_baseline(), pending, only=wanted)
     if not diag["changed"]:
-        console.print("[green]no CHANGED behaviors - nothing to diagnose[/green]")
+        scope = " in that selection" if wanted is not None else ""
+        console.print(f"[green]no CHANGED behaviors{scope} - nothing to diagnose[/green]")
         return
     looks_real = False
     for name, found in diag["behaviors"].items():

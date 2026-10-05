@@ -244,12 +244,18 @@ def _withhold_colliding_field_rules(raw: dict[str, list[dict]],
                                   f"drop or mask it at capture time in this test instead")
 
 
-def diagnose(baseline: dict[str, Behavior], pending: dict[str, Behavior]) -> dict:
-    """Per-behavior classified drift + scrub suggestions backed by evidence."""
+def diagnose(baseline: dict[str, Behavior], pending: dict[str, Behavior],
+             only: set[str] | None = None) -> dict:
+    """Per-behavior classified drift + scrub suggestions backed by evidence.
+
+    only: diagnose just these names. The field-rule collision check still sees
+    every pending behavior, so scoping never widens a suggestion.
+    """
     # Fingerprints only: compare() would also build a text diff per change,
     # which doctor never shows and which is slow on big payloads.
     changed = [name for name in sorted(set(baseline) & set(pending))
-               if baseline[name].fingerprint() != pending[name].fingerprint()]
+               if (only is None or name in only)
+               and baseline[name].fingerprint() != pending[name].fingerprint()]
     raw = {name: findings(baseline[name].payload, pending[name].payload)
            for name in changed}
     _withhold_colliding_field_rules(raw, pending)
