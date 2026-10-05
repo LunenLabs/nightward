@@ -26,6 +26,20 @@ class Recorder:
         self._passed: set[str] = set()
         self._broken: set[str] = set()
 
+    def begin(self, source: str) -> None:
+        """A test (re)starts: drop what an earlier attempt of it captured.
+
+        pytest-rerunfailures & co. run the same item again; the last attempt
+        wins. Two *different* tests capturing one name stay an error in add().
+        """
+        stale = [b for b in self.behaviors if b.source == source]
+        if not stale:
+            return
+        self.behaviors = [b for b in self.behaviors if b.source != source]
+        for b in stale:
+            self._seen.pop(b.name.casefold(), None)
+            self.masked.pop(b.name, None)
+
     def completed(self) -> list[str]:
         return sorted(self._passed - self._broken)
 
@@ -103,6 +117,7 @@ def behavior(request):
     masking and custom rules) - use it when datetimes or uuids ARE the output.
     """
     rec = request.config._nightward_recorder
+    rec.begin(request.node.nodeid)
 
     def capture(name: str, value, *, group: str | None = None,
                 semantic: bool = False, scrub: bool = True) -> None:

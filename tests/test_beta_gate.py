@@ -399,3 +399,44 @@ def test_disable_defaults_in_conftest(tmp_path):
     assert "masked" not in r.stderr
     seen = json.loads((tw / "pending" / "seen.received.json").read_text(encoding="utf-8"))
     assert seen["payload"] == {"at": "2024-01-05T09:00:00+00:00"}
+
+
+# ---- R1-OPS-03: a rerun attempt replaces the earlier attempt's captures ---------
+
+def test_rerun_of_same_test_replaces_its_captures():
+    rec = Recorder()
+    rec.begin("t.py::a")
+    rec.add("deploy.status", {"replicas": 2}, source="t.py::a")
+    rec.begin("t.py::a")                                   # retry of the same test
+    rec.add("deploy.status", {"replicas": 3}, source="t.py::a")
+    assert [b.payload for b in rec.behaviors] == [{"replicas": 3}]
+    rec.begin("t.py::b")                                   # a different test
+    with pytest.raises(NightwardError, match="duplicate"):
+        rec.add("deploy.status", {"replicas": 3}, source="t.py::b")
+
+
+# Runs every test twice, like pytest-rerunfailures after a failed first attempt.
+RERUN_CONFTEST = ('import pytest\n'
+                  'from _pytest.runner import runtestprotocol\n'
+                  '@pytest.hookimpl(tryfirst=True)\n'
+                  'def pytest_runtest_protocol(item, nextitem):\n'
+                  '    item.attempt = 1\n'
+                  '    runtestprotocol(item, nextitem=nextitem, log=False)\n'
+                  '    item._initrequest()  # what pytest-rerunfailures does between attempts\n'
+                  '    item.attempt = 2\n')
+
+RERUN_TEST = ('def test_deploy(behavior, request):\n'
+              '    behavior("deploy.status", {"attempt": request.node.attempt}, group="d")\n')
+
+
+def test_rerun_plain_pytest_passes_and_run_keeps_last_attempt(tmp_path):
+    write(tmp_path / "conftest.py", RERUN_CONFTEST)
+    write(tmp_path / "test_r.py", RERUN_TEST)
+    plain = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+                           cwd=str(tmp_path), capture_output=True, text=True)
+    assert plain.returncode == 0, plain.stdout
+    tw = tmp_path / ".tw"
+    r = cli("run", "test_r.py", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = json.loads((tw / "pending" / "deploy.status.received.json").read_text("utf-8"))
+    assert got["payload"] == {"attempt": 2}

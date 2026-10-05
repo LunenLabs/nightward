@@ -168,6 +168,10 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   turns off only the built-in timestamp/uuid rules (`scrub._reset()` re-enables).
   The Recorder counts default masks per behavior -> run_meta `scrubbed` ->
   `nightward run` prints a note and MCP `warnings.scrubbed`.
+- **Reruns replace, they don't duplicate.** The `behavior` fixture calls
+  `Recorder.begin(nodeid)` on every setup, dropping captures from an earlier
+  attempt of the same test (pytest-rerunfailures). The same name from two
+  *different* tests is still a duplicate error.
 - **Scrub must not merge keys.** If text scrubbing collapses two dict keys into
   one (`<TIMESTAMP>`), `scrub` raises instead of silently dropping a value.
 - **The verdict ledger is never silently reset.** A corrupt
