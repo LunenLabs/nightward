@@ -15,6 +15,7 @@ from rich.markup import escape
 
 from .core.baseline import Store
 from .core.diff import REMOVED, UNCHANGED, compare
+from .core.lock import store_lock
 from .errors import NightwardError
 from .runner import execute_run, is_stale, judge_from_meta, recompute
 from .signal import status_payload
@@ -87,7 +88,7 @@ DEFAULT_SITE = "nightward-site"   # `view` output: holds captured data, never co
 # judge_verdicts.json is deliberately NOT here: it is the committed ledger that
 # keeps judged-SAME boundaries deterministic on fresh clones / CI.
 TRANSIENT_ENTRIES = ("pending/", "rejected/", "report.json", "run_meta.json",
-                     "pending.tmp/", "**/*.tmp")
+                     "pending.tmp/", "**/*.tmp", ".lock")
 GITIGNORE_HEADER = "# nightward: approved baseline IS committed; transient state is not"
 
 # Everything rich prints is parsed as markup, so captured data (names, groups,
@@ -450,6 +451,12 @@ def approve(name: str | None = typer.Argument(None),
     if all_ and name:
         raise NightwardError("give a behavior name or --all, not both")
     store = _existing_store(dir)
+    with store_lock(store.root, "nightward approve"):
+        _approve(store, dir, name, all_, include_removed)
+
+
+def _approve(store: Store, dir: str, name: str | None, all_: bool,
+             include_removed: bool) -> None:
     baseline = store.load_baseline()
     pending = store.load_pending()
     if not baseline and not pending:
@@ -519,7 +526,8 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
     `approve <name>` overrides and clears the rejection.
     """
     store = _existing_store(dir)
-    store.mark_rejected(name)
+    with store_lock(store.root, "nightward reject"):
+        store.mark_rejected(name)
     console.print(f"[red]rejected[/red] {escape(name)} - boundary stays breached. "
                   f"Fix the code and re-run `nightward run`.")
 

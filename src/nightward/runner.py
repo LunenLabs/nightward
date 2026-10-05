@@ -17,6 +17,7 @@ from pathlib import Path
 from .core.baseline import Store, digest
 from .core.blast import aggregate
 from .core.diff import compare
+from .core.lock import store_lock
 from .errors import NightwardError
 
 
@@ -144,7 +145,7 @@ def _with_tail(msg: str, result: subprocess.CompletedProcess) -> str:
 
 def execute_run(path: str = ".", dir: str = ".nightward", *,
                 capture_output: bool = False, judge_spec: str | None = None,
-                timeout: float | None = None) -> dict:
+                timeout: float | None = None, command: str = "nightward run") -> dict:
     """Run pytest in a subprocess to capture behaviors, then recompute.
 
     capture_output=True keeps pytest's stdout off this process's stdout — required
@@ -153,7 +154,8 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     judge for behaviors captured with semantic=True; the spec is persisted in
     run_meta so later approve/recompute reuse the same (cached) verdicts.
     timeout (seconds) bounds the pytest run. Any run without a verified capture
-    (abort, timeout, unrecorded flush) invalidates report.json.
+    (abort, timeout, unrecorded flush) invalidates report.json. command names
+    the holder in the store lock; a concurrent writer fails with NightwardError.
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched, pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can
@@ -171,6 +173,15 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     # Build (= validate) the judge before pytest: a typo'd spec or a corrupt
     # ledger must fail in a second, not after the whole suite (R1-LLM-06).
     judge = make_judge(spec, store)
+    # One writer per store (D11): the pytest child flushes under this lock (it
+    # recognizes the run id), and the recompute below stays inside it too.
+    with store_lock(store.root, command, token=run_id):
+        return _run_locked(store, path, dir, run_id, spec, judge,
+                           capture_output=capture_output, timeout=timeout)
+
+
+def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None, judge, *,
+                capture_output: bool, timeout: float | None) -> dict:
     try:
         # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
         # child inheriting it hangs on Windows while the server reads it.

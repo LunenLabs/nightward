@@ -54,7 +54,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     a human does that with the nightward CLI.
     """
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
-                         judge_spec=_judge_spec(dir))
+                         judge_spec=_judge_spec(dir), command="nightward_run (MCP)")
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],

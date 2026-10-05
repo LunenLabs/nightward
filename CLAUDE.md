@@ -143,6 +143,13 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   behavior whose current pending (or, for a removal, baseline) state matches its
   `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
   `approve <name>` overrides and deletes the record.
+- **One writer per store (D11).** `core/lock.store_lock` creates `<store>/.lock`
+  with O_EXCL (pid, host, command, since, token) around run (pytest child +
+  recompute), approve and reject; a second writer gets a NightwardError naming
+  the holder. The runner's token is its run id, so its own pytest child flushes
+  under the parent's lock; a bare `pytest --nightward-record` takes the lock
+  for its flush. A lock whose holder pid is dead on this host is taken over.
+  Readers (gate/status/review/view) don't lock.
 - **Pending is swapped, not rewritten in place.** `Store.replace_pending` builds
   `pending.tmp/` and renames it over `pending/`; baseline/report/meta writes go
   through `_atomic_write`. A torn capture reads as mass REMOVED.

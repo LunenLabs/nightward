@@ -6,12 +6,14 @@ it. Behaviors are flushed to .nightward/pending only when --nightward-record is 
 """
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
 
 from .core.baseline import Store
 from .core.behavior import Behavior, validate_name
+from .core.lock import read_lock, store_lock
 from .errors import NightwardError
 from .scrub import scrub_counted, unmatched_rules
 
@@ -147,6 +149,17 @@ def pytest_sessionfinish(session, exitstatus):
     if rec is None:
         return
     store = Store(Path(config.getoption("--nightward-dir")))
+    run_id = config.getoption("--nightward-run-id")
+    # One writer per store (D11). Under `nightward run` the runner already
+    # holds the lock for this run id; a bare `pytest --nightward-record` takes
+    # it for the flush, and fails fast if another writer is busy.
+    owned = run_id and (read_lock(store.root) or {}).get("token") == run_id
+    with contextlib.nullcontext() if owned else store_lock(store.root,
+                                                           "pytest --nightward-record"):
+        _flush(config, rec, store, run_id)
+
+
+def _flush(config, rec: Recorder, store: Store, run_id: str | None) -> None:
     try:
         store.ensure()
         store.replace_pending(rec.behaviors)
@@ -168,7 +181,6 @@ def pytest_sessionfinish(session, exitstatus):
     # A custom rule that never fired leaves the user believing noise is handled.
     meta["scrub_unmatched"] = unmatched_rules()
     # Written last: its presence proves to the runner that THIS run's flush landed.
-    run_id = config.getoption("--nightward-run-id")
     if run_id:
         meta["run_id"] = run_id
     store.write_run_meta(meta)

@@ -105,6 +105,9 @@ counts as "did not run" - approve such removals by name). Baselines from before
 sources existed need a run with nothing skipped, failed, errored, deselected or
 xfailed. Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
+One writer per store: `run` (and MCP `nightward_run`), `approve` and `reject` hold
+`.nightward/.lock`, so a second concurrent writer (`tox -p`, an agent next to a
+human) fails fast and names the holder instead of corrupting the capture.
 
 ## What nightward normalizes (what counts as "the same payload")
 
