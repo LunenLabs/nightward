@@ -92,22 +92,39 @@ function renderMeta(meta) {
   if (meta.judge) m.appendChild(el("span", { cls: "meta-item meta-judge", text: "judge: " + meta.judge }));
 }
 
-function renderBanner(report) {
+// Banner states that are neither a pass nor a breach: the verdict can't be trusted.
+const UNTRUSTED = {
+  stale: {
+    title: "Report is stale",
+    explain: "The approved baseline or the captured behavior changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius. (`nightward gate` exits 1.)",
+  },
+};
+
+function renderBanner(report, state) {
   const b = $("banner");
   clear(b);
-  const intact = report.boundary === "intact";
-  b.className = "banner " + (intact ? "intact" : "breached");
+  const intact = state === "intact";
+  const untrusted = UNTRUSTED[state];
+  b.className = "banner " + (untrusted ? "untrusted " + state : state);
   const head = el("div", { cls: "banner-head" });
   head.appendChild(el("span", { cls: "status-dot", attrs: { "aria-hidden": "true" } }));
-  head.appendChild(el("span", { cls: "banner-state", text: intact ? "Boundary intact" : "Boundary breached" }));
-  if (!intact) head.appendChild(el("span", { cls: "banner-count", text: (report.unapproved || 0) + " unapproved" }));
+  head.appendChild(el("span", {
+    cls: "banner-state",
+    text: untrusted ? untrusted.title : intact ? "Boundary intact" : "Boundary breached",
+  }));
+  if (state === "breached") head.appendChild(el("span", { cls: "banner-count", text: (report.unapproved || 0) + " unapproved" }));
   b.appendChild(head);
   b.appendChild(el("p", {
     cls: "banner-explain",
-    text: intact
+    text: untrusted ? untrusted.explain : intact
       ? "No behavior has moved since the approved baseline. (`nightward gate` passes in CI — exit 0.)"
       : "There are " + (report.unapproved || 0) + " unapproved change(s). Review each one: approve it if it was intended, fix the code if it is a regression. (`nightward gate` exits 1.)",
   }));
+}
+
+function bannerState(report, meta) {
+  if (meta && meta.stale) return "stale";
+  return report.boundary === "intact" ? "intact" : "breached";
 }
 
 function renderWarnings(report, meta) {
@@ -300,8 +317,16 @@ function render(data) {
     return;
   }
 
-  renderBanner(report);
+  const state = bannerState(report, data.meta);
+  renderBanner(report, state);
   renderWarnings(report, data.meta);
+
+  if (state === "stale") {
+    showEmpty("Re-run to refresh this report",
+      "The diffs in this report compare inputs that are no longer on disk, so they are not shown.",
+      "nightward run .");
+    return;
+  }
 
   const changes = allChanges(report);
 

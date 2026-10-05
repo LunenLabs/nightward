@@ -78,6 +78,10 @@ def _require_report(store: Store) -> dict:
     return report
 
 
+STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture changed since "
+                 "the last report; re-run `nightward run`")
+
+
 def _gitignore_lines(dir_: str) -> list[str] | None:
     """Ignore rules for the store's transient entries, or None when the store
     lives outside the current directory (a .gitignore here can't name it)."""
@@ -168,7 +172,12 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
 @handle_errors
 def review(dir: str = typer.Option(DEFAULT_DIR)):
     """Show the blast radius with full diffs."""
-    report = _require_report(_store(dir))
+    store = _store(dir)
+    report = _require_report(store)
+    if is_stale(store, report):
+        # Its diffs compare inputs that are no longer on disk - don't show them.
+        console.print(STALE_MESSAGE)
+        raise typer.Exit(1)
     if report.get("boundary") == "intact":
         console.print("[green]boundary intact - nothing to review[/green]")
         return
@@ -299,8 +308,7 @@ def gate(dir: str = typer.Option(DEFAULT_DIR)):
     store = _store(dir)
     report = _require_report(store)
     if is_stale(store, report):
-        console.print("[red]report is stale[/red] - the baseline changed since the last run; "
-                      "re-run `nightward run`")
+        console.print(STALE_MESSAGE)
         raise typer.Exit(1)
     if report.get("boundary") == "intact":
         console.print("[green]boundary intact[/green]")

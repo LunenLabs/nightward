@@ -1,0 +1,153 @@
+"""Beta round 1: gate-verdict defects reported by beta testers, frozen as tests.
+
+Each test failed on the code before its fix. A failure here is a real defect -
+fix the code, do not weaken the test.
+"""
+import json
+import os
+import subprocess
+import sys
+
+import pytest
+
+from nightward import mcp_server
+from nightward.core.behavior import canonical_json
+from nightward.errors import NightwardError
+from nightward.pytest_plugin import Recorder
+from nightward.runner import execute_run
+from nightward.view import collect_data
+
+
+def cli(*args, cwd, env=None):
+    return subprocess.run(
+        [sys.executable, "-m", "nightward", *args],
+        cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, **(env or {})},
+    )
+
+
+def write(path, body):
+    path.write_text(body, encoding="utf-8")
+
+
+def status_json(tmp_path, tw):
+    return json.loads(cli("status", "--json", "--dir", str(tw), cwd=tmp_path).stdout)
+
+
+ENV_PRICE = ('import os\n'
+             'def test_price(behavior):\n'
+             '    behavior("price", int(os.environ.get("PRICE", "10")), group="billing")\n')
+
+
+@pytest.fixture
+def approved_price(tmp_path):
+    """A project whose `price` behavior (10) is captured and approved."""
+    write(tmp_path / "test_p.py", ENV_PRICE)
+    tw = tmp_path / ".tw"
+    assert cli("run", "test_p.py", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    return tmp_path, tw
+
+
+# ---- R1-WEB-01: a failed flush must never replay the previous capture ----------
+
+def test_lone_surrogate_rejected_at_capture_naming_the_behavior():
+    # R1-WEB-01: a lone surrogate passed capture and crashed the flush later.
+    with pytest.raises(NightwardError, match="surrogate"):
+        canonical_json({"room": "Vega \ud83d"})
+    with pytest.raises(NightwardError, match="room.card"):
+        Recorder().add("room.card", {"room": "Vega \ud83d"})
+
+
+FLUSH_BOOM = ('import os\n'
+              'from nightward.core.baseline import Store\n'
+              'if os.environ.get("FLUSH_FAIL"):\n'
+              '    def boom(self, behaviors):\n'
+              '        raise OSError("disk full")\n'
+              '    Store.replace_pending = boom\n')
+
+
+def test_flush_failure_aborts_run_and_invalidates_report(approved_price):
+    # R1-WEB-01: the flush crashed (exit 1) and the runner recomputed the OLD
+    # pending set - a real price regression read "intact".
+    tmp_path, tw = approved_price
+    write(tmp_path / "conftest.py", FLUSH_BOOM)
+    env = {"PRICE": "12", "FLUSH_FAIL": "1"}
+    r = cli("run", "test_p.py", "--dir", str(tw), cwd=tmp_path, env=env)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "not recorded" in r.stderr
+    assert "intact" not in r.stdout
+    assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode != 0
+    assert status_json(tmp_path, tw)["boundary"] != "intact"
+    assert not (tw / "pending.tmp").exists()
+
+
+def test_flush_failure_surfaces_through_mcp_run(approved_price, monkeypatch):
+    tmp_path, tw = approved_price
+    write(tmp_path / "conftest.py", FLUSH_BOOM)
+    monkeypatch.setenv("FLUSH_FAIL", "1")
+    monkeypatch.setenv("PRICE", "12")
+    with pytest.raises(NightwardError, match="not recorded"):
+        mcp_server.run_tool(str(tmp_path / "test_p.py"), str(tw))
+    assert mcp_server.status_tool(str(tw))["boundary"] != "intact"
+
+
+# ---- R1-FIN-01: a report older than the capture must not read "intact" ---------
+
+def test_direct_plugin_capture_makes_report_stale(approved_price):
+    # R1-FIN-01: `pytest --nightward-record` replaced pending/ without recomputing;
+    # gate kept trusting the old report.json.
+    tmp_path, tw = approved_price
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_p.py",
+         "--nightward-record", "--nightward-dir", str(tw)],
+        cwd=str(tmp_path), capture_output=True, text=True,
+        env={**os.environ, "PRICE": "12"},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    gate = cli("gate", "--dir", str(tw), cwd=tmp_path)
+    assert gate.returncode == 1
+    assert "stale" in gate.stdout
+    status = status_json(tmp_path, tw)
+    assert status["stale"] is True
+    assert status["boundary"] == "stale"
+    assert mcp_server.status_tool(str(tw))["boundary"] == "stale"
+
+
+# ---- R1-OPS-06: every consumer agrees on a stale report ------------------------
+
+def test_stale_report_is_not_intact_in_review_status_and_view(approved_price):
+    tmp_path, tw = approved_price
+    (tw / "baseline" / "price.approved.json").write_text(
+        canonical_json({"name": "price", "group": "billing", "payload": 45}), encoding="utf-8")
+
+    review = cli("review", "--dir", str(tw), cwd=tmp_path)
+    assert review.returncode == 1
+    assert "stale" in review.stdout
+    assert "nothing to review" not in review.stdout
+
+    assert status_json(tmp_path, tw)["boundary"] == "stale"
+    human = cli("status", "--dir", str(tw), cwd=tmp_path)
+    assert "stale" in human.stdout
+
+    data = collect_data(tw)
+    assert data["meta"]["stale"] is True
+
+
+def test_fresh_report_is_not_stale_everywhere(approved_price):
+    tmp_path, tw = approved_price
+    assert status_json(tmp_path, tw)["boundary"] == "intact"
+    assert collect_data(tw)["meta"]["stale"] is False
+    review = cli("review", "--dir", str(tw), cwd=tmp_path)
+    assert review.returncode == 0
+    assert "nothing to review" in review.stdout
+
+
+def test_successful_run_records_its_token_after_flush(tmp_path):
+    # The runner's run token: a fresh run records it after a successful flush.
+    write(tmp_path / "test_p.py", ENV_PRICE)
+    tw = tmp_path / ".tw"
+    execute_run(str(tmp_path / "test_p.py"), str(tw))
+    meta = json.loads((tw / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta.get("run_id")

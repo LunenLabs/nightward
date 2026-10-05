@@ -126,9 +126,12 @@ code { font-family: var(--mono); }
   0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 18%, transparent); }
   50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--red) 8%, transparent); }
 }
+.banner.untrusted { border-color: var(--amber-border); }
+.banner.untrusted .status-dot { background: var(--amber); box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 18%, transparent); }
 .banner-state { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
 .banner.intact .banner-state { color: var(--green); }
 .banner.breached .banner-state { color: var(--red); }
+.banner.untrusted .banner-state { color: var(--amber); }
 .banner-count {
   font-family: var(--mono); font-size: 12px; font-weight: 600;
   padding: 4px 12px; border-radius: 999px;

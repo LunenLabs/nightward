@@ -27,6 +27,13 @@ def validate_name(name: str) -> str:
         raise NightwardError(f"invalid behavior name {name!r}: reserved name")
     if name.endswith("."):
         raise NightwardError(f"invalid behavior name {name!r}: must not end with '.'")
+    if not name.isascii():
+        try:
+            name.encode("utf-8")
+        except UnicodeEncodeError:
+            raise NightwardError(
+                f"invalid behavior name {name!r}: contains a lone surrogate"
+            ) from None
     if name.split(".", 1)[0].upper() in _WINDOWS_RESERVED:
         raise NightwardError(f"invalid behavior name {name!r}: reserved device name on Windows")
     for ch in name:
@@ -45,12 +52,25 @@ def canonical_json(payload: Any) -> str:
     git diffs on the approved files stay meaningful for human review.
     """
     try:
-        return json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)
+        text = json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise NightwardError(
             f"behavior payload is not JSON-serializable ({exc}). "
             f"Capture plain dict/list/str/number/bool/None, or convert first."
         ) from exc
+    # A lone surrogate (e.g. JS code-unit slicing, "\ud83d") serializes fine
+    # but can't be written as UTF-8 - it would crash the store write long after
+    # capture. Reject it here, where the offending test can still fail.
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise NightwardError(
+            f"behavior payload contains text that is not valid Unicode (a lone "
+            f"surrogate {text[exc.start:exc.end]!r}, usually from slicing UTF-16 "
+            f"code units). Repair the string first, e.g. "
+            f"s.encode('utf-16', 'surrogatepass').decode('utf-16', 'replace')."
+        ) from exc
+    return text
 
 
 @dataclass(frozen=True)

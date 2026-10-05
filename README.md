@@ -51,7 +51,9 @@ nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
 nightward reject  confirm a change as a real regression (boundary stays breached)
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
-nightward status  machine-readable boundary signal (--json)
+nightward status  machine-readable boundary signal (--json): "intact" is the only
+                  "done"; "breached", "stale" (baseline or capture changed since
+                  the last report - re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
 ```
 

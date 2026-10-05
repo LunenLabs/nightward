@@ -10,9 +10,10 @@ import importlib.util
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
-from .core.baseline import Store, baseline_digest
+from .core.baseline import Store, digest
 from .core.blast import aggregate
 from .core.diff import compare
 from .errors import NightwardError
@@ -37,31 +38,42 @@ def judge_from_meta(store: Store):
 
 
 def recompute(store: Store, judge=None) -> dict:
-    """Compare pending against baseline, aggregate, persist, and return the report."""
+    """Compare pending against baseline, aggregate, persist, and return the report.
+
+    The report records digests of both inputs so a later reader can tell when
+    either moved under it (see is_stale).
+    """
     baseline = store.load_baseline()
-    report = aggregate(compare(baseline, store.load_pending(), judge=judge))
+    pending = store.load_pending()
+    report = aggregate(compare(baseline, pending, judge=judge))
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
-    report["baseline_digest"] = baseline_digest(baseline)
+    report["baseline_digest"] = digest(baseline)
+    report["pending_digest"] = digest(pending)
     store.write_report(report)
     return report
 
 
 def is_stale(store: Store, report: dict | None) -> bool:
-    """True when the baseline changed after `report` was computed.
+    """True when the baseline or the capture changed after `report` was computed.
 
-    Only baseline drift is detectable; a code edit since the last run is not -
-    callers that need a fresh verdict must run again.
+    Covers `git pull` bringing a new baseline, a direct `pytest --nightward-record`,
+    and a run interrupted between capture and report. A report without digests
+    can't be checked, so it counts as stale (fail closed). A code edit since the
+    last run is NOT detectable - callers that need a fresh verdict must run again.
     """
-    digest = (report or {}).get("baseline_digest")
-    return digest is not None and digest != baseline_digest(store.load_baseline())
+    if report is None:
+        return False
+    return (report.get("baseline_digest") != digest(store.load_baseline())
+            or report.get("pending_digest") != digest(store.load_pending()))
 
 
-def _pytest_cmd(path: str, dir: str) -> list[str]:
+def _pytest_cmd(path: str, dir: str, run_id: str) -> list[str]:
     # -B: no bytecode cache. Rewriting a test file between runs can otherwise
     # re-import a stale .pyc and silently capture OLD behavior (flaky in CI).
     cmd = [sys.executable, "-B", "-m", "pytest", path,
-           "--nightward-record", "--nightward-dir", dir, "-q"]
+           "--nightward-record", "--nightward-dir", dir,
+           "--nightward-run-id", run_id, "-q"]
     # Capture needs one process: under xdist each worker sees only its share.
     # "-n 0" (last wins) overrides an "-n auto" in the project's addopts.
     if importlib.util.find_spec("xdist") is not None:
@@ -91,7 +103,11 @@ def _output_tail(result: subprocess.CompletedProcess, lines: int = 15) -> str | 
 def _abort_message(path: str, result: subprocess.CompletedProcess) -> str:
     reason = _ABORT_REASONS.get(result.returncode,
                                 f"pytest exited with code {result.returncode}")
-    msg = f"{reason} under {path!r}; aborting - the store was left untouched"
+    return _with_tail(f"{reason} under {path!r}; aborting - the store was left untouched",
+                      result)
+
+
+def _with_tail(msg: str, result: subprocess.CompletedProcess) -> str:
     # With captured output the user never saw pytest's own explanation.
     tail = _output_tail(result)
     if tail:
@@ -115,9 +131,10 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     tests failed.
     """
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
+    run_id = uuid.uuid4().hex
     try:
-        result = subprocess.run(_pytest_cmd(path, dir), capture_output=capture_output,
-                                timeout=timeout)
+        result = subprocess.run(_pytest_cmd(path, dir, run_id),
+                                capture_output=capture_output, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise NightwardError(
             f"pytest timed out after {timeout}s under {path!r}; the store was left untouched"
@@ -126,6 +143,15 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         raise NightwardError(_abort_message(path, result))
     store = Store(Path(dir))
     meta = store.load_run_meta()
+    if meta.get("run_id") != run_id:
+        # Exit 1 is also what a crash inside the plugin's flush looks like. Then
+        # pending/ still holds the PREVIOUS capture - comparing it would replay
+        # an old verdict. Invalidate the report so nothing reads "intact".
+        store.invalidate_report()
+        msg = (f"this run's capture was not recorded under {path!r} (pytest did not "
+               f"finish writing it - see pytest's error output); the last report was "
+               f"invalidated. Fix the error and re-run `nightward run`.")
+        raise NightwardError(_with_tail(msg, result))
     if spec:
         meta["judge"] = spec
     else:

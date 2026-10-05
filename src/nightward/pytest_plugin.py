@@ -38,9 +38,13 @@ class Recorder:
             )
         self._seen[name.casefold()] = name
         # scrub() -> canonical_json may raise NightwardError on bad payloads;
-        # let it surface so the offending test fails loudly.
+        # let it surface (naming the behavior) so the offending test fails loudly.
+        try:
+            payload = scrub(value)
+        except NightwardError as exc:
+            raise NightwardError(f"behavior {name!r}: {exc}") from exc
         self.behaviors.append(
-            Behavior(name=name, payload=scrub(value), group=group, semantic=semantic)
+            Behavior(name=name, payload=payload, group=group, semantic=semantic)
         )
 
 
@@ -50,6 +54,9 @@ def pytest_addoption(parser):
                     help="Record behaviors to the nightward pending store")
     group.addoption("--nightward-dir", action="store", default=".nightward",
                     help="Nightward storage directory (default: .nightward)")
+    group.addoption("--nightward-run-id", action="store", default=None,
+                    help="Token recorded in run_meta once the capture is flushed "
+                         "(set by `nightward run` to verify the flush happened)")
 
 
 def pytest_configure(config):
@@ -95,12 +102,23 @@ def pytest_sessionfinish(session, exitstatus):
     if rec is None:
         return
     store = Store(Path(config.getoption("--nightward-dir")))
-    store.ensure()
-    store.replace_pending(rec.behaviors)
+    try:
+        store.ensure()
+        store.replace_pending(rec.behaviors)
+    except BaseException:
+        # The old report describes a capture this run meant to replace; leaving
+        # it would let `gate` pass on stale data. Fail closed, then surface.
+        store.invalidate_report()
+        raise
 
     # Skipped tests don't capture their behavior -> it shows up as a false
     # REMOVED. Record the counts so `nightward run` can warn about it.
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     skipped = len(reporter.stats.get("skipped", [])) if reporter else 0
     failed = len(reporter.stats.get("failed", [])) if reporter else 0
-    store.write_run_meta({"skipped": skipped, "failed": failed})
+    meta = {"skipped": skipped, "failed": failed}
+    # Written last: its presence proves to the runner that THIS run's flush landed.
+    run_id = config.getoption("--nightward-run-id")
+    if run_id:
+        meta["run_id"] = run_id
+    store.write_run_meta(meta)

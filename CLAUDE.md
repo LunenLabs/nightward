@@ -136,9 +136,17 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **No xdist during capture.** Each worker has its own Recorder, so the capture
   splits (the controller flushes nothing). The runner forces `-n 0`; the plugin
   turns `--nightward-record` + `-n` into a UsageError.
-- **Reports can go stale.** `recompute` stamps `generated_at` + `baseline_digest`;
-  if the baseline changes afterwards, `gate` exits 1 and `status`/MCP report
-  `stale: true`. Code edits are not detected - re-run for a verdict.
+- **Reports can go stale.** `recompute` stamps `generated_at` + `baseline_digest`
+  + `pending_digest`; if the baseline OR the capture changes afterwards (git pull,
+  a direct `pytest --nightward-record`, a run killed before its report), the
+  report is stale: `gate`/`review` exit 1, `status`/MCP report
+  `"boundary": "stale"`, the dashboard shows a stale banner. A report without
+  digests counts as stale. Code edits are not detected - re-run for a verdict.
+- **A failed flush never replays the old capture.** `execute_run` passes a fresh
+  `--nightward-run-id`; the plugin writes it into `run_meta.json` only after
+  `pending/` was replaced. No matching token -> `NightwardError` and `report.json`
+  is deleted. Payloads that can't be written (lone surrogates) fail at
+  `behavior()` time via `canonical_json`.
 - **Captured data is rich markup.** Every name/group/diff/path printed by the
   CLI goes through `rich.markup.escape` — `total[eur]` vanishes and `[/x]`
   crashes otherwise. Do this for any new output path.

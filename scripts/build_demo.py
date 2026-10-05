@@ -60,10 +60,8 @@ def main(out_dir: str = "demo-site") -> None:
         store.write_run_meta({"skipped": 1, "failed": 0})
 
         # recompute the report the same way the CLI does
-        from nightward.core.blast import aggregate
-        from nightward.core.diff import compare
-        report = aggregate(compare(store.load_baseline(), store.load_pending()))
-        store.write_report(report)
+        from nightward.runner import recompute
+        report = recompute(store)
 
         out = build_site(tw, out_dir)
         print(f"demo site -> {out}  (boundary: {report['boundary']}, "

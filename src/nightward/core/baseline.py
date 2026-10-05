@@ -5,8 +5,8 @@ Layout (git-native, approvaltests-style):
       baseline/<name>.approved.json    # committed — the regression boundary
       pending/<name>.received.json     # gitignored — this run's observed behavior
       rejected/<name>.rejected.json    # audit trail of confirmed regressions
-      report.json                      # last blast radius
-      run_meta.json                    # last run's skipped/failed counts + judge spec
+      report.json                      # last blast radius (+ digests of what it compared)
+      run_meta.json                    # last run's counts, run token, judge spec
 
 Every name-to-path mapping goes through `_file`, which validates the name, so
 no CLI argument can address a file outside the store.
@@ -31,10 +31,10 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def baseline_digest(baseline: dict[str, Behavior]) -> str:
-    """Identity of an approved boundary: changes iff any approved behavior does."""
+def digest(behaviors: dict[str, Behavior]) -> str:
+    """Identity of a behavior set (baseline or pending): changes iff any behavior does."""
     h = hashlib.sha256()
-    for name, b in sorted(baseline.items()):
+    for name, b in sorted(behaviors.items()):
         h.update(canonical_json([name, b.group, b.fingerprint()]).encode("utf-8"))
     return h.hexdigest()
 
@@ -86,10 +86,14 @@ class Store:
         if staging.exists():
             shutil.rmtree(staging)
         staging.mkdir(parents=True)
-        for b in behaviors:
-            self._file(staging, b.name, "received").write_text(
-                canonical_json(b.to_dict()), encoding="utf-8"
-            )
+        try:
+            for b in behaviors:
+                self._file(staging, b.name, "received").write_text(
+                    canonical_json(b.to_dict()), encoding="utf-8"
+                )
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         if self.pending_dir.exists():
             shutil.rmtree(self.pending_dir)
         staging.rename(self.pending_dir)
@@ -150,6 +154,10 @@ class Store:
     def write_report(self, report: dict) -> None:
         self.report_path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.report_path, json.dumps(report, indent=2, ensure_ascii=False))
+
+    def invalidate_report(self) -> None:
+        """Drop the last report: it no longer describes the store (fail closed)."""
+        self.report_path.unlink(missing_ok=True)
 
     def load_report(self) -> dict | None:
         if not self.report_path.exists():

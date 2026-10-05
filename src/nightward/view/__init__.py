@@ -15,6 +15,7 @@ import shutil
 from pathlib import Path
 
 from ..core.baseline import Store
+from ..runner import is_stale
 
 ASSETS = Path(__file__).parent / "assets"
 STATIC_FILES = ("index.html", "app.js", "style.css")
@@ -40,6 +41,8 @@ def collect_data(nightward_dir: Path | str) -> dict:
             "judge": run_meta.get("judge"),
             "baseline_count": len(baseline),
             "pending_count": len(pending),
+            # baseline or capture moved since the report: its verdict is void
+            "stale": is_stale(store, report),
             "source": str(src),
             "generated": datetime.datetime.now().isoformat(timespec="seconds"),
         },
