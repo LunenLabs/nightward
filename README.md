@@ -64,6 +64,11 @@ nightward view    build a static, read-only dashboard and view it in a browser
 nightward mcp     stdio MCP server for AI agents: run + status, never approve
 ```
 
+Every command uses the store at `./.nightward` (or `--dir`), so run them from the
+project root. A store that isn't there is an error that says where nightward looked,
+and points at `../.nightward` when you are in a subdirectory, rather than reading as
+empty or "intact". `status` still prints `unknown` (exit 0), with that note on stderr.
+
 A failing or erroring capture test means its behaviors are missing from the blast
 radius, so the run is **incomplete**: `nightward run` prints the summary and exits 1,
 the report records `incomplete: {"failed": n, "errors": m}`, and `gate` exits 1 until

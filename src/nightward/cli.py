@@ -115,6 +115,34 @@ def _check_dir(dir_: str) -> None:
         raise NightwardError(f"--dir {dir_!r} exists but is not a directory")
 
 
+def _store_above(dir_: str) -> str | None:
+    """A store named `dir_` in a parent directory (cwd is a subdirectory of the project)."""
+    if Path(dir_).is_absolute():
+        return None
+    for parent in Path.cwd().parents:
+        if (parent / dir_).is_dir():
+            return os.path.relpath(parent / dir_)
+    return None
+
+
+def _missing_store_message(dir_: str) -> str:
+    above = _store_above(dir_)
+    if above:
+        return (f"no nightward store at {dir_!r}, but found {above!r} - run from the "
+                f"project root, or pass --dir {above}")
+    return (f"no nightward store at {dir_!r} (under {Path.cwd()}) - check --dir, or "
+            f"create one with `nightward init` and `nightward run`")
+
+
+def _existing_store(dir_: str) -> Store:
+    """The store for a command that reads it: a typo'd --dir or a run from a
+    subdirectory must not read as an empty, "intact" store (R1-OPS-07)."""
+    _check_dir(dir_)
+    if not Path(dir_).is_dir():
+        raise NightwardError(_missing_store_message(dir_))
+    return _store(dir_)
+
+
 def _require_report(store: Store) -> dict:
     report = store.load_report()
     if report is None:
@@ -210,6 +238,10 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
                        "Default: $NIGHTWARD_JUDGE")):
     """Re-run tests, capture behaviors, compute the blast radius."""
     _check_dir(dir)
+    if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
+        # pytest finds the rootdir from anywhere; a second store here would
+        # report every behavior as NEW (R1-OPS-07).
+        raise NightwardError(_missing_store_message(dir))
     console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
                   f"--nightward-dir {escape(dir)}[/dim]")
     result = execute_run(path, dir, judge_spec=judge)
@@ -286,7 +318,7 @@ def review(names: list[str] | None = NAMES_ARG,
                                          help="Diff lines shown per behavior; 0 = all"),
            dir: str = typer.Option(DEFAULT_DIR)):
     """Show the blast radius with diffs, plus what the judge ruled SAME."""
-    store = _store(dir)
+    store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):
         # Its diffs compare inputs that are no longer on disk - don't show them.
@@ -391,9 +423,11 @@ def approve(name: str | None = typer.Argument(None),
     """Promote pending behavior(s) into the approved baseline."""
     if all_ and name:
         raise NightwardError("give a behavior name or --all, not both")
-    store = _store(dir)
+    store = _existing_store(dir)
     baseline = store.load_baseline()
     pending = store.load_pending()
+    if not baseline and not pending:
+        raise NightwardError(f"nothing captured in {dir!r} yet - run `nightward run` first")
     # Reuse the last run's judge (cached verdicts): --all then approves exactly
     # what the report lists as unapproved, and judged-SAME behaviors don't flip
     # back to CHANGED the moment something else is approved. Approving a
@@ -458,7 +492,7 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
     `approve --all` will skip it while the same payload is pending; an explicit
     `approve <name>` overrides and clears the rejection.
     """
-    store = _store(dir)
+    store = _existing_store(dir)
     store.mark_rejected(name)
     console.print(f"[red]rejected[/red] {escape(name)} - boundary stays breached. "
                   f"Fix the code and re-run `nightward run`.")
@@ -478,7 +512,7 @@ def doctor(names: list[str] | None = NAMES_ARG,
     """Explain what moved in CHANGED behaviors; suggest scrub rules only for
     values that are volatile by evidence (timestamps, random tokens)."""
     from .core.doctor import diagnose
-    store = _store(dir)
+    store = _existing_store(dir)
     pending = store.load_pending()
     if not pending:
         raise NightwardError("no pending capture - run `nightward run` first")
@@ -525,7 +559,7 @@ def doctor(names: list[str] | None = NAMES_ARG,
 @handle_errors
 def gate(dir: str = typer.Option(DEFAULT_DIR)):
     """Exit 0 if the boundary is intact, 1 otherwise (for CI / agent loops)."""
-    store = _store(dir)
+    store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):
         console.print(STALE_MESSAGE)
@@ -550,7 +584,7 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
          open_browser: bool = typer.Option(True, "--open/--no-open",
                                            help="Open a browser when serving")):
     """Build a static, read-only blast-radius dashboard (view it in a browser)."""
-    _check_dir(dir)
+    _existing_store(dir)
     out_path = build_site(Path(dir), Path(out))
     console.print(f"[green]built[/green] {escape(str(out_path))}/ "
                   "(index.html, app.js, style.css, data.json)")
@@ -569,6 +603,11 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
            json_: bool = typer.Option(False, "--json", help="Machine-readable output")):
     """Print boundary status - the stop-condition signal for agent loops."""
     store = _store(dir)
+    if not store.root.is_dir():
+        # Still "unknown" (a loop polling a fresh checkout must not crash), but
+        # say where we looked: a typo'd --dir is otherwise indistinguishable.
+        err_console.print(f"[yellow]note:[/yellow] {escape(_missing_store_message(dir))}",
+                          soft_wrap=True)
     report = store.load_report()
     payload = status_payload(report, stale=is_stale(store, report))
     if json_:

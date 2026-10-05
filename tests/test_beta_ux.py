@@ -266,3 +266,43 @@ def test_missing_run_path_is_named_before_pytest_starts(tmp_path):
     assert "'tset' does not exist" in r.stderr, r.stderr
     assert "nightward is not installed" not in r.stderr
     assert not (tmp_path / ".tw").exists()
+
+
+# ---- R1-OPS-07: a missing or misplaced store is named, never "intact" ----------
+
+@pytest.mark.parametrize("cmd", [["approve", "--all"], ["gate"], ["review"], ["doctor"],
+                                 ["reject", "a"], ["view", "--no-serve"]])
+def test_commands_on_a_missing_store_say_where_they_looked(tmp_path, cmd):
+    r = cli(*cmd, "--dir", ".nightwrd", cwd=tmp_path)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "no nightward store at '.nightwrd'" in r.stderr, r.stderr
+    assert "already intact" not in r.stdout
+    assert not (tmp_path / "nightward-site").exists()
+
+
+def test_status_on_a_missing_store_stays_unknown_but_says_why(tmp_path):
+    r = cli("status", "--json", "--dir", ".nightwrd", cwd=tmp_path)
+    assert r.returncode == 0
+    assert '"boundary": "unknown"' in r.stdout
+    assert "no nightward store at '.nightwrd'" in r.stderr
+
+
+def test_approve_on_an_empty_store_is_not_intact(tmp_path):
+    assert cli("init", cwd=tmp_path).returncode == 0
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 2
+    assert "already intact" not in r.stdout
+    assert "nightward run" in r.stderr
+
+
+def test_run_from_a_subdirectory_points_at_the_project_store(tmp_path):
+    (tmp_path / ".nightward" / "baseline").mkdir(parents=True)
+    sub = tmp_path / "tests"
+    sub.mkdir()
+    write(sub / "test_a.py", "def test_a(behavior):\n    behavior('a', 1)\n")
+    r = cli("run", cwd=sub)
+    assert r.returncode == 2
+    assert not (sub / ".nightward").exists()
+    assert ".." in r.stderr and "project root" in r.stderr, r.stderr
+    gate = cli("gate", cwd=sub)
+    assert gate.returncode == 2 and ".." in gate.stderr

@@ -91,6 +91,7 @@ def test_r4_reject_cannot_escape_the_store(tmp_path):
 
 
 def test_r4_reject_unknown_name_is_an_error(tmp_path):
+    Store(tmp_path / ".nightward").ensure()   # a missing store is its own error (R1-OPS-07)
     r = cli("reject", "ghost", cwd=tmp_path)
     assert r.returncode == 2
     assert "ghost" in r.stderr
@@ -252,6 +253,7 @@ def test_r10_approve_name_and_all_together_is_an_error(tmp_path):
 
 # R11: `view` on a busy port died with a raw OSError traceback.
 def test_r11_view_busy_port_is_a_clean_error(tmp_path):
+    Store(tmp_path / ".nightward").ensure()   # a missing store is its own error (R1-OPS-07)
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
         busy.listen()
