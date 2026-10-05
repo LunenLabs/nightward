@@ -39,6 +39,12 @@ def digest(behaviors: dict[str, Behavior]) -> str:
     return h.hexdigest()
 
 
+def _file_text(b: Behavior) -> str:
+    # Trailing newline: git diffs and end-of-file-fixer hooks expect one. Layout
+    # only - fingerprints hash the payload, so existing baselines stay valid.
+    return canonical_json(b.to_dict()) + "\n"
+
+
 def _read_json(path: Path) -> object:
     """Parse a store file; any unreadable content becomes a NightwardError."""
     try:
@@ -68,7 +74,7 @@ class Store:
     def write_pending(self, b: Behavior) -> None:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
         self._file(self.pending_dir, b.name, "received").write_text(
-            canonical_json(b.to_dict()), encoding="utf-8"
+            _file_text(b), encoding="utf-8"
         )
 
     def clear_pending(self) -> None:
@@ -89,7 +95,7 @@ class Store:
         try:
             for b in behaviors:
                 self._file(staging, b.name, "received").write_text(
-                    canonical_json(b.to_dict()), encoding="utf-8"
+                    _file_text(b), encoding="utf-8"
                 )
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)

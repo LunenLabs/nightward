@@ -281,7 +281,8 @@ def approve(name: str | None = typer.Argument(None),
     doubts: dict[str, str] = {}
     kept_rejected: list[str] = []
     if all_:
-        changes = [c for c in compare(baseline, pending, judge=judge) if c.kind != UNCHANGED]
+        changes = [c for c in compare(baseline, pending, judge=judge, with_diff=False)
+                   if c.kind != UNCHANGED]
         removed = [c.name for c in changes if c.kind == REMOVED]
         if include_removed:
             # A test that didn't run captures nothing and looks REMOVED; approving

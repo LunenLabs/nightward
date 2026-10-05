@@ -104,8 +104,15 @@ normalization erases, because a change there never trips the gate:
 - **Key types and containers (JSON semantics).** Non-string keys become strings
   (`{3: 2}` equals `{"3": 2}`) and tuples become lists. Capture `type(k).__name__`
   or a list of pairs if the type matters.
-- **Multi-line strings** are one JSON value. Capture `text.splitlines()` to get a
-  per-line baseline file and per-line git diffs.
+- **Multi-line strings** (HTML bodies, CLI stdout, rendered manifests) are one JSON
+  value. `review` and the dashboard diff them line by line, but the committed
+  baseline file stores one escaped string, so its git diff is one long line -
+  capture `text.splitlines()` when you want per-line git diffs too.
+
+Diffs are for reading, never for the verdict: the verdict comes from
+fingerprints, and a diff is capped at 2,000 lines (huge payloads end with a
+"diff truncated" marker; very large scattered changes are compared by line
+position), so `run`/`approve` stay fast on big captures.
 
 Add your own rules for project-specific noise (prefer `register_field` - it
 replaces a JSON value and can't corrupt the payload):

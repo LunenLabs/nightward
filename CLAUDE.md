@@ -172,6 +172,12 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   `Recorder.begin(nodeid)` on every setup, dropping captures from an earlier
   attempt of the same test (pytest-rerunfailures). The same name from two
   *different* tests is still a duplicate error.
+- **Diffs are bounded display, not verdicts.** `core/diff._line_diff` trims the
+  common prefix/suffix, lets difflib align only a changed middle of <= 2,000
+  lines, falls back to a positional (equal length) or coarse diff beyond that,
+  and caps output at `MAX_DIFF_LINES`. Multi-line strings render as indented
+  `"""` blocks. `approve --all` calls `compare(..., with_diff=False)`. Store
+  files end with a newline (layout only - fingerprints hash the payload).
 - **Scrub must not merge keys.** If text scrubbing collapses two dict keys into
   one (`<TIMESTAMP>`), `scrub` raises instead of silently dropping a value.
 - **The verdict ledger is never silently reset.** A corrupt
