@@ -138,7 +138,9 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
     run_id = uuid.uuid4().hex
     try:
-        result = subprocess.run(_pytest_cmd(path, dir, run_id),
+        # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
+        # child inheriting it hangs on Windows while the server reads it.
+        result = subprocess.run(_pytest_cmd(path, dir, run_id), stdin=subprocess.DEVNULL,
                                 capture_output=capture_output, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise NightwardError(
