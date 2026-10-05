@@ -7,6 +7,7 @@ Layout (git-native, approvaltests-style):
       rejected/<name>.rejected.json    # audit trail of confirmed regressions
       report.json                      # last blast radius (+ digests of what it compared)
       run_meta.json                    # last run's counts, run token, judge spec
+      reviewed.json                    # the capture a human last saw (approve checks it)
 
 Every name-to-path mapping goes through `_file`, which validates the name, so
 no CLI argument can address a file outside the store.
@@ -81,6 +82,7 @@ class Store:
         self.rejected_dir = self.root / "rejected"
         self.report_path = self.root / "report.json"
         self.meta_path = self.root / "run_meta.json"
+        self.reviewed_path = self.root / "reviewed.json"
 
     def ensure(self) -> None:
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
@@ -203,6 +205,20 @@ class Store:
         if not isinstance(report, dict):
             raise NightwardError(f"corrupt file {self.report_path}: expected a JSON object")
         return report
+
+    # ---- what a human last saw (D10) ------------------------------------
+    def mark_reviewed(self, pending_digest: str, via: str) -> None:
+        _atomic_write(self.reviewed_path, json.dumps(
+            {"pending_digest": pending_digest, "via": via}))
+
+    def load_reviewed(self) -> dict:
+        if not self.reviewed_path.exists():
+            return {}
+        try:
+            mark = _read_json(self.reviewed_path)
+        except NightwardError:
+            return {}
+        return mark if isinstance(mark, dict) else {}
 
     # ---- run metadata (skipped/failed counts from the last run) ---------
     def write_run_meta(self, meta: dict) -> None:

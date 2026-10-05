@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from .core.baseline import Store
+from .core.baseline import Store, digest
 from .core.diff import REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
@@ -88,7 +88,7 @@ DEFAULT_SITE = "nightward-site"   # `view` output: holds captured data, never co
 # judge_verdicts.json is deliberately NOT here: it is the committed ledger that
 # keeps judged-SAME boundaries deterministic on fresh clones / CI.
 TRANSIENT_ENTRIES = ("pending/", "rejected/", "report.json", "run_meta.json",
-                     "pending.tmp/", "**/*.tmp", ".lock")
+                     "pending.tmp/", "**/*.tmp", ".lock", "reviewed.json")
 GITIGNORE_HEADER = "# nightward: approved baseline IS committed; transient state is not"
 
 # Everything rich prints is parsed as markup, so captured data (names, groups,
@@ -161,6 +161,29 @@ def _incomplete_text(incomplete: dict) -> str:
 
 STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture changed since "
                  "the last report; re-run `nightward run`")
+
+
+def _mark_reviewed(store: Store, report: dict | None, via: str) -> None:
+    """Record the capture a human just saw, so approve promotes exactly that (D10).
+
+    Only human surfaces call this (run/review/view) - never MCP: an agent's
+    run between review and approve must not choose what the approval covers.
+    """
+    if report and report.get("pending_digest"):
+        store.mark_reviewed(report["pending_digest"], via)
+
+
+def _check_reviewed(store: Store, pending) -> None:
+    mark = store.load_reviewed()
+    if not mark:
+        raise NightwardError("no human has reviewed this capture yet - run `nightward "
+                             "review` (or `nightward run` / `nightward view`), then approve")
+    if mark.get("pending_digest") != digest(pending):
+        raise NightwardError(
+            f"the capture changed since you last reviewed it (with `nightward "
+            f"{mark.get('via', 'review')}`) - another run (an agent's nightward_run, CI, a "
+            f"teammate) captured again. Run `nightward review` again, then approve what "
+            f"it shows.")
 
 
 def _gitignore_lines(dir_: str) -> list[str] | None:
@@ -287,6 +310,7 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
+    _mark_reviewed(_store(dir), result["report"], "run")
     # A committed report.json lets a CI `gate` without `run` pass on an old verdict.
     _warn_unless_ignored(Path(dir) / "report.json",
                          "per-run state (pending/, report.json, run_meta.json) must not be "
@@ -364,6 +388,7 @@ def review(names: list[str] | None = NAMES_ARG,
              if (kept := [it for it in items if it["name"] in wanted])}
     judged_same = [it for it in judged_same if it["name"] in wanted]
     intact = report.get("boundary") == "intact"
+    _mark_reviewed(store, report, "review")
     if not blast:
         if not judged_same:
             console.print("[green]boundary intact - nothing to review[/green]" if intact
@@ -461,6 +486,8 @@ def _approve(store: Store, dir: str, name: str | None, all_: bool,
     pending = store.load_pending()
     if not baseline and not pending:
         raise NightwardError(f"nothing captured in {dir!r} yet - run `nightward run` first")
+    # Approve what the human saw, not what an agent captured after it (D10).
+    _check_reviewed(store, pending)
     # Reuse the last run's judge (cached verdicts): --all then approves exactly
     # what the report lists as unapproved, and judged-SAME behaviors don't flip
     # back to CHANGED the moment something else is approved. Approving a
@@ -496,7 +523,9 @@ def _approve(store: Store, dir: str, name: str | None, all_: bool,
 
     for n in targets:
         verb = _approve_one(store, n, baseline, pending)
-        console.print(f"[green]{verb}[/green] {escape(n)}")
+        # The short fingerprint ties the approval to the reviewed content.
+        what = f" ({pending[n].fingerprint()[:8]})" if n in pending else ""
+        console.print(f"[green]{verb}[/green] {escape(n)}{what}")
         if name and store.clear_rejection(n):
             console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
     if kept_rejected:
@@ -621,8 +650,11 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
          open_browser: bool = typer.Option(True, "--open/--no-open",
                                            help="Open a browser when serving")):
     """Build a static, read-only blast-radius dashboard (view it in a browser)."""
-    _existing_store(dir)
+    store = _existing_store(dir)
     out_path = build_site(Path(dir), Path(out))
+    report = store.load_report()
+    if not is_stale(store, report):
+        _mark_reviewed(store, report, "view")
     console.print(f"[green]built[/green] {escape(str(out_path))}/ "
                   "(index.html, app.js, style.css, data.json)")
     _warn_unless_ignored(out_path / "data.json", "it holds your captured behaviors")

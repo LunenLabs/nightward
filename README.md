@@ -58,7 +58,10 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
                   for values that are volatile by evidence (see below); takes the
                   same NAME... / --group scope as review
 nightward approve promote pending behavior(s) into the baseline
-                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
+                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed).
+                  It promotes only the capture a human last saw through `run`,
+                  `review` or `view`; if anything captured again since (e.g. an
+                  agent's nightward_run), it refuses until you review again
 nightward reject  confirm a change as a real regression (boundary stays breached;
                   `approve --all` skips it as "kept (rejected)" while that payload
                   is pending - `approve <name>` overrides and clears the rejection)

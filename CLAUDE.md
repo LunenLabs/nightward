@@ -143,6 +143,10 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   behavior whose current pending (or, for a removal, baseline) state matches its
   `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
   `approve <name>` overrides and deletes the record.
+- **Approve what was reviewed (D10).** CLI `run`, `review` and `view` (never MCP)
+  write `reviewed.json` = the `pending_digest` a human just saw; `approve` refuses
+  unless `digest(pending)` still matches, so an agent's run between review and
+  approve can't slip unseen content into the baseline.
 - **One writer per store (D11).** `core/lock.store_lock` creates `<store>/.lock`
   with O_EXCL (pid, host, command, since, token) around run (pytest child +
   recompute), approve and reject; a second writer gets a NightwardError naming

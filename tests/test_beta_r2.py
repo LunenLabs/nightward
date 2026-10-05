@@ -148,3 +148,62 @@ def test_concurrent_runs_never_report_clobbered_removals(tmp_path):
         assert "REMOVED" not in out
         assert code in (0, 1) or "another nightward process" in err, err
     assert len(list((tw / "pending").glob("*.json"))) == 200
+
+
+# ---- R2-WEB-01 (D10): approve exactly what was reviewed --------------------------
+
+SHOP = ('LABEL = "Total"\nUNIT = 10\ndef checkout(qty):\n'
+        '    return {"label": LABEL, "qty": qty, "total": qty * UNIT}\n')
+TEST_SHOP = ('from shop import checkout\n'
+             'def test_checkout(behavior):\n'
+             '    behavior("checkout.3", checkout(3), group="billing")\n')
+
+
+@pytest.fixture
+def reviewed_then_agent_ran(tmp_path, monkeypatch):
+    """Human reviewed the label change; the agent then ran again with a price bug."""
+    write(tmp_path / "shop.py", SHOP)
+    write(tmp_path / "test_shop.py", TEST_SHOP)
+    tw = tmp_path / ".tw"
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    monkeypatch.chdir(tmp_path)
+    write(tmp_path / "shop.py", SHOP.replace('"Total"', '"Order total"'))
+    mcp_server.run_tool(".", str(tw))                              # agent
+    review = cli("review", "--dir", str(tw), cwd=tmp_path)        # human
+    assert "Order total" in review.stdout and "36" not in review.stdout
+    write(tmp_path / "shop.py", SHOP.replace('"Total"', '"Order total"').replace("10", "12"))
+    mcp_server.run_tool(".", str(tw))                              # agent again
+    return tmp_path, tw
+
+
+@pytest.mark.parametrize("args", [("checkout.3",), ("--all",)])
+def test_approve_refuses_a_capture_changed_since_review(reviewed_then_agent_ran, args):
+    tmp_path, tw = reviewed_then_agent_ran
+    r = cli("approve", *args, "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 2, r.stdout
+    assert "changed since" in r.stderr and "nightward review" in r.stderr
+    base = json.loads((tw / "baseline" / "checkout.3.approved.json").read_text("utf-8"))
+    assert base["payload"]["total"] == 30
+
+
+def test_approve_after_reviewing_again_promotes_what_was_shown(reviewed_then_agent_ran):
+    tmp_path, tw = reviewed_then_agent_ran
+    review = cli("review", "--dir", str(tw), cwd=tmp_path)
+    assert "36" in review.stdout
+    r = cli("approve", "checkout.3", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    fp = json.loads((tw / "pending" / "checkout.3.received.json").read_text("utf-8"))
+    assert "approved checkout.3 (" in r.stdout
+    assert json.loads((tw / "baseline" / "checkout.3.approved.json").read_text("utf-8")) == fp
+
+
+def test_approve_refuses_when_only_an_agent_has_run(tmp_path, monkeypatch):
+    write(tmp_path / "shop.py", SHOP)
+    write(tmp_path / "test_shop.py", TEST_SHOP)
+    monkeypatch.chdir(tmp_path)
+    mcp_server.run_tool(".", ".tw")
+    r = cli("approve", "--all", "--dir", ".tw", cwd=tmp_path)
+    assert r.returncode == 2 and "nightward review" in r.stderr
+    assert cli("view", "--no-serve", "--dir", ".tw", cwd=tmp_path).returncode == 0
+    assert cli("approve", "--all", "--dir", ".tw", cwd=tmp_path).returncode == 0
