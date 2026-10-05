@@ -54,7 +54,12 @@ nightward reject  confirm a change as a real regression (boundary stays breached
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
 nightward status  machine-readable boundary signal (--json)
 nightward view    build a static, read-only dashboard and view it in a browser
+nightward mcp     stdio MCP server for AI agents: run + status, never approve
 ```
+
+`gate` and `status` read the report of the **last run**; they don't notice code
+edited since then. Run `nightward run` again after every edit before trusting the
+verdict (`generated_at` says when the report was made).
 
 A skipped test or a partial path (`nightward run tests/test_a.py`) captures nothing for
 the behaviors it didn't reach, so they read as REMOVED. That is why `approve --all`
@@ -129,6 +134,51 @@ comparison, so the gate fails closed, and says so: `nightward run` prints
 exactly`, and the report and `status --json` carry
 `"judge": {"spec", "unavailable", "compared_exactly"}`.
 
+## AI agents (`nightward mcp`)
+
+An agent loop needs a definition of "done" that it can check but not change.
+`nightward mcp` is a stdio [MCP](https://modelcontextprotocol.io) server that lets
+the agent **run** the gate and **read** its verdict. It can't approve anything.
+
+```bash
+pip install "nightward[mcp]"                      # the mcp 1.x SDK (2.x is not supported yet)
+claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in the project root
+```
+
+Other hosts take the usual JSON entry. Start the server in the project root: it
+resolves `path` and `dir` against its own working directory.
+
+```json
+{"mcpServers": {"nightward": {"command": "nightward", "args": ["mcp"], "cwd": "/path/to/project"}}}
+```
+
+| tool | arguments | what it does |
+|---|---|---|
+| `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the store is left untouched) | runs the tests, captures behaviors, recomputes the boundary |
+| `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
+
+Both return the `status --json` shape: `boundary` (`intact` / `breached` /
+`unknown`), `unapproved`, `changes` (`name`, `kind`, `group`, plus `judged`,
+`judge_model`, `judge_reason` when a judge ruled), `judged_same`, `stale`,
+`generated_at`, and `judge`. `nightward_run` adds `warnings`: `skipped`, `failed`,
+`pytest_returncode`, and `pytest_output_tail` (pytest's last lines, so the agent can
+see why tests failed). The agent is done when `boundary` is `"intact"` and `stale`
+is false.
+
+Rules for the loop:
+
+- **Call `nightward_run` after every code edit.** `nightward_status` and `gate` only
+  report the last run. They don't notice code edited since then, and `stale` only
+  covers a baseline that changed after the run.
+- **The agent can't approve.** `approve` and `reject` are not exposed. If the agent
+  that makes a change could also approve it, the gate would turn into a changelog.
+  A human approves with the CLI and commits the baseline.
+- **The judge is the human's choice.** `semantic=True` behaviors are judged by
+  `nightward mcp --judge <provider:model>`, else `$NIGHTWARD_JUDGE` in the server's
+  environment, else the judge the last run used (for example the team's
+  `nightward run --judge persona:editor`). The tool has no judge argument, so the agent
+  can't pick a lenient judge, and it gets the same verdict as the CLI.
+
 ## Dashboard (`nightward view`)
 
 ![nightward dashboard — a breached boundary rendered from synthetic demo data](docs/assets/dashboard-light.png)
@@ -199,5 +249,6 @@ see `docs/experiments/2026-06-10-document-input-adapters.md`.
 ## v0 scope (intentionally small)
 
 In: pytest capture, blast-radius diff, gate, loop signal, field-aware scrub + doctor,
-static dashboard, LLM-as-judge semantic diff (v0.2, multi-model).
+static dashboard, MCP agent gate (run + status, no approve), LLM-as-judge semantic diff
+(v0.2, multi-model).
 Out (v1): PR-comment summaries, call-graph grouping, multi-language.
