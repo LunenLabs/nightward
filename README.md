@@ -25,9 +25,14 @@ you approve it once, and from then on every change is gated against that snapsho
 ```bash
 pip install -e .
 
+# 0. once per repo: create .nightward/ and add .gitignore rules for its per-run
+#    state (pending/, report.json, run_meta.json) and the dashboard (nightward-site/)
+nightward init
+
 # 1. capture current behavior and approve it as the baseline
 nightward run example
 nightward approve --all
+git add .gitignore .nightward/baseline   # commit the approved baseline (= the boundary)
 
 # 2. change the code, then re-run — the blast radius shows what moved
 nightward run example
@@ -44,6 +49,8 @@ nightward view              # builds a static site + serves it on localhost
 ## Workflow
 
 ```
+nightward init    create the store and add .gitignore rules (once per repo; `run`
+                  warns while its per-run files are not git-ignored)
 nightward run     re-run tests → capture → compute blast radius
 nightward review  show changed behaviors with diffs; scope with `review NAME...` or
                   `--group G`; each diff shows 60 lines (`--max-lines N`, 0 = all)
@@ -298,7 +305,8 @@ deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered 
 
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data
-> (`scripts/build_demo.py`).
+> (`scripts/build_demo.py`). The default output dir `nightward-site/` is in the rules
+> `nightward init` writes, and `view` warns when its output is not git-ignored.
 
 ## Threat model — what this gate does and does not protect against
 

@@ -6,6 +6,7 @@ fix the code, do not weaken the test.
 import datetime
 import decimal
 import os
+import shutil
 import subprocess
 import sys
 
@@ -306,3 +307,41 @@ def test_run_from_a_subdirectory_points_at_the_project_store(tmp_path):
     assert ".." in r.stderr and "project root" in r.stderr, r.stderr
     gate = cli("gate", cwd=sub)
     assert gate.returncode == 2 and ".." in gate.stderr
+
+
+# ---- R1-OPS-09 / R1-WEB-06: transient state and the dashboard stay out of git ---
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+
+
+@needs_git
+def test_run_warns_until_transient_files_are_git_ignored(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    write(tmp_path / "test_a.py", "def test_a(behavior):\n    behavior('a', 1)\n")
+    first = cli("run", ".", cwd=tmp_path)
+    assert first.returncode == 0, first.stderr
+    assert "not git-ignored" in first.stderr and "nightward init" in first.stderr
+    assert cli("init", cwd=tmp_path).returncode == 0
+    again = cli("run", ".", cwd=tmp_path)
+    assert "not git-ignored" not in again.stderr, again.stderr
+
+
+def test_run_outside_git_does_not_nag(tmp_path):
+    write(tmp_path / "test_a.py", "def test_a(behavior):\n    behavior('a', 1)\n")
+    r = cli("run", ".", cwd=tmp_path, env={"GIT_CEILING_DIRECTORIES": str(tmp_path.parent)})
+    assert "not git-ignored" not in r.stderr
+
+
+def test_init_ignores_the_default_dashboard_output(tmp_path):
+    assert cli("init", cwd=tmp_path).returncode == 0
+    gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "nightward-site/" in gi
+
+
+@needs_git
+def test_view_warns_when_its_output_would_be_committed(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    Store(tmp_path / ".nightward").ensure()
+    r = cli("view", "--no-serve", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "not git-ignored" in r.stderr and "nightward-site" in r.stderr

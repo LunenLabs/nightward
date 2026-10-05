@@ -5,6 +5,7 @@ import errno
 import functools
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -80,6 +81,7 @@ console = Console(file=_stdout, legacy_windows=False)
 err_console = Console(stderr=True, legacy_windows=False)
 
 DEFAULT_DIR = ".nightward"
+DEFAULT_SITE = "nightward-site"   # `view` output: holds captured data, never commit it
 
 # Store entries that are per-run state, relative to the store dir.
 # judge_verdicts.json is deliberately NOT here: it is the committed ledger that
@@ -171,7 +173,26 @@ def _gitignore_lines(dir_: str) -> list[str] | None:
     prefix = p.as_posix()
     if prefix == ".." or prefix.startswith("../"):
         return None
-    return [GITIGNORE_HEADER, *(f"{prefix}/{entry}" for entry in TRANSIENT_ENTRIES)]
+    return [GITIGNORE_HEADER, f"{DEFAULT_SITE}/",
+            *(f"{prefix}/{entry}" for entry in TRANSIENT_ENTRIES)]
+
+
+def _git_ignored(path: Path) -> bool | None:
+    """Whether git ignores `path` (None: no git, or not inside a repository)."""
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", str(path)], capture_output=True,
+                           stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(r.returncode)
+
+
+def _warn_unless_ignored(path: Path, what: str) -> None:
+    # Only a nudge: a rule in a parent .gitignore or info/exclude counts too.
+    if _git_ignored(path) is False:
+        err_console.print(f"[yellow]warning:[/yellow] {escape(str(path))} is not git-ignored "
+                          f"and {what} - run `nightward init` to add the .gitignore rules",
+                          soft_wrap=True)
 
 
 def _print_summary(report: dict) -> None:
@@ -264,6 +285,10 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
+    # A committed report.json lets a CI `gate` without `run` pass on an old verdict.
+    _warn_unless_ignored(Path(dir) / "report.json",
+                         "per-run state (pending/, report.json, run_meta.json) must not be "
+                         "committed")
     incomplete = result["report"].get("incomplete")
     if incomplete or result["pytest_returncode"] == 1:
         # A failing capture test means behaviors are missing from the blast
@@ -577,7 +602,7 @@ def gate(dir: str = typer.Option(DEFAULT_DIR)):
 @app.command()
 @handle_errors
 def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to read"),
-         out: str = typer.Option("nightward-site", help="Output directory for the static site"),
+         out: str = typer.Option(DEFAULT_SITE, help="Output directory for the static site"),
          serve: bool = typer.Option(True, "--serve/--no-serve",
                                     help="Serve locally and open a browser after building"),
          port: int = typer.Option(8000, help="Port for --serve"),
@@ -588,6 +613,7 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
     out_path = build_site(Path(dir), Path(out))
     console.print(f"[green]built[/green] {escape(str(out_path))}/ "
                   "(index.html, app.js, style.css, data.json)")
+    _warn_unless_ignored(out_path / "data.json", "it holds your captured behaviors")
     if serve:
         from .view.serve import serve as _serve
         _serve(out_path, port=port, open_browser=open_browser)
