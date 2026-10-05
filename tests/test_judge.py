@@ -31,9 +31,8 @@ def test_parse_spec_rejects_bad_specs(bad):
 
 
 def test_unknown_persona_is_clean_error(tmp_path):
-    judge = Judge("persona:nope", cache_path=tmp_path / "c.json")
-    with pytest.raises(NightwardError):
-        judge.equivalent("a", "b", "f1", "f2")
+    with pytest.raises(NightwardError):  # at construction, before any run (R1-LLM-06)
+        Judge("persona:nope", cache_path=tmp_path / "c.json")
 
 
 # --- persona verdicts ----------------------------------------------------------

@@ -208,6 +208,11 @@ def parse_spec(spec: str) -> tuple[str, str]:
         raise NightwardError(
             f"unknown judge provider {provider!r}; available: {', '.join(sorted(_BACKENDS))}"
         )
+    # Persona names are known up front: reject a typo before a whole suite runs.
+    if provider == "persona" and model not in _PERSONAS:
+        raise NightwardError(
+            f"unknown judge persona {model!r}; available: {', '.join(sorted(_PERSONAS))}"
+        )
     return provider, model
 
 
