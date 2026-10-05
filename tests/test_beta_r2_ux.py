@@ -162,3 +162,73 @@ def test_cli_hints_quote_the_names_they_print(tmp_path):
     r = subprocess.run([sys.executable, "-m", "nightward", "review", "--dir", str(store.root)],
                        capture_output=True, text=True, encoding="utf-8", cwd=tmp_path)
     assert f"{command('review', [name])} --max-lines 0" in r.stdout.replace("\n", ""), r.stdout
+
+
+# ---- R2-WEB-03: `approve NAME...` and a group chip that leaves REMOVED alone ---
+
+def cli(*args, cwd):
+    return subprocess.run([sys.executable, "-m", "nightward", *args], cwd=str(cwd),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def group_store(tw, removed_source="t.py::gone"):
+    """gql.a/b/c CHANGED, gql.old REMOVED (its test didn't run), all in group graphql."""
+    store = Store(tw)
+    store.ensure()
+    for n in ("gql.a", "gql.b", "gql.c", "gql.old"):
+        src = removed_source if n == "gql.old" else "t.py::g"
+        store.write_pending(Behavior(name=n, payload=1, group="graphql", source=src))
+        store.approve(n)
+    store.clear_pending()
+    for n in ("gql.a", "gql.b", "gql.c"):
+        store.write_pending(Behavior(name=n, payload=2, group="graphql", source="t.py::g"))
+    store.write_run_meta({"completed": ["t.py::g"]})
+    recompute(store)
+    return store
+
+
+def test_approve_accepts_several_names(tmp_path):
+    store = group_store(tmp_path / ".tw")
+    r = cli("approve", "gql.a", "gql.b", "--dir", str(store.root), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    base = store.load_baseline()
+    assert base["gql.a"].payload == base["gql.b"].payload == 2
+    assert base["gql.c"].payload == 1
+
+
+def test_approve_with_an_unknown_name_approves_nothing(tmp_path):
+    store = group_store(tmp_path / ".tw")
+    r = cli("approve", "gql.a", "gql.zz", "--dir", str(store.root), cwd=tmp_path)
+    assert r.returncode == 2
+    assert "gql.zz" in r.stderr and "Traceback" not in r.stderr
+    assert store.load_baseline()["gql.a"].payload == 1
+
+
+def test_several_names_keep_unproven_removals_and_rejections(tmp_path):
+    store = group_store(tmp_path / ".tw")
+    assert cli("reject", "gql.c", "--dir", str(store.root), cwd=tmp_path).returncode == 0
+    r = cli("approve", "gql.a", "gql.c", "gql.old", "--dir", str(store.root), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    base = store.load_baseline()
+    assert base["gql.a"].payload == 2
+    assert base["gql.c"].payload == 1 and "kept (rejected)" in r.stdout
+    assert "gql.old" in base and "can't prove gone" in r.stdout
+
+
+def test_one_name_still_overrides(tmp_path):
+    store = group_store(tmp_path / ".tw")
+    r = cli("approve", "gql.old", "--dir", str(store.root), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "gql.old" not in store.load_baseline()
+
+
+def test_approve_names_and_all_together_is_an_error(tmp_path):
+    store = group_store(tmp_path / ".tw")
+    r = cli("approve", "gql.a", "gql.b", "--all", "--dir", str(store.root), cwd=tmp_path)
+    assert r.returncode == 2
+
+
+def test_group_chip_leaves_removed_items_out():
+    items = [{"name": "gql.a", "kind": "CHANGED"}, {"name": "gql.old", "kind": "REMOVED"},
+             {"name": "gql.n", "kind": "NEW"}]
+    assert node_eval(f"groupApproveNames({json.dumps(items)})") == ["gql.a", "gql.n"]

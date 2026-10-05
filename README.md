@@ -58,7 +58,9 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
                   for values that are volatile by evidence (see below); takes the
                   same NAME... / --group scope as review
 nightward approve promote pending behavior(s) into the baseline
-                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
+                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
+                  `approve A B C` works like --all --include-removed limited to those
+                  names, while one name always applies, even a removal or a rejection)
 nightward reject  confirm a change as a real regression (boundary stays breached;
                   `approve --all` skips it as "kept (rejected)" while that payload
                   is pending - `approve <name>` overrides and clears the rejection)

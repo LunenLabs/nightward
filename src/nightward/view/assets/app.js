@@ -323,6 +323,13 @@ function renderCard(it) {
   return card;
 }
 
+// A REMOVED item may be a test that merely didn't run; dropping it from the
+// baseline is a per-card decision, never part of a group approval (R2-WEB-03).
+function groupApproveNames(items) {
+  return items.filter(function (i) { return i.kind !== "REMOVED"; })
+    .map(function (i) { return i.name; });
+}
+
 function renderGroups(report) {
   const root = $("groups");
   clear(root);
@@ -340,7 +347,12 @@ function renderGroups(report) {
     const summary = el("summary", { cls: "group-head" });
     summary.appendChild(el("span", { cls: "group-name", text: group }));
     summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
-    summary.appendChild(copyChip("approve this group", cliCommand("approve", items.map(function (i) { return i.name; }))));
+    const names = groupApproveNames(items);
+    if (names.length) {
+      const label = names.length === items.length ? "approve this group"
+        : "approve " + names.length + " NEW/CHANGED (removals: approve each on its card)";
+      summary.appendChild(copyChip(label, cliCommand("approve", names)));
+    }
     details.appendChild(summary);
 
     for (const it of items) details.appendChild(renderCard(it));
