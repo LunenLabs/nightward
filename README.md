@@ -111,13 +111,23 @@ Any provider:model can plug in as a backend. Each ruling is recorded once per
 fingerprint pair in `.nightward/judge_verdicts.json` — a **committed ledger**, so
 the judge's own nondeterminism can't wobble the gate, fresh clones and CI replay
 verdicts deterministically without a key, and every ruling lands in the PR diff
-for human review. A judge that can't rule (SDK not installed, no
+for human review: each entry records the behavior, model, verdict, reason, and
+the old and new wording it ruled on (up to 1,000 chars each).
+
+Rulings are visible wherever the verdict is:
+
+- `nightward review` lists every behavior the judge ruled SAME, with its diff,
+  even when the boundary is intact. A wrong SAME is a hole in the gate, so audit them.
+- `status --json` (and MCP) carry `judged`, `judge_model` and `judge_reason` on each
+  change, and a `judged_same` list of `{name, group, judge_model, judge_reason}`.
+- The dashboard has a "ruled semantically SAME" section with the diffs.
+
+A judge that can't rule (SDK not installed, no
 `ANTHROPIC_API_KEY`, API error, unparseable reply) falls back to the exact
 comparison, so the gate fails closed, and says so: `nightward run` prints
 `warning: judge <spec> unavailable (<reason>); N semantic behavior(s) compared
 exactly`, and the report and `status --json` carry
-`"judge": {"spec", "unavailable", "compared_exactly"}`. Rulings are also
-surfaced in the CLI, `status --json`, and the dashboard.
+`"judge": {"spec", "unavailable", "compared_exactly"}`.
 
 ## Dashboard (`nightward view`)
 

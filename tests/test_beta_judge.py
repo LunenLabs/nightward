@@ -145,3 +145,66 @@ def test_mcp_configure_rejects_a_bad_judge_at_startup(monkeypatch):
     monkeypatch.setattr(mcp_server, "_server_judge", None)
     with pytest.raises(NightwardError, match="edtior"):
         mcp_server.configure(judge="persona:edtior")
+
+
+# --- R1-LLM-04: judged-SAME rulings are visible to a reviewer -----------------
+
+
+def _judged_same_project(tmp_path, monkeypatch):
+    monkeypatch.delenv("NIGHTWARD_JUDGE", raising=False)
+    path, dir_, store = _approved_project(tmp_path)
+    monkeypatch.setenv("REPLY", REWORDED)
+    report = execute_run(path, dir_, judge_spec="persona:editor")["report"]
+    monkeypatch.delenv("REPLY")
+    return report
+
+
+def test_report_and_status_list_judged_same_with_diff(tmp_path, monkeypatch):
+    from nightward.signal import status_payload
+    report = _judged_same_project(tmp_path, monkeypatch)
+    assert report["boundary"] == "intact"
+    [same] = report["judged_same"]
+    assert same["name"] == "reply.refund" and same["judge_model"] == "persona:editor"
+    assert REWORDED in same["diff"]
+    status = status_payload(report)
+    assert status["judged_same"] == [{"name": "reply.refund", "group": "chat",
+                                      "judge_model": "persona:editor",
+                                      "judge_reason": same["judge_reason"]}]
+
+
+def test_status_changes_carry_judged_different_rulings(tmp_path, monkeypatch):
+    from nightward.signal import status_payload
+    monkeypatch.delenv("NIGHTWARD_JUDGE", raising=False)
+    path, dir_, _store = _approved_project(tmp_path)
+    monkeypatch.setenv("REPLY", "Your refund of $500 has been approved.")
+    report = execute_run(path, dir_, judge_spec="persona:editor")["report"]
+    [change] = status_payload(report)["changes"]
+    assert change["judged"] is True and change["judge_model"] == "persona:editor"
+    assert change["judge_reason"]
+
+
+def test_review_shows_judged_same_wording_even_when_intact(tmp_path, monkeypatch):
+    _judged_same_project(tmp_path, monkeypatch)
+    r = cli("review", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "nothing to review" not in r.stdout
+    assert "reply.refund" in r.stdout and "SAME" in r.stdout
+    assert REWORDED in r.stdout
+
+
+def test_ledger_entry_keeps_the_wording_it_ruled_on(tmp_path, monkeypatch):
+    _judged_same_project(tmp_path, monkeypatch)
+    ledger = json.loads((tmp_path / ".nightward" / "judge_verdicts.json")
+                        .read_text(encoding="utf-8"))
+    [entry] = ledger.values()
+    assert entry["old"] == "Your refund of $50 has been approved."
+    assert entry["new"] == REWORDED
+
+
+def test_dashboard_data_lists_judged_same(tmp_path, monkeypatch):
+    from nightward.view import build_site
+    _judged_same_project(tmp_path, monkeypatch)
+    out = build_site(tmp_path / ".nightward", tmp_path / "site")
+    data = json.loads((out / "data.json").read_text(encoding="utf-8"))
+    assert [it["name"] for it in data["report"]["judged_same"]] == ["reply.refund"]
+    assert "report.judged_same" in (out / "app.js").read_text(encoding="utf-8")

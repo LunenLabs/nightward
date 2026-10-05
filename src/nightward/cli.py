@@ -173,15 +173,32 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
 @app.command()
 @handle_errors
 def review(dir: str = typer.Option(DEFAULT_DIR)):
-    """Show the blast radius with full diffs."""
+    """Show the blast radius with full diffs, plus what the judge ruled SAME."""
     report = _require_report(_store(dir))
+    judged_same = report.get("judged_same") or []
     if report.get("boundary") == "intact":
-        console.print("[green]boundary intact - nothing to review[/green]")
-        return
+        if not judged_same:
+            console.print("[green]boundary intact - nothing to review[/green]")
+            return
+        console.print("[green]boundary intact[/green] - no unapproved change")
     for group, items in report.get("blast_radius", {}).items():
         console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
         for it in items:
             console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]")
+            if it.get("judged"):
+                console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}: "
+                              f"{escape(it.get('judge_reason', ''))}[/dim]")
+            diff = it.get("diff", "")
+            console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
+    if judged_same:
+        # Outside the boundary, but a wrong SAME is a hole in the gate: show the
+        # exact wording the judge accepted so a human can audit it (R1-LLM-04).
+        console.print(f"\n[yellow]ruled semantically SAME by the judge[/yellow] "
+                      f"({len(judged_same)}) - not in the boundary; audit the wording:")
+        for it in judged_same:
+            console.print(f"\n[bold][[cyan]SAME[/cyan]] {escape(it['name'])}[/bold] "
+                          f"[dim]{escape(it.get('judge_model', ''))}: "
+                          f"{escape(it.get('judge_reason', ''))}[/dim]")
             diff = it.get("diff", "")
             console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
 

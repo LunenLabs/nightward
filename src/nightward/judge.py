@@ -225,6 +225,14 @@ def _as_text(payload: Any) -> str:
     return payload if isinstance(payload, str) else canonical_json(payload)
 
 
+_EXCERPT = 1000  # chars of each side kept in the ledger
+
+
+def _excerpt(payload: Any) -> str:
+    text = _as_text(payload)
+    return text if len(text) <= _EXCERPT else text[:_EXCERPT] + " ...[truncated]"
+
+
 class Judge:
     """One configured provider:model + a persistent verdict cache."""
 
@@ -288,8 +296,11 @@ class Judge:
             self.unavailable = self.unavailable or str(exc)
             self.compared_exactly.append(name)
             return None
+        # The wording ruled on is kept too: pending/ is not committed, so a PR
+        # reviewer would otherwise see only two hashes (R1-LLM-04).
         self._cache[key] = {"verdict": verdict, "reason": reason,
-                            "behavior": name, "model": self.spec}
+                            "behavior": name, "model": self.spec,
+                            "old": _excerpt(old_payload), "new": _excerpt(new_payload)}
         if self.provider == "persona":
             self._cache[key]["rules"] = _PERSONA_RULES
         self._save_cache()

@@ -44,7 +44,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     dir: the nightward store; timeout: seconds before pytest is stopped (the
     store is then left untouched).
     Returns {boundary: intact|breached|unknown, unapproved, changes: [{name,
-    kind, group, judged...}], stale, generated_at, judge, warnings:
+    kind, group, judged...}], judged_same, stale, generated_at, judge, warnings:
     {skipped, failed, pytest_returncode, pytest_output_tail}}. Done means
     boundary == "intact" and stale is false. Behaviors captured with
     semantic=True are judged by the judge the human configured (server

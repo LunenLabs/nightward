@@ -33,4 +33,8 @@ def aggregate(changes: list[Change]) -> dict:
         "unapproved": len(unapproved),
         "counts": counts,
         "blast_radius": {g: items for g, items in sorted(by_group.items())},
+        # Not in the boundary, but listed with their diffs so a reviewer can
+        # audit what the judge waved through (R1-LLM-04).
+        "judged_same": [c.to_dict() | {"diff": c.diff_text}
+                        for c in changes if c.kind == UNCHANGED and c.judged],
     }
