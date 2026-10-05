@@ -156,6 +156,11 @@ def test_monthly_artifacts(behavior):
     behavior("notice", from_text("out/notice.txt"), group="data")  # utf-8/cp949 auto
 ```
 
+`from_text` hashes the decoded text with line endings normalized (CRLF, CR -> LF)
+and a UTF-8 BOM dropped, so a file written on a Windows laptop and on a Linux CI
+runner gates as equal. Content hashes (`text_sha256`, `content_sha256`, `sha256`)
+are the gate's view of the content: never scrub them.
+
 `from_pdf` / `from_docx` / `from_xlsx` need `pip install "nightward[docs]"`.
 Validated on real-world files (Korean PDF/XLSX/DOCX/HWP/legacy-encoded TXT):
 see `docs/experiments/2026-06-10-document-input-adapters.md`.
