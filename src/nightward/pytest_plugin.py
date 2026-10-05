@@ -112,11 +112,12 @@ def pytest_sessionfinish(session, exitstatus):
         raise
 
     # Skipped tests don't capture their behavior -> it shows up as a false
-    # REMOVED. Record the counts so `nightward run` can warn about it.
+    # REMOVED; failed/errored tests make the capture incomplete (the run and
+    # the gate fail on it). Record the counts so the runner can act on them.
     reporter = config.pluginmanager.get_plugin("terminalreporter")
-    skipped = len(reporter.stats.get("skipped", [])) if reporter else 0
-    failed = len(reporter.stats.get("failed", [])) if reporter else 0
-    meta = {"skipped": skipped, "failed": failed}
+    stats = reporter.stats if reporter else {}
+    meta = {key: len(stats.get(stat, []))
+            for key, stat in (("skipped", "skipped"), ("failed", "failed"), ("errors", "error"))}
     # Written last: its presence proves to the runner that THIS run's flush landed.
     run_id = config.getoption("--nightward-run-id")
     if run_id:

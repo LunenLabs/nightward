@@ -38,6 +38,7 @@ def collect_data(nightward_dir: Path | str) -> dict:
         "meta": {
             "skipped": run_meta.get("skipped", 0),
             "failed": run_meta.get("failed", 0),
+            "errors": run_meta.get("errors", 0),
             "judge": run_meta.get("judge"),
             "baseline_count": len(baseline),
             "pending_count": len(pending),

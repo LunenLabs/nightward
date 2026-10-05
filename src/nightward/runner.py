@@ -41,11 +41,15 @@ def recompute(store: Store, judge=None) -> dict:
     """Compare pending against baseline, aggregate, persist, and return the report.
 
     The report records digests of both inputs so a later reader can tell when
-    either moved under it (see is_stale).
+    either moved under it (see is_stale), and whether the capture behind it was
+    incomplete (failed/errored tests) - such a report never gates green.
     """
     baseline = store.load_baseline()
     pending = store.load_pending()
     report = aggregate(compare(baseline, pending, judge=judge))
+    meta = store.load_run_meta()
+    failed, errors = meta.get("failed", 0), meta.get("errors", 0)
+    report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)
@@ -126,9 +130,9 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     judge for behaviors captured with semantic=True; the spec is persisted in
     run_meta so later approve/recompute reuse the same (cached) verdicts.
     timeout (seconds) bounds the pytest run; on expiry nothing in the store moves.
-    Returns {report, skipped, failed, pytest_returncode, output_tail}; output_tail
-    is pytest's last lines when capture_output=True, so a caller can see why
-    tests failed.
+    Returns {report, skipped, failed, errors, pytest_returncode, output_tail};
+    output_tail is pytest's last lines when capture_output=True, so a caller can
+    see why tests failed.
     """
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
     run_id = uuid.uuid4().hex
@@ -162,6 +166,7 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         "report": report,
         "skipped": meta.get("skipped", 0),
         "failed": meta.get("failed", 0),
+        "errors": meta.get("errors", 0),
         "pytest_returncode": result.returncode,
         "output_tail": _output_tail(result),
     }

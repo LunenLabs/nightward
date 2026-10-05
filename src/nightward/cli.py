@@ -78,6 +78,11 @@ def _require_report(store: Store) -> dict:
     return report
 
 
+def _incomplete_text(incomplete: dict) -> str:
+    return (f"{incomplete.get('failed', 0)} failed, {incomplete.get('errors', 0)} error(s) "
+            f"in the capture run - fix them and re-run `nightward run`")
+
+
 STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture changed since "
                  "the last report; re-run `nightward run`")
 
@@ -158,14 +163,19 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
     console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
                   f"--nightward-dir {escape(dir)}[/dim]")
     result = execute_run(path, dir, judge_spec=judge)
-    if result["pytest_returncode"] == 1:
-        err_console.print("[yellow]warning:[/yellow] some tests failed - captured "
-                          "behaviors may be incomplete; blast radius may be unreliable")
     if result["skipped"]:
         err_console.print(f"[yellow]warning:[/yellow] {result['skipped']} test(s) skipped - "
                           "skipped behaviors appear as REMOVED; blast radius may show "
                           "false positives")
     _print_summary(result["report"])
+    incomplete = result["report"].get("incomplete")
+    if incomplete or result["pytest_returncode"] == 1:
+        # A failing capture test means behaviors are missing from the blast
+        # radius; a green exit here would let CI merge it (`gate` fails too).
+        detail = (_incomplete_text(incomplete) if incomplete
+                  else "pytest reported failures - fix them and re-run `nightward run`")
+        err_console.print(f"\n[red]capture incomplete:[/red] {detail}")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -178,6 +188,9 @@ def review(dir: str = typer.Option(DEFAULT_DIR)):
         # Its diffs compare inputs that are no longer on disk - don't show them.
         console.print(STALE_MESSAGE)
         raise typer.Exit(1)
+    if report.get("incomplete"):
+        err_console.print(f"[yellow]warning:[/yellow] capture incomplete: "
+                          f"{_incomplete_text(report['incomplete'])}")
     if report.get("boundary") == "intact":
         console.print("[green]boundary intact - nothing to review[/green]")
         return
@@ -227,12 +240,12 @@ def approve(name: str | None = typer.Argument(None),
             # A skipped/failed test captures nothing and looks REMOVED; approving
             # that would silently shrink the boundary. Demand a complete run.
             meta = store.load_run_meta()
-            if meta.get("skipped") or meta.get("failed"):
+            if meta.get("skipped") or meta.get("failed") or meta.get("errors"):
                 raise NightwardError(
                     f"refusing --include-removed: the last run had "
-                    f"{meta.get('skipped', 0)} skipped and {meta.get('failed', 0)} failed "
-                    f"test(s), so REMOVED may be false. Re-run cleanly, or approve "
-                    f"removals one by name."
+                    f"{meta.get('skipped', 0)} skipped, {meta.get('failed', 0)} failed and "
+                    f"{meta.get('errors', 0)} errored test(s), so REMOVED may be false. "
+                    f"Re-run cleanly, or approve removals one by name."
                 )
         if not include_removed:
             held = removed
@@ -309,6 +322,9 @@ def gate(dir: str = typer.Option(DEFAULT_DIR)):
     report = _require_report(store)
     if is_stale(store, report):
         console.print(STALE_MESSAGE)
+        raise typer.Exit(1)
+    if report.get("incomplete"):
+        console.print(f"[red]last run incomplete:[/red] {_incomplete_text(report['incomplete'])}")
         raise typer.Exit(1)
     if report.get("boundary") == "intact":
         console.print("[green]boundary intact[/green]")

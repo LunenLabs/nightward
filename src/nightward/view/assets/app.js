@@ -98,6 +98,10 @@ const UNTRUSTED = {
     title: "Report is stale",
     explain: "The approved baseline or the captured behavior changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius. (`nightward gate` exits 1.)",
   },
+  incomplete: {
+    title: "Capture incomplete",
+    explain: "Nothing captured is unapproved, but some capture tests failed or errored, so their behaviors are missing from this report. Fix them and re-run. (`nightward gate` exits 1.)",
+  },
 };
 
 function renderBanner(report, state) {
@@ -124,7 +128,8 @@ function renderBanner(report, state) {
 
 function bannerState(report, meta) {
   if (meta && meta.stale) return "stale";
-  return report.boundary === "intact" ? "intact" : "breached";
+  if (report.boundary === "intact") return report.incomplete ? "incomplete" : "intact";
+  return "breached";
 }
 
 function renderWarnings(report, meta) {
@@ -137,10 +142,11 @@ function renderWarnings(report, meta) {
     "This page can contain captured system output. Review for sensitive data before publishing it anywhere public."));
   w.appendChild(exposure);
 
-  if (meta && (meta.skipped || meta.failed)) {
+  if (meta && (meta.skipped || meta.failed || meta.errors)) {
     const parts = [];
     if (meta.skipped) parts.push(meta.skipped + " skipped");
     if (meta.failed) parts.push(meta.failed + " failed");
+    if (meta.errors) parts.push(meta.errors + " errored");
     const warn = el("div", { cls: "warn warn-alert" });
     warn.appendChild(el("strong", { text: parts.join(" · ") + " " }));
     warn.appendChild(document.createTextNode(
@@ -339,7 +345,9 @@ function render(data) {
 
   if (report.boundary === "intact" || !changes.length) {
     showEmpty("No behavior changed",
-      "Everything matches the last approved baseline. This is a safe place to stop.", null);
+      state === "incomplete"
+        ? "Everything captured matches the baseline, but the capture is incomplete. This is NOT a safe place to stop."
+        : "Everything matches the last approved baseline. This is a safe place to stop.", null);
     renderCounts(report.counts || {});
     return;
   }

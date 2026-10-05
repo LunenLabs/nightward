@@ -52,15 +52,21 @@ nightward approve promote pending behavior(s) into the baseline
 nightward reject  confirm a change as a real regression (boundary stays breached)
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
 nightward status  machine-readable boundary signal (--json): "intact" is the only
-                  "done"; "breached", "stale" (baseline or capture changed since
-                  the last report - re-run) and "unknown" (no report) are not
+                  "done"; "breached", "incomplete" (capture tests failed/errored),
+                  "stale" (baseline or capture changed since the last report -
+                  re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
 ```
 
+A failing or erroring capture test means its behaviors are missing from the blast
+radius, so the run is **incomplete**: `nightward run` prints the summary and exits 1,
+the report records `incomplete: {"failed": n, "errors": m}`, and `gate` exits 1 until
+a clean run.
+
 A skipped test or a partial path (`nightward run tests/test_a.py`) captures nothing for
 the behaviors it didn't reach, so they read as REMOVED. That is why `approve --all`
-leaves removals alone, and `--include-removed` refuses after a run with skipped or
-failed tests. Capture runs in a single process: `nightward run` forces `-n 0` if
+leaves removals alone, and `--include-removed` refuses after a run with skipped,
+failed or errored tests. Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text

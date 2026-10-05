@@ -24,6 +24,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     payload["warnings"] = {
         "skipped": result["skipped"],
         "failed": result["failed"],
+        "errors": result["errors"],
         "pytest_returncode": result["pytest_returncode"],
         "pytest_output_tail": result["output_tail"],
     }

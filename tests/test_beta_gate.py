@@ -151,3 +151,55 @@ def test_successful_run_records_its_token_after_flush(tmp_path):
     execute_run(str(tmp_path / "test_p.py"), str(tw))
     meta = json.loads((tw / "run_meta.json").read_text(encoding="utf-8"))
     assert meta.get("run_id")
+
+
+# ---- R1-DATA-02: a run with failing capture tests is incomplete, never green ---
+
+FAILING = ('import os\n'
+           'import pytest\n'
+           'def test_revenue(behavior):\n'
+           '    behavior("revenue_total", {"total": 1234.5}, group="billing")\n'
+           'def test_new_metric(behavior):\n'
+           '    behavior("segment_mean", {"mean": float("nan")}, group="billing")\n'
+           '@pytest.fixture\n'
+           'def cfg():\n'
+           '    raise FileNotFoundError("services.toml")\n'
+           'def test_cfg(behavior, cfg):\n'
+           '    behavior("replicas", 3, group="g")\n')
+
+
+def test_failed_capture_run_exits_1_and_gate_blocks(tmp_path):
+    write(tmp_path / "test_m.py", FAILING)
+    tw = tmp_path / ".tw"
+    r = cli("run", "test_m.py", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Boundary:" in r.stdout                     # summary still printed
+    assert "1 failed" in r.stderr and "1 error" in r.stderr
+
+    report = json.loads((tw / "report.json").read_text(encoding="utf-8"))
+    assert report["incomplete"] == {"failed": 1, "errors": 1}
+
+    # even once everything captured is approved, the gate stays closed
+    assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    gate = cli("gate", "--dir", str(tw), cwd=tmp_path)
+    assert gate.returncode == 1
+    assert "incomplete" in gate.stdout
+    status = status_json(tmp_path, tw)
+    assert status["incomplete"] == {"failed": 1, "errors": 1}
+    assert status["boundary"] == "incomplete"
+
+
+def test_failed_capture_reported_by_mcp(tmp_path):
+    write(tmp_path / "test_m.py", FAILING)
+    tw = tmp_path / ".tw"
+    payload = mcp_server.run_tool(str(tmp_path / "test_m.py"), str(tw))
+    assert payload["incomplete"] == {"failed": 1, "errors": 1}
+    assert payload["boundary"] != "intact"
+    assert mcp_server.status_tool(str(tw))["incomplete"] == {"failed": 1, "errors": 1}
+
+
+def test_clean_run_is_complete(approved_price):
+    tmp_path, tw = approved_price
+    status = status_json(tmp_path, tw)
+    assert status["incomplete"] is None
+    assert status["boundary"] == "intact"

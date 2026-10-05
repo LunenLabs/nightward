@@ -117,8 +117,11 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **Skipped tests = fake REMOVED.** A skipped test captures nothing, so its
   behavior shows as REMOVED. The plugin records skipped/failed counts in
   `run_meta.json` and `nightward run` warns. Treat as false positive.
-- **Failed tests = incomplete capture** → blast radius untrustworthy; `run`
-  warns (exit code 1 passes through; 2·5 abort).
+- **Failed tests = incomplete capture.** The plugin records failed + errored
+  (setup error) counts; `recompute` stamps `report["incomplete"]`. `run` prints
+  the summary then exits 1, `gate` exits 1, `status`/MCP report
+  `"boundary": "incomplete"` when nothing else is unapproved (pytest exit 1
+  passes through to recompute; 2·5 abort).
 - **Windows cp949 consoles.** Hangul/emoji in captured payloads crash the
   legacy win32 writer. `cli.py` reconfigures stdout/stderr to UTF-8
   (`backslashreplace`) and `status --json` prints `ensure_ascii=False`.

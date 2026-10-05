@@ -25,8 +25,8 @@ jobs:
       - run: pip install nightward  # plus your project deps
       - name: Capture behaviors and gate against the approved baseline
         run: |
-          nightward run .
-          nightward gate            # exit 1 = boundary breached = PR blocked
+          nightward run .           # exit 1 if any capture test failed or errored
+          nightward gate            # exit 1 = breached, incomplete or stale = PR blocked
 
   blast-radius:
     if: always()                    # build the explanation even when the gate fails
