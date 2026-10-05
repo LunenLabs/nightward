@@ -210,8 +210,8 @@ is volatile: mask it at capture time in that test.
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 
 Free-text AI output breaches the fingerprint gate on every rewording (measured:
-25/25 false positives on real data). Mark such behaviors `semantic=True` and pick
-a judge model per run — the judge rules **equivalence only**; approval stays human:
+25/25 false positives on real data). Mark such behaviors `semantic=True` and commit
+the project's judge — the judge rules **equivalence only**; approval stays human:
 
 ```python
 def test_summary(behavior):
@@ -223,10 +223,23 @@ an approved behavior is itself a CHANGED (`semantic: False -> True`). The judge 
 only once a human has approved the behavior as semantic, so a one-word test edit can't
 switch an exact behavior to lenient comparison.
 
+The judge is a project decision, so it lives in your committed `pyproject.toml`.
+`nightward run`, CI and the MCP agent all use it, and changing it shows up in a PR:
+
+```toml
+[tool.nightward]
+judge = "anthropic:claude-haiku-4-5"   # real LLM (pip install "nightward[judge]")
+# judge = "persona:editor"             # deterministic, key-free (see below)
+```
+
+nightward reads the nearest `pyproject.toml` at or above the path you run, the same
+way pytest finds its rootdir. To try another judge for **one run**, override it.
+The override is never remembered: the next plain `nightward run` and every MCP run
+go back to the committed judge.
+
 ```bash
-nightward run . --judge anthropic:claude-haiku-4-5   # real LLM (pip install nightward[judge])
-nightward run . --judge persona:editor               # deterministic, key-free (see below)
-NIGHTWARD_JUDGE=anthropic:claude-haiku-4-5 nightward run .   # or via env
+nightward run . --judge persona:strict                        # this run only
+NIGHTWARD_JUDGE=persona:strict nightward run .                # same, via env (CLI only)
 ```
 
 The `persona:*` judges are deterministic and need no key. Both judging personas
@@ -302,11 +315,12 @@ Rules for the loop:
 - **The agent can't approve.** `approve` and `reject` are not exposed. If the agent
   that makes a change could also approve it, the gate would turn into a changelog.
   A human approves with the CLI and commits the baseline.
-- **The judge is the human's choice.** `semantic=True` behaviors are judged by
-  `nightward mcp --judge <provider:model>`, else `$NIGHTWARD_JUDGE` in the server's
-  environment, else the judge the last run used (for example the team's
-  `nightward run --judge persona:editor`). The tool has no judge argument, so the agent
-  can't pick a lenient judge, and it gets the same verdict as the CLI.
+- **The judge is the humans' committed choice.** Behaviors approved as `semantic=True`
+  are judged by `nightward mcp --judge <provider:model>` if the server was started
+  with it, else by the committed `[tool.nightward] judge`. MCP ignores
+  `$NIGHTWARD_JUDGE` and any `nightward run --judge` override, so a one-off demo run
+  can't change the agent's gate. The tool has no judge argument, so the agent can't
+  pick a lenient judge, and it gets the same verdict as a plain `nightward run`.
 
 ## Dashboard (`nightward view`)
 

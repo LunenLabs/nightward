@@ -216,10 +216,14 @@ surface, and tests freeze that approve is absent
 `execute_run(capture_output=True)` so pytest stdout can't break the MCP
 protocol channel (diagnostics to stderr only). `mcp` is an optional extra;
 tool functions don't depend on the SDK, so they're testable without it.
-**The judge is the human's choice too**: `nightward_run` takes no judge argument
-(an agent could pick `persona:lenient`); it uses `nightward mcp --judge`, else
-`$NIGHTWARD_JUDGE`, else the judge recorded in run_meta by the last run, so it
-gives the same verdict as the team's CLI run (`tests/test_beta_judge.py::test_mcp_*`).
+**The judge is a committed project decision (D14)**: `nightward_run` takes no
+judge argument (an agent could pick `persona:lenient`); it uses `nightward mcp
+--judge`, else `[tool.nightward] judge` in the nearest pyproject.toml
+(`config.project_judge`). Never `$NIGHTWARD_JUDGE` or run_meta: a CLI `--judge` is a
+one-run override and must not leak into the agent's gate
+(`tests/test_beta_judge.py::test_mcp_*`). run_meta's judge exists only so `approve`
+recomputes with the verdicts of the report the human reviewed. The judge runs only on
+behaviors approved as semantic; flipping the flag is CHANGED.
 Design rationale: `docs/superpowers/specs/2026-06-07-nightward-mcp-agent-gate-design.md`.
 
 ---

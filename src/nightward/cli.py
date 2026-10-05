@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from .config import project_judge
 from .core.baseline import Store
 from .core.diff import REMOVED, UNCHANGED, compare
 from .errors import NightwardError
@@ -255,8 +256,9 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"),
         judge: str | None = typer.Option(
             None, help="Semantic judge for semantic=True behaviors, as provider:model "
-                       "(e.g. anthropic:claude-haiku-4-5, persona:editor). "
-                       "Default: $NIGHTWARD_JUDGE")):
+                       "(e.g. anthropic:claude-haiku-4-5, persona:editor), for this run "
+                       "only. Default: $NIGHTWARD_JUDGE, else [tool.nightward] judge "
+                       "in pyproject.toml")):
     """Re-run tests, capture behaviors, compute the blast radius."""
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
@@ -265,6 +267,16 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         raise NightwardError(_missing_store_message(dir))
     console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
                   f"--nightward-dir {escape(dir)}[/dim]")
+    # --judge and $NIGHTWARD_JUDGE are per-run overrides; the committed
+    # [tool.nightward] judge is the project's decision (D14).
+    if judge:
+        source = "--judge, this run only"
+    elif os.environ.get("NIGHTWARD_JUDGE"):
+        judge, source = os.environ["NIGHTWARD_JUDGE"], "$NIGHTWARD_JUDGE, this run only"
+    else:
+        judge, source = project_judge(path.split("::", 1)[0]), "pyproject.toml"
+    if judge:
+        console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
     result = execute_run(path, dir, judge_spec=judge)
     not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
     if not_run:
@@ -682,7 +694,7 @@ def _print_status(payload: dict) -> None:
 @handle_errors
 def mcp_cmd(judge: str | None = typer.Option(
         None, help="Semantic judge for nightward_run, as provider:model. The agent "
-                   "can't choose it. Default: $NIGHTWARD_JUDGE, else the last run's judge")):
+                   "can't choose it. Default: [tool.nightward] judge in pyproject.toml")):
     """Start the MCP server (stdio) for AI agents - exposes run/status, NOT approve."""
     from .mcp_server import serve
     serve(judge=judge)

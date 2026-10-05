@@ -17,13 +17,26 @@ nightward run .                       # boundary intact
 # 2. simulate LLM drift: same facts, different wording
 NEWSROOM_REWRITE=1 nightward run .    # boundary BREACHED — a false positive (v0 limit)
 
-# 3. bring in a judge — any provider:model; personas need no API key
+# 3. try judges, one run at a time — any provider:model; personas need no API key
 NEWSROOM_REWRITE=1 nightward run . --judge persona:editor    # still breached (conservative)
 NEWSROOM_REWRITE=1 nightward run . --judge persona:lenient   # intact — 1 ruled semantically SAME
 nightward gate                                               # exit 0
 
+# 4. --judge is a one-run override, never remembered:
+NEWSROOM_REWRITE=1 nightward run .                           # breached again (no judge)
+
 # with a real model (pip install "nightward[judge]", ANTHROPIC_API_KEY set):
 NEWSROOM_REWRITE=1 nightward run . --judge anthropic:claude-haiku-4-5
+```
+
+In a real project you commit the judge instead of typing it, so CI, every
+teammate and the MCP agent use the same one (`persona:lenient` is for this demo
+only, never for real gating):
+
+```toml
+# pyproject.toml
+[tool.nightward]
+judge = "anthropic:claude-haiku-4-5"
 ```
 
 ## What to notice

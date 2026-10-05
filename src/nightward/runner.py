@@ -8,7 +8,6 @@ from __future__ import annotations
 import datetime
 import importlib.metadata
 import importlib.util
-import os
 import subprocess
 import sys
 import uuid
@@ -143,9 +142,10 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
 
     capture_output=True keeps pytest's stdout off this process's stdout — required
     when called from the MCP stdio server (any stray stdout breaks the protocol).
-    judge_spec ('provider:model', or env NIGHTWARD_JUDGE) enables the semantic
-    judge for behaviors captured with semantic=True; the spec is persisted in
-    run_meta so later approve/recompute reuse the same (cached) verdicts.
+    judge_spec ('provider:model') enables the semantic judge for behaviors
+    approved with semantic=True. Callers resolve it (cli.run: --judge, env,
+    [tool.nightward]; MCP: server --judge, [tool.nightward]); it is persisted
+    in run_meta only so approve recomputes with this run's (cached) verdicts.
     timeout (seconds) bounds the pytest run; on expiry nothing in the store moves.
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched, pytest_returncode, output_tail};
@@ -157,7 +157,7 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         # from a broken install (R1-OPS-08).
         raise NightwardError(f"path {path!r} does not exist (under {Path.cwd()}); "
                              f"nothing was run")
-    spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
+    spec = judge_spec or None
     run_id = uuid.uuid4().hex
     store = Store(Path(dir))
     # Build (= validate) the judge before pytest: a typo'd spec or a corrupt

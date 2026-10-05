@@ -6,9 +6,9 @@ NOT import mcp, so the gate logic stays testable without the optional dependency
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from .config import project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
@@ -29,11 +29,11 @@ def configure(judge: str | None = None) -> None:
     _server_judge = judge
 
 
-def _judge_spec(dir: str) -> str | None:
-    # Server option > $NIGHTWARD_JUDGE > the judge of the last run (e.g. the
-    # team's `nightward run --judge`), so the agent sees the CLI's verdict.
-    return (_server_judge or os.environ.get("NIGHTWARD_JUDGE")
-            or Store(Path(dir)).load_run_meta().get("judge"))
+def _judge_spec(path: str) -> str | None:
+    # The server option, else the committed [tool.nightward] judge (D14). Never
+    # $NIGHTWARD_JUDGE or the last run's judge: a human's one-off
+    # `nightward run --judge persona:lenient` must not become the agent's gate.
+    return _server_judge or project_judge(path.split("::", 1)[0])
 
 
 def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> dict:
@@ -47,14 +47,14 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     kind, group, judged...}], judged_same, stale, generated_at, judge, warnings:
     {skipped, failed, scrub_unmatched (custom scrub rules that matched
     nothing), pytest_returncode, pytest_output_tail}}. Done means
-    boundary == "intact" and stale is false. Behaviors captured with
-    semantic=True are judged by the judge the human configured (server
-    --judge, $NIGHTWARD_JUDGE, or the last run's judge); "judge" says which,
-    and why it was unavailable if it was. This tool cannot approve changes:
-    a human does that with the nightward CLI.
+    boundary == "intact" and stale is false. Behaviors approved with
+    semantic=True are judged by the judge the humans committed
+    ([tool.nightward] judge in pyproject.toml, or `nightward mcp --judge`);
+    "judge" says which, and why it was unavailable if it was. This tool cannot
+    approve changes: a human does that with the nightward CLI.
     """
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
-                         judge_spec=_judge_spec(dir))
+                         judge_spec=_judge_spec(path))
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],
