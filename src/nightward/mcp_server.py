@@ -42,7 +42,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     Call this after every code edit: nightward_status only reports the last run.
     path: what pytest runs (relative to the server's working directory);
     dir: the nightward store; timeout: seconds before pytest is stopped (the
-    store is then left untouched).
+    capture is then left untouched and the last report invalidated).
     Returns {boundary: intact|breached|unknown, unapproved, changes: [{name,
     kind, group, judged...}], judged_same, stale, generated_at, judge, warnings:
     {skipped, failed, scrub_unmatched (custom scrub rules that matched

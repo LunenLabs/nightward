@@ -278,7 +278,7 @@ resolves `path` and `dir` against its own working directory.
 
 | tool | arguments | what it does |
 |---|---|---|
-| `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the store is left untouched) | runs the tests, captures behaviors, recomputes the boundary |
+| `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated) | runs the tests, captures behaviors, recomputes the boundary |
 | `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
 
 Both return the `status --json` shape: `boundary` (`intact` / `breached` /

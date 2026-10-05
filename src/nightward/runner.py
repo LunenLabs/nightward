@@ -89,7 +89,8 @@ def _pytest_cmd(path: str, dir: str, run_id: str) -> list[str]:
 
 
 # pytest exit codes other than 0 (passed) / 1 (some failed). On these the
-# plugin keeps the previous capture, so nothing in the store moves.
+# plugin keeps the previous capture, and the runner invalidates the report:
+# the code no longer matches it, so nothing may read "intact" (D12).
 _ABORT_REASONS = {
     2: "pytest was interrupted (collection errors or Ctrl+C)",
     3: "pytest hit an internal error",
@@ -124,8 +125,13 @@ def _abort_message(path: str, result: subprocess.CompletedProcess) -> str:
         reason = ("pytest rejected the --nightward-* options: nightward is not installed "
                   "in this interpreter, so its pytest plugin is not registered "
                   "(pip install nightward)")
-    return _with_tail(f"{reason} under {path!r}; aborting - the store was left untouched",
-                      result)
+    return _with_tail(f"{reason} under {path!r}; aborting - {_ABORTED}", result)
+
+
+# What an unverified run leaves behind (R2-OPS-01): the old capture stays, but
+# its report no longer describes the code, so gate/status fall back to "no report".
+_ABORTED = ("the capture was left untouched and the last report was invalidated; fix "
+            "the error and re-run `nightward run`")
 
 
 def _with_tail(msg: str, result: subprocess.CompletedProcess) -> str:
@@ -146,20 +152,22 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     judge_spec ('provider:model', or env NIGHTWARD_JUDGE) enables the semantic
     judge for behaviors captured with semantic=True; the spec is persisted in
     run_meta so later approve/recompute reuse the same (cached) verdicts.
-    timeout (seconds) bounds the pytest run; on expiry nothing in the store moves.
+    timeout (seconds) bounds the pytest run. Any run without a verified capture
+    (abort, timeout, unrecorded flush) invalidates report.json.
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched, pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can
     see why tests failed.
     """
+    store = Store(Path(dir))
     if not Path(path.split("::", 1)[0]).exists():
         # pytest would say so too, but behind an exit code nightward can't tell
-        # from a broken install (R1-OPS-08).
+        # from a broken install (R1-OPS-08). E.g. an agent deleted the test dir.
+        store.invalidate_report()
         raise NightwardError(f"path {path!r} does not exist (under {Path.cwd()}); "
-                             f"nothing was run")
+                             f"nothing was run - {_ABORTED}")
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
     run_id = uuid.uuid4().hex
-    store = Store(Path(dir))
     # Build (= validate) the judge before pytest: a typo'd spec or a corrupt
     # ledger must fail in a second, not after the whole suite (R1-LLM-06).
     judge = make_judge(spec, store)
@@ -169,10 +177,11 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         result = subprocess.run(_pytest_cmd(path, dir, run_id), stdin=subprocess.DEVNULL,
                                 capture_output=capture_output, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
+        store.invalidate_report()
         raise NightwardError(
-            f"pytest timed out after {timeout}s under {path!r}; the store was left untouched"
-        ) from exc
+            f"pytest timed out after {timeout}s under {path!r}; {_ABORTED}") from exc
     if result.returncode not in (0, 1):
+        store.invalidate_report()
         raise NightwardError(_abort_message(path, result))
     meta = store.load_run_meta()
     if meta.get("run_id") != run_id:

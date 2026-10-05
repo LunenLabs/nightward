@@ -126,9 +126,12 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   legacy win32 writer. `cli.py` reconfigures stdout/stderr to UTF-8
   (`backslashreplace`) and `status --json` prints `ensure_ascii=False`.
   **Do not break this when adding output paths.**
-- **Aborted runs keep the previous capture.** The plugin flushes `pending/`
-  only when pytest finished (exit 0/1). Flushing an interrupted/empty session
-  would turn everything into REMOVED and `approve --all` would wipe the baseline.
+- **Aborted runs keep the previous capture, but never its verdict.** The plugin
+  flushes `pending/` only when pytest finished (exit 0/1). Flushing an
+  interrupted/empty session would turn everything into REMOVED and `approve
+  --all` would wipe the baseline. The runner deletes `report.json` on every
+  unverified run (exit 2-5, timeout, run-token mismatch), so `gate` fails and
+  `status`/MCP read "unknown" instead of the old "intact" (D12).
 - **`approve --all` never approves REMOVED.** Skips and partial paths
   (`run tests/x.py`) produce fake REMOVED; bulk-approving them silently shrinks
   the baseline. Removals need `approve <name>` or `--all --include-removed`,

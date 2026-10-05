@@ -148,7 +148,8 @@ def _existing_store(dir_: str) -> Store:
 def _require_report(store: Store) -> dict:
     report = store.load_report()
     if report is None:
-        raise NightwardError("no report yet - run `nightward run` first")
+        raise NightwardError("no report - run `nightward run` (a run that aborted or "
+                             "timed out invalidates the last report)")
     return report
 
 
