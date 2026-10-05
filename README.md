@@ -151,6 +151,24 @@ scrub.register_field("request_id")                 # mask this key at any depth
 scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
 ```
 
+`register()` patterns run over the payload's **canonical JSON text**, not over the
+decoded strings: pretty-printed (`"key": "value"`, keys sorted), and inside a string
+value every `"` is written `\"` and every newline `\n`. A pattern copied from what
+the app emits (`name="csrf_token" value="..."`, `"request_id":"req_..."`) therefore
+never matches, and `^`/`$` never see the lines of a multi-line body. Match the
+escaped form instead:
+
+```python
+# <input type="hidden" name="csrf_token" value="3f9a..."> inside an HTML body
+scrub.register(r'csrf_token\\" value=\\"[0-9a-f]{32}', r'csrf_token\\" value=\\"<CSRF>')
+```
+
+When the volatile part sits inside a string, masking it in the test before
+capturing (`re.sub(...)` on the body) is often simpler. `nightward run` warns about
+every `register`/`register_field` rule that matched nothing in that run
+(`warning: scrub rule register(r'...') matched nothing in this run`), so a rule that
+silently does nothing can't pass for handled noise.
+
 `nightward doctor` sees one before/after pair, which is no evidence that a value is
 noise, so it only calls a value volatile when the value itself shows it, and then
 suggests the narrowest rule that hides exactly that:

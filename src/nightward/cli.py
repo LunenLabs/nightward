@@ -224,6 +224,13 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         err_console.print(f"[dim]note: default scrubbers masked {scrubbed['values']} value(s) "
                           f"in {scrubbed['behaviors']} behavior(s) (timestamps/uuids) - opt "
                           f"out with scrub=False[/dim]", soft_wrap=True)
+    for rule in result["scrub_unmatched"]:
+        # The user believes this noise is handled; it isn't (R1-WEB-03).
+        why = ("no captured dict has that key" if rule.startswith("register_field(") else
+               "patterns see the canonical JSON text, where a '\"' inside a string is "
+               "written '\\\"' and a newline '\\n' - see `help(nightward.scrub.register)`")
+        err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
+                          f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
     incomplete = result["report"].get("incomplete")
     if incomplete or result["pytest_returncode"] == 1:

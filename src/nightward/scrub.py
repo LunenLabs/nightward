@@ -34,14 +34,24 @@ _DEFAULT_SCRUBBERS: list[tuple[re.Pattern, str]] = [
 _custom: list[tuple[re.Pattern, str]] = []
 _custom_fields: dict[str, Any] = {}
 _defaults_enabled = True
+# Matches per custom rule in this process, so a rule that never fires is
+# reported instead of silently leaving the noise in place (R1-WEB-03).
+_hits: Counter = Counter()
 
 
 def register(pattern: str, replacement: str) -> None:
     """Register a project-specific scrubber, e.g. register(r'"ord_\\d+"', '"<ORDER_ID>"').
 
+    The pattern runs over the canonical JSON *text* of the payload, not over
+    decoded values: pretty-printed (`"key": "value"`, keys sorted), and inside a
+    string value every `"` is written `\\"` and every newline `\\n`. So the
+    HTML `value="abc"` inside a body is matched by r'value=\\"abc', and `^`/`$`
+    never see the lines of a multi-line string.
     Replacements must keep the payload valid JSON: only substitute text *inside*
     quoted string values, and quote your placeholder tokens. Prefer
-    `register_field` when the volatile value lives under a stable key.
+    `register_field` when the volatile value lives under a stable key, or mask
+    the value in the test before capturing it. `nightward run` reports a rule
+    that matched nothing.
     """
     _custom.append((re.compile(pattern), replacement))
 
@@ -72,13 +82,31 @@ def _reset() -> None:
     global _defaults_enabled
     _custom.clear()
     _custom_fields.clear()
+    _hits.clear()
     _defaults_enabled = True
+
+
+def _rule_text(rule: re.Pattern | str) -> str:
+    if isinstance(rule, str):
+        return f"register_field({rule!r})"
+    return f"register(r'{rule.pattern}')"
+
+
+def unmatched_rules() -> list[str]:
+    """Custom rules that have matched nothing so far in this process."""
+    rules = [*(pat for pat, _ in _custom), *_custom_fields]
+    return [_rule_text(r) for r in rules if not _hits[_rule_text(r)]]
+
+
+def _mask_field(key: str) -> Any:
+    _hits[_rule_text(key)] += 1
+    return _custom_fields[key]
 
 
 def _mask_fields(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            k: _custom_fields[k] if k in _custom_fields else _mask_fields(v)
+            k: _mask_field(k) if k in _custom_fields else _mask_fields(v)
             for k, v in value.items()
         }
     if isinstance(value, list):
@@ -121,7 +149,8 @@ def scrub_counted(payload: Any, *, enabled: bool = True) -> tuple[Any, int]:
             text, n = pat.subn(repl, text)
             masked += n
     for pat, repl in _custom:
-        text = pat.sub(repl, text)
+        text, n = pat.subn(repl, text)
+        _hits[_rule_text(pat)] += n
     try:
         return json.loads(text, object_pairs_hook=_unique_keys), masked
     except json.JSONDecodeError as exc:

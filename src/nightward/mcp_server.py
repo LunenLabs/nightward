@@ -45,7 +45,8 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     store is then left untouched).
     Returns {boundary: intact|breached|unknown, unapproved, changes: [{name,
     kind, group, judged...}], judged_same, stale, generated_at, judge, warnings:
-    {skipped, failed, pytest_returncode, pytest_output_tail}}. Done means
+    {skipped, failed, scrub_unmatched (custom scrub rules that matched
+    nothing), pytest_returncode, pytest_output_tail}}. Done means
     boundary == "intact" and stale is false. Behaviors captured with
     semantic=True are judged by the judge the human configured (server
     --judge, $NIGHTWARD_JUDGE, or the last run's judge); "judge" says which,
@@ -62,6 +63,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
         "deselected": result["deselected"],
         "xfailed": result["xfailed"],
         "scrubbed": result["scrubbed"],
+        "scrub_unmatched": result["scrub_unmatched"],
         "pytest_returncode": result["pytest_returncode"],
         "pytest_output_tail": result["output_tail"],
     }

@@ -133,7 +133,7 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     run_meta so later approve/recompute reuse the same (cached) verdicts.
     timeout (seconds) bounds the pytest run; on expiry nothing in the store moves.
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
-    pytest_returncode, output_tail};
+    scrub_unmatched, pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can
     see why tests failed.
     """
@@ -180,6 +180,8 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         "xfailed": meta.get("xfailed", 0),
         # values the built-in timestamp/uuid scrubbers masked: {values, behaviors}
         "scrubbed": meta.get("scrubbed") or {"values": 0, "behaviors": 0},
+        # custom scrub.register/register_field rules that matched nothing
+        "scrub_unmatched": meta.get("scrub_unmatched") or [],
         "pytest_returncode": result.returncode,
         "output_tail": _output_tail(result),
     }

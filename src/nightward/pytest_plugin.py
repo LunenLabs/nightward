@@ -13,7 +13,7 @@ import pytest
 from .core.baseline import Store
 from .core.behavior import Behavior, validate_name
 from .errors import NightwardError
-from .scrub import scrub_counted
+from .scrub import scrub_counted, unmatched_rules
 
 
 class Recorder:
@@ -165,6 +165,8 @@ def pytest_sessionfinish(session, exitstatus):
     meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
     meta["completed"] = rec.completed()
     meta["scrubbed"] = {"values": sum(rec.masked.values()), "behaviors": len(rec.masked)}
+    # A custom rule that never fired leaves the user believing noise is handled.
+    meta["scrub_unmatched"] = unmatched_rules()
     # Written last: its presence proves to the runner that THIS run's flush landed.
     run_id = config.getoption("--nightward-run-id")
     if run_id:

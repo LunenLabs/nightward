@@ -11,6 +11,7 @@ import sys
 
 import pytest
 
+from nightward import scrub
 from nightward.core.baseline import Store
 from nightward.core.behavior import Behavior
 from nightward.errors import NightwardError
@@ -188,3 +189,44 @@ def test_doctor_filters_by_name_and_group(tmp_path):
     assert "metric_a" in by_name.stdout and "metric_b" not in by_name.stdout
     by_group = cli("doctor", "--group", "big", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
     assert "scored_rows" in by_group.stdout and "metric_a" not in by_group.stdout
+
+
+# ---- R1-WEB-03: a scrub rule that never matches is reported, not silent --------
+
+LOGIN = ('<form method="post">\n'
+         '  <input type="hidden" name="csrf_token" value="{tok}">\n</form>')
+
+
+def test_unmatched_scrub_rules_are_listed():
+    scrub.register(r'name="csrf_token" value="[0-9a-f]{32}"', 'x')   # raw-text pattern
+    scrub.register(r"ord_\d+", "<ORDER>")
+    scrub.register_field("request_id")
+    scrub.register_field("never_there")
+    scrub.scrub({"order": "ord_1", "request_id": "r1",
+                 "body": LOGIN.format(tok="ab" * 16)})
+    unmatched = scrub.unmatched_rules()
+    assert len(unmatched) == 2
+    assert "csrf_token" in unmatched[0] and "never_there" in unmatched[1]
+
+
+def test_documented_pattern_for_text_inside_a_string_works():
+    # README: patterns see the canonical JSON text, where '"' is written \"
+    scrub.register(r'csrf_token\\" value=\\"[0-9a-f]{32}', r'csrf_token\\" value=\\"<CSRF>')
+    a = scrub.scrub({"body": LOGIN.format(tok="ab" * 16)})
+    b = scrub.scrub({"body": LOGIN.format(tok="cd" * 16)})
+    assert a == b and "<CSRF>" in a["body"]
+    assert scrub.unmatched_rules() == []
+
+
+def test_run_warns_about_a_scrub_rule_that_matched_nothing(tmp_path):
+    write(tmp_path / "conftest.py",
+          "from nightward import scrub\n"
+          "scrub.register(r'\"request_id\":\"req_[0-9a-f]{12}\"', '\"request_id\":\"<REQ>\"')\n")
+    write(tmp_path / "test_e.py",
+          "import json\n"
+          "def test_e(behavior):\n"
+          "    behavior('gw', {'body': json.dumps({'request_id': 'req_0123456789ab'},\n"
+          "                                       separators=(',', ':'))})\n")
+    r = cli("run", ".", "--dir", ".tw", cwd=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "matched nothing" in r.stderr and "request_id" in r.stderr, r.stderr
