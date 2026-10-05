@@ -218,6 +218,11 @@ def test_summary(behavior):
     behavior("daily_summary", summarize(items), group="ai", semantic=True)
 ```
 
+The flag is part of the approved behavior. Turning `semantic=True` on (or off) for
+an approved behavior is itself a CHANGED (`semantic: False -> True`). The judge runs
+only once a human has approved the behavior as semantic, so a one-word test edit can't
+switch an exact behavior to lenient comparison.
+
 ```bash
 nightward run . --judge anthropic:claude-haiku-4-5   # real LLM (pip install nightward[judge])
 nightward run . --judge persona:editor               # deterministic, key-free (see below)

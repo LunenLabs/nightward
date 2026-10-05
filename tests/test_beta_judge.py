@@ -208,3 +208,41 @@ def test_dashboard_data_lists_judged_same(tmp_path, monkeypatch):
     data = json.loads((out / "data.json").read_text(encoding="utf-8"))
     assert [it["name"] for it in data["report"]["judged_same"]] == ["reply.refund"]
     assert "report.judged_same" in (out / "app.js").read_text(encoding="utf-8")
+
+
+# --- R2-LLM-05 (D14): the semantic flag is part of the approved identity -----
+
+
+def _flip_pair(old_text, new_text, old_semantic, new_semantic):
+    from nightward.core.behavior import Behavior
+    return ({"p": Behavior("p", old_text, group="g", semantic=old_semantic)},
+            {"p": Behavior("p", new_text, group="g", semantic=new_semantic)})
+
+
+def test_turning_semantic_on_is_a_change_and_is_not_judged(tmp_path, monkeypatch):
+    import nightward.judge as judge_mod
+    from nightward.core.diff import CHANGED, compare
+
+    def explode(model, old, new):
+        raise AssertionError("an exact baseline must not be judged")
+
+    monkeypatch.setitem(judge_mod._BACKENDS, "persona", explode)
+    judge = Judge("persona:lenient", cache_path=tmp_path / "c.json")
+    [c] = compare(*_flip_pair("Refunds need approval.", "refunds need approval",
+                              False, True), judge=judge)
+    assert c.kind == CHANGED and not c.judged
+    assert "semantic: False -> True" in c.diff_text
+
+
+def test_semantic_flip_alone_is_a_change(tmp_path):
+    from nightward.core.diff import CHANGED, compare
+    for old, new in ((False, True), (True, False)):
+        [c] = compare(*_flip_pair("same", "same", old, new))
+        assert c.kind == CHANGED and f"semantic: {old} -> {new}" in c.diff_text
+
+
+def test_judge_runs_only_when_baseline_and_capture_are_semantic(tmp_path):
+    from nightward.core.diff import UNCHANGED, compare
+    judge = Judge("persona:editor", cache_path=tmp_path / "c.json")
+    [c] = compare(*_flip_pair("Approved.", "approved", True, True), judge=judge)
+    assert c.kind == UNCHANGED and c.judged
