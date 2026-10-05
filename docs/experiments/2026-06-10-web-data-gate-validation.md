@@ -1,35 +1,35 @@
-# 게이트 품질 정량 검증: 실시간 웹 데이터 실험 결과 요약
+# Quantitative gate-quality validation: summary of the live web-data experiment
 
-> **날짜**: 2026-06-10
-> **스펙**: `docs/superpowers/specs/2026-06-09-nightward-live-email-ai-experiment-design.md`의 프로토콜을 따름.
-> 입력 소스만 변경: Gmail → **웹 검색 실데이터**(기술/세계뉴스/금융/과학/스포츠 5종, 24건 + 시장 지수 3종).
-> 원본 스냅샷·캡처·상세 RESULTS.md는 `live-experiment/`(gitignore)에만 존재. 이 문서는 집계 수치만 담는다.
+> **Date**: 2026-06-10
+> **Spec**: follows the protocol in `docs/superpowers/specs/2026-06-09-nightward-live-email-ai-experiment-design.md`.
+> Only the input source changed: Gmail → **real web-search data** (5 categories: tech / world news / finance / science / sports, 24 items + 3 market indices).
+> Raw snapshots, captures, and the detailed RESULTS.md exist only in `live-experiment/` (gitignored). This document contains aggregate figures only.
 
-## 판정표
+## Verdict table
 
-58개 동작(facts 8 · ai_text 25 · ai_struct 25)을 같은 파이프라인에 태운 결과:
+Results of running 58 behaviors (facts 8 · ai_text 25 · ai_struct 25) through the same pipeline:
 
-| 레이어 | TP: 주입 회귀 | FP: 무변경 재실행 (A→A) | FP: AI drift (A→B) | 길들이기 후 잔여 | 판정 |
+| Layer | TP: injected regression | FP: unchanged re-run (A→A) | FP: AI drift (A→B) | Residual after taming | Verdict |
 |---|---|---|---|---|---|
-| `facts/*` 결정적 집계 | ✅ off-by-one → 정확히 1건 CHANGED | **0** | **0** | — | 깨끗한 게이트 |
-| `ai_text` 자유텍스트 | — | 0 | **25/25** | 25 (감소 불가) | v0 범위 밖 |
-| `ai_struct` 구조화 | — | 0 | **4/25** | **0** (안정 필드만 캡처) | 길들이기 가능 |
+| `facts/*` deterministic aggregates | ✅ off-by-one → exactly 1 CHANGED | **0** | **0** | — | Clean gate |
+| `ai_text` free text | — | 0 | **25/25** | 25 (irreducible) | Outside v0 scope |
+| `ai_struct` structured | — | 0 | **4/25** | **0** (capture stable fields only) | Tameable |
 
-## 결론 (스펙 §8 성공 기준 전부 충족)
+## Conclusions (all spec §8 success criteria met)
 
-1. **게이트 검증**: 결정적 레이어에서 주입 회귀를 동작 1건 단위로 격리해 잡았고(blast radius가 해당 group만 breach), 재실행·AI-drift 양쪽 위양성 0.
-2. **경계 실증**: AI 자유텍스트는 동일 입력에서도 위양성 100% — fingerprint 동등성으로 게이트 불가. **v0.2 LLM-as-judge의 동기를 정량 확인.**
-3. **실용 타협**: 구조화 AI 출력의 drift는 경계선 판단 필드(priority/sentiment)에 집중. 안정 필드(topic 등)만 캡처하면 잔여 위양성 0 — v0 사용자 가이드: *AI 출력은 구조화하고, 흔들리는 필드는 캡처에서 빼라.*
+1. **Gate validated**: in the deterministic layer, the injected regression was isolated and caught at the granularity of a single behavior (the blast radius breached only that group), with zero false positives on both re-runs and AI drift.
+2. **Boundary demonstrated**: free-text AI output yields 100% false positives even on identical input — it cannot be gated with fingerprint equivalence. **Quantitatively confirms the motivation for v0.2 LLM-as-judge.**
+3. **Practical compromise**: drift in structured AI output concentrates in borderline-judgment fields (priority/sentiment). Capturing only stable fields (topic, etc.) leaves 0 residual false positives — v0 user guidance: *structure your AI output, and leave the wobbly fields out of the capture.*
 
-## Phase 4b — `nightward doctor` 검증 (실험이 낳은 기능)
+## Phase 4b — validating `nightward doctor` (a feature born from this experiment)
 
-이 실험의 ai_struct 위양성 4건을 입력으로 `nightward doctor`(신규)를 검증:
+Validated `nightward doctor` (new) using this experiment's 4 ai_struct false positives as input:
 
-- doctor가 drift 필드를 정확히 지목: `priority` 2건, `sentiment` 2건. 자유텍스트(`ai_text`)는 root(`$`) 변경으로 분류되어 **field 제안 없음**(정직한 한계 보고).
-- 제안된 `scrub.register_field("priority")`/`("sentiment")`를 conftest.py에 적용 후 re-baseline → RUN=b 재실행: **ai_struct 잔여 위양성 4→0**, 필드를 캡처에서 빼지 않고도(STABLE_ONLY 방식과 달리 payload 형태 유지) 달성.
-- 위양성 발견 → 진단 → 길들이기 → 재검증 루프가 CLI만으로 닫힘.
+- doctor pinpointed the drifting fields exactly: `priority` ×2, `sentiment` ×2. Free text (`ai_text`) was classified as a root (`$`) change, so **no field suggestion** (an honest report of the limit).
+- Applied the suggested `scrub.register_field("priority")`/`("sentiment")` in conftest.py, re-baselined → re-ran RUN=b: **ai_struct residual false positives 4→0**, achieved without dropping the fields from the capture (unlike the STABLE_ONLY approach, the payload shape is preserved).
+- The loop of finding a false positive → diagnosing → taming → re-validating closes with the CLI alone.
 
-## 부수 발견
+## Side findings
 
-- behavior 이름 공백 금지(`validate_name`)에 첫 캡처가 걸림 — 에러 메시지 명확, `run`이 failed-test 경고 출력. 설계대로 동작.
-- 날짜를 `YYYY-MM-DD`로 정규화한 덕에 scrubber 오발동 0 (스펙 §3의 함정 회피 확인).
+- The first capture tripped the no-spaces rule for behavior names (`validate_name`) — clear error message, and `run` printed the failed-test warning. Working as designed.
+- Normalizing dates to `YYYY-MM-DD` resulted in zero scrubber misfires (confirms the spec §3 pitfall was avoided).

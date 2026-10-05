@@ -25,5 +25,5 @@ demo-site/
 nightward-demo.gif
 examples/*/site/
 
-# 실데이터 검증 실험 (PII 포함 — 절대 비커밋, CLAUDE.md §비가역 제약)
+# Real-data validation experiments (contain PII — never commit; CLAUDE.md §irreversible constraints)
 live-experiment/
