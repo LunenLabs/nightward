@@ -203,3 +203,69 @@ def test_clean_run_is_complete(approved_price):
     status = status_json(tmp_path, tw)
     assert status["incomplete"] is None
     assert status["boundary"] == "intact"
+
+
+# ---- R1-OPS-01: approve --all never approves a standing rejection --------------
+
+LIMITS = ('import os\n'
+          'def test_limits(behavior):\n'
+          '    bug = os.environ.get("BUG")\n'
+          '    behavior("replica_floor", 0 if bug else 1, group="policy")\n'
+          '    behavior("default_port", 8081 if bug else 8080, group="net")\n'
+          '    if not os.environ.get("DROP"):\n'
+          '        behavior("probe", 1, group="net")\n')
+
+
+@pytest.fixture
+def rejected_floor(tmp_path):
+    write(tmp_path / "test_l.py", LIMITS)
+    tw = tmp_path / ".tw"
+    cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"BUG": "1"})
+    assert cli("reject", "replica_floor", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    return tmp_path, tw
+
+
+def test_approve_all_keeps_rejected_behavior(rejected_floor):
+    tmp_path, tw = rejected_floor
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "kept (rejected)" in r.stdout
+    assert "replica_floor" in r.stdout
+    floor = json.loads((tw / "baseline" / "replica_floor.approved.json").read_text("utf-8"))
+    assert floor["payload"] == 1                      # regression did not enter
+    port = json.loads((tw / "baseline" / "default_port.approved.json").read_text("utf-8"))
+    assert port["payload"] == 8081                    # the intended change did
+    assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 1
+
+
+def test_approve_by_name_overrides_and_clears_rejection(rejected_floor):
+    tmp_path, tw = rejected_floor
+    r = cli("approve", "replica_floor", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "rejection" in r.stdout
+    assert not (tw / "rejected" / "replica_floor.rejected.json").exists()
+    floor = json.loads((tw / "baseline" / "replica_floor.approved.json").read_text("utf-8"))
+    assert floor["payload"] == 0
+
+
+def test_rejection_only_holds_the_rejected_payload(rejected_floor, tmp_path):
+    # A different payload later is a new change, not the rejected regression.
+    tmp_path, tw = rejected_floor
+    write(tmp_path / "test_l.py", LIMITS.replace("0 if bug else 1", "2"))
+    cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"BUG": "1"})
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    assert "kept (rejected)" not in r.stdout
+    floor = json.loads((tw / "baseline" / "replica_floor.approved.json").read_text("utf-8"))
+    assert floor["payload"] == 2
+
+
+def test_rejected_removal_is_kept_by_include_removed(rejected_floor):
+    tmp_path, tw = rejected_floor
+    cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"DROP": "1"})
+    assert cli("reject", "probe", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "kept (rejected)" in r.stdout
+    assert (tw / "baseline" / "probe.approved.json").exists()

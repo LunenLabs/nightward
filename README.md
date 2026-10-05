@@ -49,7 +49,9 @@ nightward review  show changed behaviors with diffs
 nightward doctor  name the volatile fields behind CHANGED behaviors, suggest scrub rules
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
-nightward reject  confirm a change as a real regression (boundary stays breached)
+nightward reject  confirm a change as a real regression (boundary stays breached;
+                  `approve --all` skips it as "kept (rejected)" while that payload
+                  is pending - `approve <name>` overrides and clears the rejection)
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
 nightward status  machine-readable boundary signal (--json): "intact" is the only
                   "done"; "breached", "incomplete" (capture tests failed/errored),

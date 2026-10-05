@@ -118,6 +118,9 @@ class Store:
     def load_pending(self) -> dict[str, Behavior]:
         return self._load_dir(self.pending_dir, "received")
 
+    def load_rejected(self) -> dict[str, Behavior]:
+        return self._load_dir(self.rejected_dir, "rejected")
+
     # ---- decisions -----------------------------------------------------
     def approve(self, name: str) -> None:
         """Promote a pending behavior into the baseline (add or change)."""
@@ -149,6 +152,14 @@ class Store:
         self.rejected_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._file(self.rejected_dir, name, "rejected"),
                       src.read_text(encoding="utf-8"))
+
+    def clear_rejection(self, name: str) -> bool:
+        """Drop a rejection record (an explicit approve overrides it)."""
+        f = self._file(self.rejected_dir, name, "rejected")
+        if not f.exists():
+            return False
+        f.unlink()
+        return True
 
     # ---- report --------------------------------------------------------
     def write_report(self, report: dict) -> None:

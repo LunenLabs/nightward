@@ -202,6 +202,21 @@ def review(dir: str = typer.Option(DEFAULT_DIR)):
             console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
 
 
+def _standing_rejections(store: Store, baseline, pending) -> set[str]:
+    """Names whose current state is exactly what the user rejected.
+
+    The record is the received behavior, or the approved one for a rejected
+    removal; a later, different payload is a new change and is not held.
+    """
+    held = set()
+    for name, rec in store.load_rejected().items():
+        current = pending.get(name) or baseline.get(name)
+        if current is not None and (current.fingerprint(), current.group) == (
+                rec.fingerprint(), rec.group):
+            held.add(name)
+    return held
+
+
 def _approve_one(store: Store, name: str, baseline, pending) -> str:
     if name in pending:
         store.approve(name)
@@ -233,6 +248,7 @@ def approve(name: str | None = typer.Argument(None),
     judge = judge_from_meta(store)
 
     held: list[str] = []
+    kept_rejected: list[str] = []
     if all_:
         changes = [c for c in compare(baseline, pending, judge=judge) if c.kind != UNCHANGED]
         removed = [c.name for c in changes if c.kind == REMOVED]
@@ -249,18 +265,27 @@ def approve(name: str | None = typer.Argument(None),
                 )
         if not include_removed:
             held = removed
-        targets = [c.name for c in changes if c.name not in held]
+        # A confirmed regression must never ride along with a bulk approval.
+        rejected = _standing_rejections(store, baseline, pending)
+        kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
+        targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
     elif name:
         targets = [name]
     else:
         raise NightwardError("specify a behavior name or --all")
-    if not targets and not held:
+    if not targets and not held and not kept_rejected:
         console.print("nothing to approve - boundary already intact")
         return
 
     for n in targets:
         verb = _approve_one(store, n, baseline, pending)
         console.print(f"[green]{verb}[/green] {escape(n)}")
+        if name and store.clear_rejection(n):
+            console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
+    if kept_rejected:
+        console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
+                      f"rejected as regressions: {escape(', '.join(kept_rejected))}\n  fix the "
+                      f"code, or override with `nightward approve <name>`.", soft_wrap=True)
     if held:
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
                       f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
@@ -272,7 +297,11 @@ def approve(name: str | None = typer.Argument(None),
 @app.command()
 @handle_errors
 def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
-    """Confirm a change as a real regression. Boundary stays breached."""
+    """Confirm a change as a real regression. Boundary stays breached.
+
+    `approve --all` will skip it while the same payload is pending; an explicit
+    `approve <name>` overrides and clears the rejection.
+    """
     store = _store(dir)
     store.mark_rejected(name)
     console.print(f"[red]rejected[/red] {escape(name)} - boundary stays breached. "

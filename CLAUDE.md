@@ -84,7 +84,7 @@ adapters.from_file/from_pdf/from_docx/from_xlsx/from_text  adapters.py — file 
 | **Two execution contexts** | The plugin runs *inside* pytest. CLI `run` and MCP `nightward_run` share `runner.execute_run`, which spawns pytest *as a subprocess* (`python -m pytest … --nightward-record`) then recomputes. `approve/reject/gate/status/view` and MCP `nightward_status` never run pytest — they only touch the store. | `runner.py`, `cli.py:run`, `mcp_server.py` |
 | **fingerprint = equivalence oracle** | `sha256(canonical_json(payload))`. `canonical_json` uses `sort_keys` + `allow_nan=False` — guarantees fingerprint consistency AND human-readable git diffs at once. Capture, store, and scrub all use this one function (the stability linchpin). | `core/behavior.py` |
 | **scrub = false-positive defense** | Volatile values (timestamps, uuids) are normalized **before** fingerprinting, or every run shows "changed" and the tool dies. Two stages: ① field-aware `scrub.register_field(name[, repl])` — masks by key name at any depth, JSON-value replacement can't corrupt the payload (**preferred**) ② text regex `scrub.register(pat, repl)` — fallback when no stable key exists (tradeoff: literals that merely *look* like timestamps get replaced too). | `scrub.py` |
-| **store = git-native golden set** | `baseline/*.approved.json` and the judge **verdict ledger** (`judge_verdicts.json`) are **committed** (= the boundary + ruling record — deterministic replay on fresh clones/CI, reviewable in PR diffs). `pending/`, `rejected/`, `report.json`, `run_meta.json` are gitignored (transient). `approve` = copy pending→baseline; `approve_removal` = delete from baseline; `reject` = copy to `rejected/` (audit only; boundary stays breached). | `core/baseline.py` |
+| **store = git-native golden set** | `baseline/*.approved.json` and the judge **verdict ledger** (`judge_verdicts.json`) are **committed** (= the boundary + ruling record — deterministic replay on fresh clones/CI, reviewable in PR diffs). `pending/`, `rejected/`, `report.json`, `run_meta.json` are gitignored (transient). `approve` = copy pending→baseline; `approve_removal` = delete from baseline; `reject` = copy to `rejected/` (boundary stays breached; `approve --all` skips a behavior while its pending state matches the record). | `core/baseline.py` |
 
 ---
 
@@ -133,6 +133,10 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   (`run tests/x.py`) produce fake REMOVED; bulk-approving them silently shrinks
   the baseline. Removals need `approve <name>` or `--all --include-removed`,
   which is refused when the last run had skipped/failed tests.
+- **Rejections are binding for bulk approval.** `approve --all` skips any
+  behavior whose current pending (or, for a removal, baseline) state matches its
+  `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
+  `approve <name>` overrides and deletes the record.
 - **Pending is swapped, not rewritten in place.** `Store.replace_pending` builds
   `pending.tmp/` and renames it over `pending/`; baseline/report/meta writes go
   through `_atomic_write`. A torn capture reads as mass REMOVED.
