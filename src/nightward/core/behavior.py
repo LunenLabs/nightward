@@ -79,6 +79,9 @@ class Behavior:
     payload: Any              # normalized observed output
     group: str | None = None  # blast-radius grouping (module / feature)
     semantic: bool = False    # opt-in: judge equivalence by meaning, not fingerprint
+    # pytest nodeid of the capturing test: removal evidence only (see
+    # cli.approve). Never part of the fingerprint or the comparison.
+    source: str | None = None
 
     def fingerprint(self) -> str:
         return hashlib.sha256(canonical_json(self.payload).encode("utf-8")).hexdigest()
@@ -87,6 +90,8 @@ class Behavior:
         d = {"name": self.name, "group": self.group, "payload": self.payload}
         if self.semantic:  # omit when False so pre-v0.2 approved files stay byte-stable
             d["semantic"] = True
+        if self.source is not None:
+            d["source"] = self.source
         return d
 
     @staticmethod
@@ -95,5 +100,7 @@ class Behavior:
             raise NightwardError(f"expected a behavior object, got {type(d).__name__}")
         if not isinstance(d.get("name"), str) or "payload" not in d:
             raise NightwardError("behavior object needs a string 'name' and a 'payload'")
+        source = d.get("source")
         return Behavior(name=d["name"], payload=d["payload"], group=d.get("group"),
-                        semantic=d.get("semantic", False))
+                        semantic=d.get("semantic", False),
+                        source=source if isinstance(source, str) else None)

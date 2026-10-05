@@ -20,9 +20,25 @@ class Recorder:
     def __init__(self) -> None:
         self.behaviors: list[Behavior] = []
         self._seen: dict[str, str] = {}  # casefolded name -> name as captured
+        # Removal evidence: tests whose every phase passed this run. Only such a
+        # test proves that a behavior it no longer captures is really gone.
+        self._passed: set[str] = set()
+        self._broken: set[str] = set()
+
+    def completed(self) -> list[str]:
+        return sorted(self._passed - self._broken)
+
+    def pytest_runtest_logreport(self, report) -> None:
+        if report.when == "setup":   # a fresh attempt (e.g. a rerun) starts clean
+            self._passed.discard(report.nodeid)
+            self._broken.discard(report.nodeid)
+        if report.failed or report.skipped:   # skips, errors, failures, xfails
+            self._broken.add(report.nodeid)
+        elif report.when == "call" and report.passed:
+            self._passed.add(report.nodeid)
 
     def add(self, name: str, value, group: str | None = None,
-            semantic: bool = False) -> None:
+            semantic: bool = False, source: str | None = None) -> None:
         validate_name(name)
         # Names are filenames: "Total" and "total" are the same file on
         # Windows/macOS, so one would silently overwrite the other.
@@ -44,7 +60,8 @@ class Recorder:
         except NightwardError as exc:
             raise NightwardError(f"behavior {name!r}: {exc}") from exc
         self.behaviors.append(
-            Behavior(name=name, payload=payload, group=group, semantic=semantic)
+            Behavior(name=name, payload=payload, group=group, semantic=semantic,
+                     source=source)
         )
 
 
@@ -67,6 +84,7 @@ def pytest_configure(config):
             "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
         )
     config._nightward_recorder = Recorder()
+    config.pluginmanager.register(config._nightward_recorder, "nightward-recorder")
 
 
 @pytest.fixture
@@ -81,7 +99,7 @@ def behavior(request):
 
     def capture(name: str, value, *, group: str | None = None,
                 semantic: bool = False) -> None:
-        rec.add(name, value, group=group, semantic=semantic)
+        rec.add(name, value, group=group, semantic=semantic, source=request.node.nodeid)
 
     return capture
 
@@ -92,6 +110,10 @@ def behavior(request):
 # behavior into REMOVED, and `approve --all` would then wipe them from the
 # baseline.
 _COMPLETE = (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED)
+
+# run_meta key -> terminalreporter stats bucket
+_COUNTS = (("skipped", "skipped"), ("failed", "failed"), ("errors", "error"),
+           ("deselected", "deselected"), ("xfailed", "xfailed"))
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -111,13 +133,14 @@ def pytest_sessionfinish(session, exitstatus):
         store.invalidate_report()
         raise
 
-    # Skipped tests don't capture their behavior -> it shows up as a false
-    # REMOVED; failed/errored tests make the capture incomplete (the run and
-    # the gate fail on it). Record the counts so the runner can act on them.
+    # Skipped/deselected/xfailed tests don't capture their behavior -> it shows
+    # up as a false REMOVED; failed/errored tests make the capture incomplete
+    # (the run and the gate fail on it). Record the counts so the runner can
+    # act on them, and the tests that completed as per-behavior removal evidence.
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     stats = reporter.stats if reporter else {}
-    meta = {key: len(stats.get(stat, []))
-            for key, stat in (("skipped", "skipped"), ("failed", "failed"), ("errors", "error"))}
+    meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
+    meta["completed"] = rec.completed()
     # Written last: its presence proves to the runner that THIS run's flush landed.
     run_id = config.getoption("--nightward-run-id")
     if run_id:

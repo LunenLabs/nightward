@@ -65,10 +65,15 @@ radius, so the run is **incomplete**: `nightward run` prints the summary and exi
 the report records `incomplete: {"failed": n, "errors": m}`, and `gate` exits 1 until
 a clean run.
 
-A skipped test or a partial path (`nightward run tests/test_a.py`) captures nothing for
-the behaviors it didn't reach, so they read as REMOVED. That is why `approve --all`
-leaves removals alone, and `--include-removed` refuses after a run with skipped,
-failed or errored tests. Capture runs in a single process: `nightward run` forces `-n 0` if
+A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
+(`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
+so they read as REMOVED. That is why `approve --all` leaves removals alone. Each
+behavior records the test that captured it (`source`, never compared), and
+`--include-removed` only drops a removal when that test ran to completion this run
+without capturing it; the rest are kept and listed with the reason (a deleted test
+counts as "did not run" - approve such removals by name). Baselines from before
+sources existed need a run with nothing skipped, failed, errored, deselected or
+xfailed. Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text

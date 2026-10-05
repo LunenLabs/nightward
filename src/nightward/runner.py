@@ -130,7 +130,8 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     judge for behaviors captured with semantic=True; the spec is persisted in
     run_meta so later approve/recompute reuse the same (cached) verdicts.
     timeout (seconds) bounds the pytest run; on expiry nothing in the store moves.
-    Returns {report, skipped, failed, errors, pytest_returncode, output_tail};
+    Returns {report, skipped, failed, errors, deselected, xfailed,
+    pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can
     see why tests failed.
     """
@@ -167,6 +168,8 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
         "skipped": meta.get("skipped", 0),
         "failed": meta.get("failed", 0),
         "errors": meta.get("errors", 0),
+        "deselected": meta.get("deselected", 0),
+        "xfailed": meta.get("xfailed", 0),
         "pytest_returncode": result.returncode,
         "output_tail": _output_tail(result),
     }

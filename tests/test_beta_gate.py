@@ -269,3 +269,100 @@ def test_rejected_removal_is_kept_by_include_removed(rejected_floor):
     assert r.returncode == 0, r.stderr
     assert "kept (rejected)" in r.stdout
     assert (tw / "baseline" / "probe.approved.json").exists()
+
+
+# ---- R1-OPS-02: only a removal the run can prove is approved in bulk -----------
+
+SUITE = {
+    "conftest.py": ('import os, pytest\n'
+                    '@pytest.fixture\n'
+                    'def cfg():\n'
+                    '    if os.environ.get("BREAK_FIXTURE"):\n'
+                    '        raise FileNotFoundError("services.toml")\n'
+                    '    return {"replicas": 3}\n'),
+    "test_a.py": ('import os, pytest\n'
+                  'def test_keep(behavior):\n'
+                  '    behavior("always", 1, group="g")\n'
+                  '    if not os.environ.get("DROP_ALWAYS2"):\n'
+                  '        behavior("always2", 2, group="g")\n'
+                  'def test_cfg(behavior, cfg):\n'
+                  '    behavior("replicas", cfg["replicas"], group="g")\n'
+                  '@pytest.mark.slow\n'
+                  'def test_slow(behavior):\n'
+                  '    behavior("slow_report", 7, group="g")\n'
+                  '@pytest.mark.xfail(bool(os.environ.get("FLAKY")), reason="upstream")\n'
+                  'def test_flaky(behavior):\n'
+                  '    if os.environ.get("FLAKY"):\n'
+                  '        raise ConnectionError("upstream down")\n'
+                  '    behavior("upstream", 9, group="g")\n'),
+    "test_b.py": 'def test_other(behavior):\n    behavior("other", 5, group="h")\n',
+    "pytest.ini": "[pytest]\nmarkers =\n    slow: slow\n",
+}
+
+
+@pytest.fixture
+def suite(tmp_path):
+    for name, body in SUITE.items():
+        write(tmp_path / name, body)
+    tw = tmp_path / ".tw"
+    assert cli("run", ".", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    return tmp_path, tw
+
+
+@pytest.mark.parametrize("path, env, lost", [
+    (".", {"BREAK_FIXTURE": "1"}, "replicas"),                     # setup error
+    (".", {"PYTEST_ADDOPTS": '-m "not slow"'}, "slow_report"),      # deselected
+    (".", {"FLAKY": "1"}, "upstream"),                             # xfail
+    ("test_a.py", {}, "other"),                                     # partial path
+])
+def test_include_removed_holds_unproven_removals(suite, path, env, lost):
+    tmp_path, tw = suite
+    cli("run", path, "--dir", str(tw), cwd=tmp_path, env=env)
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert (tw / "baseline" / f"{lost}.approved.json").exists()
+    assert lost in r.stdout and "did not run to completion" in r.stdout
+
+
+def test_include_removed_approves_proven_removal(suite):
+    # test_keep ran to completion and no longer captures always2: a real removal.
+    tmp_path, tw = suite
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path,
+        env={"DROP_ALWAYS2": "1", "PYTEST_ADDOPTS": '-m "not slow"'})
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert not (tw / "baseline" / "always2.approved.json").exists()
+    assert (tw / "baseline" / "slow_report.approved.json").exists()
+
+
+def test_run_warns_about_deselected_and_xfailed(suite):
+    tmp_path, tw = suite
+    r = cli("run", ".", "--dir", str(tw), cwd=tmp_path,
+            env={"FLAKY": "1", "PYTEST_ADDOPTS": '-m "not slow"'})
+    assert "1 deselected" in r.stderr and "1 xfailed" in r.stderr
+    meta = json.loads((tw / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta["deselected"] == 1 and meta["xfailed"] == 1
+
+
+def test_source_is_recorded_but_not_compared(suite):
+    tmp_path, tw = suite
+    approved = json.loads((tw / "baseline" / "always.approved.json").read_text("utf-8"))
+    assert approved["source"] == "test_a.py::test_keep"
+    from nightward.core.behavior import Behavior
+    from nightward.core.diff import compare
+    (change,) = compare({"x": Behavior("x", 1, source="t.py::a")},
+                        {"x": Behavior("x", 1, source="t.py::b")})
+    assert change.kind == "UNCHANGED"
+
+
+def test_legacy_baseline_without_source_needs_a_clean_run(suite):
+    tmp_path, tw = suite
+    for f in (tw / "baseline").glob("*.json"):       # baselines from before sources
+        data = json.loads(f.read_text("utf-8"))
+        data.pop("source", None)
+        f.write_text(canonical_json(data), encoding="utf-8")
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"PYTEST_ADDOPTS": '-m "not slow"'})
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert (tw / "baseline" / "slow_report.approved.json").exists()
+    assert "deselected" in r.stdout

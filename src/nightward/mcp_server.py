@@ -25,6 +25,8 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
         "skipped": result["skipped"],
         "failed": result["failed"],
         "errors": result["errors"],
+        "deselected": result["deselected"],
+        "xfailed": result["xfailed"],
         "pytest_returncode": result["pytest_returncode"],
         "pytest_output_tail": result["output_tail"],
     }

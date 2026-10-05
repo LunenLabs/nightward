@@ -163,9 +163,10 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
     console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
                   f"--nightward-dir {escape(dir)}[/dim]")
     result = execute_run(path, dir, judge_spec=judge)
-    if result["skipped"]:
-        err_console.print(f"[yellow]warning:[/yellow] {result['skipped']} test(s) skipped - "
-                          "skipped behaviors appear as REMOVED; blast radius may show "
+    not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
+    if not_run:
+        err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
+                          "behaviors they capture appear as REMOVED; blast radius may show "
                           "false positives")
     _print_summary(result["report"])
     incomplete = result["report"].get("incomplete")
@@ -217,6 +218,28 @@ def _standing_rejections(store: Store, baseline, pending) -> set[str]:
     return held
 
 
+# Outcomes that leave a test's behaviors uncaptured (a false REMOVED).
+_NOT_RUN = ("skipped", "failed", "errors", "deselected", "xfailed")
+
+
+def _removal_doubt(b, meta: dict) -> str | None:
+    """Why a REMOVED behavior may be false, or None when the run proves it gone.
+
+    Proof: its source test ran to completion this run and did not capture it.
+    Baselines recorded before sources existed fall back to a fully clean run.
+    """
+    if b.source is not None:
+        if b.source in meta.get("completed", ()):
+            return None
+        return (f"its test {b.source} did not run to completion this run (skipped, "
+                f"failed, deselected, xfailed, deleted, or outside the run path)")
+    counts = [f"{meta[k]} {k}" for k in _NOT_RUN if meta.get(k)]
+    if counts:
+        return (f"no recorded source test, and the last run was partial "
+                f"({', '.join(counts)})")
+    return None
+
+
 def _approve_one(store: Store, name: str, baseline, pending) -> str:
     if name in pending:
         store.approve(name)
@@ -233,7 +256,8 @@ def approve(name: str | None = typer.Argument(None),
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
-                help="With --all, also accept REMOVED behaviors (drops them from the baseline)"),
+                help="With --all, also accept REMOVED behaviors whose test ran to completion "
+                     "this run without capturing them (drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
     if all_ and name:
@@ -248,22 +272,18 @@ def approve(name: str | None = typer.Argument(None),
     judge = judge_from_meta(store)
 
     held: list[str] = []
+    doubts: dict[str, str] = {}
     kept_rejected: list[str] = []
     if all_:
         changes = [c for c in compare(baseline, pending, judge=judge) if c.kind != UNCHANGED]
         removed = [c.name for c in changes if c.kind == REMOVED]
-        if removed and include_removed:
-            # A skipped/failed test captures nothing and looks REMOVED; approving
-            # that would silently shrink the boundary. Demand a complete run.
+        if include_removed:
+            # A test that didn't run captures nothing and looks REMOVED; approving
+            # that would silently shrink the boundary. Only proven removals go.
             meta = store.load_run_meta()
-            if meta.get("skipped") or meta.get("failed") or meta.get("errors"):
-                raise NightwardError(
-                    f"refusing --include-removed: the last run had "
-                    f"{meta.get('skipped', 0)} skipped, {meta.get('failed', 0)} failed and "
-                    f"{meta.get('errors', 0)} errored test(s), so REMOVED may be false. "
-                    f"Re-run cleanly, or approve removals one by name."
-                )
-        if not include_removed:
+            doubts = {n: why for n in removed if (why := _removal_doubt(baseline[n], meta))}
+            held = list(doubts)
+        else:
             held = removed
         # A confirmed regression must never ride along with a bulk approval.
         rejected = _standing_rejections(store, baseline, pending)
@@ -286,7 +306,13 @@ def approve(name: str | None = typer.Argument(None),
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
                       f"rejected as regressions: {escape(', '.join(kept_rejected))}\n  fix the "
                       f"code, or override with `nightward approve <name>`.", soft_wrap=True)
-    if held:
+    if doubts:
+        console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline "
+                      f"that this run can't prove gone:")
+        for n, why in doubts.items():
+            console.print(f"  - {escape(n)}: {escape(why)}", soft_wrap=True)
+        console.print("  if a removal is intended, accept it with `nightward approve <name>`.")
+    elif held:
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
                       f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
                       f"a partial path. Accept them with `nightward approve <name>` or "

@@ -132,7 +132,10 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **`approve --all` never approves REMOVED.** Skips and partial paths
   (`run tests/x.py`) produce fake REMOVED; bulk-approving them silently shrinks
   the baseline. Removals need `approve <name>` or `--all --include-removed`,
-  which is refused when the last run had skipped/failed tests.
+  which only drops a removal whose `source` test (nodeid stored with each
+  behavior, excluded from fingerprint/digest) is in run_meta `completed` - every
+  phase passed this run. Source-less (legacy) baselines need a run with zero
+  skipped/failed/errors/deselected/xfailed.
 - **Rejections are binding for bulk approval.** `approve --all` skips any
   behavior whose current pending (or, for a removal, baseline) state matches its
   `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
