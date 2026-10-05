@@ -103,3 +103,45 @@ def test_cli_run_warns_when_the_judge_is_unavailable(tmp_path):
     status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
     assert status["judge"]["unavailable"]
     assert status["judge"]["compared_exactly"] == ["reply.refund"]
+
+
+# --- R1-LLM-03: MCP nightward_run judges like the team's CLI run ---------------
+
+
+def test_mcp_run_reuses_the_judge_of_the_last_run(tmp_path, monkeypatch):
+    from nightward import mcp_server
+    monkeypatch.delenv("NIGHTWARD_JUDGE", raising=False)
+    path, dir_, _store = _approved_project(tmp_path)
+    monkeypatch.setenv("REPLY", REWORDED)
+    assert execute_run(path, dir_, judge_spec="persona:editor")["report"]["boundary"] == "intact"
+
+    out = mcp_server.run_tool(path, dir_)
+    assert out["boundary"] == "intact"                 # same verdict as the CLI
+    assert out["judge"]["spec"] == "persona:editor"
+    meta = json.loads((tmp_path / ".nightward" / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta["judge"] == "persona:editor"           # not erased by the agent's run
+
+
+def test_mcp_server_judge_is_set_by_the_human(tmp_path, monkeypatch):
+    from nightward import mcp_server
+    monkeypatch.delenv("NIGHTWARD_JUDGE", raising=False)
+    path, dir_, _store = _approved_project(tmp_path)
+    monkeypatch.setenv("REPLY", REWORDED)
+    monkeypatch.setattr(mcp_server, "_server_judge", None)
+    mcp_server.configure(judge="persona:editor")
+    assert mcp_server.run_tool(path, dir_)["boundary"] == "intact"
+
+
+def test_mcp_agent_cannot_choose_the_judge():
+    import inspect
+
+    from nightward import mcp_server
+    assert "judge" not in str(inspect.signature(mcp_server.run_tool))
+    assert "judge" in (mcp_server.run_tool.__doc__ or "")   # but it is told how it works
+
+
+def test_mcp_configure_rejects_a_bad_judge_at_startup(monkeypatch):
+    from nightward import mcp_server
+    monkeypatch.setattr(mcp_server, "_server_judge", None)
+    with pytest.raises(NightwardError, match="edtior"):
+        mcp_server.configure(judge="persona:edtior")

@@ -371,10 +371,12 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
 
 @app.command("mcp")
 @handle_errors
-def mcp_cmd():
+def mcp_cmd(judge: str | None = typer.Option(
+        None, help="Semantic judge for nightward_run, as provider:model. The agent "
+                   "can't choose it. Default: $NIGHTWARD_JUDGE, else the last run's judge")):
     """Start the MCP server (stdio) for AI agents - exposes run/status, NOT approve."""
     from .mcp_server import serve
-    serve()
+    serve(judge=judge)
 
 
 if __name__ == "__main__":

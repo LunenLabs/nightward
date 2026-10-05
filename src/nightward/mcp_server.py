@@ -6,20 +6,54 @@ NOT import mcp, so the gate logic stays testable without the optional dependency
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .core.baseline import Store
 from .errors import NightwardError
+from .judge import parse_spec
 from .runner import execute_run, is_stale
 from .signal import status_payload
 
+# The semantic judge for nightward_run. Set by the human who configures the
+# server (`nightward mcp --judge SPEC`), never by the agent: an agent that could
+# pick its own judge could pick persona:lenient and wave its changes through.
+_server_judge: str | None = None
+
+
+def configure(judge: str | None = None) -> None:
+    """Set the server's judge spec; a bad spec fails at startup, not mid-loop."""
+    global _server_judge
+    if judge:
+        parse_spec(judge)
+    _server_judge = judge
+
+
+def _judge_spec(dir: str) -> str | None:
+    # Server option > $NIGHTWARD_JUDGE > the judge of the last run (e.g. the
+    # team's `nightward run --judge`), so the agent sees the CLI's verdict.
+    return (_server_judge or os.environ.get("NIGHTWARD_JUDGE")
+            or Store(Path(dir)).load_run_meta().get("judge"))
+
 
 def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> dict:
-    """Capture behaviors, recompute the blast radius, return the boundary signal.
+    """Run the tests, capture behaviors, and return the boundary signal.
 
-    timeout (seconds) bounds the pytest run so a hung suite can't hang the server.
+    Call this after every code edit: nightward_status only reports the last run.
+    path: what pytest runs (relative to the server's working directory);
+    dir: the nightward store; timeout: seconds before pytest is stopped (the
+    store is then left untouched).
+    Returns {boundary: intact|breached|unknown, unapproved, changes: [{name,
+    kind, group, judged...}], stale, generated_at, judge, warnings:
+    {skipped, failed, pytest_returncode, pytest_output_tail}}. Done means
+    boundary == "intact" and stale is false. Behaviors captured with
+    semantic=True are judged by the judge the human configured (server
+    --judge, $NIGHTWARD_JUDGE, or the last run's judge); "judge" says which,
+    and why it was unavailable if it was. This tool cannot approve changes:
+    a human does that with the nightward CLI.
     """
-    result = execute_run(path, dir, capture_output=True, timeout=timeout)
+    result = execute_run(path, dir, capture_output=True, timeout=timeout,
+                         judge_spec=_judge_spec(dir))
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],
@@ -31,10 +65,12 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
 
 
 def status_tool(dir: str = ".nightward") -> dict:
-    """Read the last boundary status without re-running (report absent -> unknown).
+    """Read the boundary signal of the LAST nightward_run, without running tests.
 
-    stale=True: the baseline changed since that run. Code edits are NOT detected -
-    after changing code, call nightward_run for a fresh verdict.
+    It does not see code edits made since that run: after changing code, call
+    nightward_run for a fresh verdict. stale=True means the baseline changed
+    since that run, so its verdict can't be trusted either; generated_at says
+    when it ran. A missing report gives boundary "unknown".
     """
     store = Store(Path(dir))
     report = store.load_report()
@@ -64,6 +100,7 @@ def build_server():
     return server
 
 
-def serve() -> None:
+def serve(judge: str | None = None) -> None:
     """Start the stdio MCP server (blocks). FastMCP defaults to stdio transport."""
+    configure(judge=judge)
     build_server().run()
