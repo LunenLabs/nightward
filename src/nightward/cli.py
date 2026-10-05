@@ -1,8 +1,10 @@
 """nightward CLI - init / run / review / doctor / approve / reject / gate / status."""
 from __future__ import annotations
 
+import errno
 import functools
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -27,12 +29,54 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):  # pragma: no cover - non-reconfigurable stream
         pass
 
+
+class _Stdout:
+    """sys.stdout that outlives its reader (`nightward review | head`).
+
+    A reader that quits makes writes fail with BrokenPipeError (OSError EINVAL
+    on Windows). Point the fd at devnull and finish silently, keeping the
+    command's own exit code: `gate` must stay 1 on a breach even when nobody
+    reads its verdict, and `review | head` must not exit 120 under pipefail.
+    """
+
+    reader_gone = False
+
+    def write(self, text: str) -> int:
+        if not self.reader_gone:
+            try:
+                sys.stdout.write(text)
+            except OSError as exc:
+                self._gone(exc)
+        return len(text)
+
+    def flush(self) -> None:
+        if not self.reader_gone:
+            try:
+                sys.stdout.flush()
+            except OSError as exc:
+                self._gone(exc)
+
+    def _gone(self, exc: OSError) -> None:
+        if exc.errno not in (errno.EPIPE, errno.EINVAL):
+            raise exc
+        self.reader_gone = True
+        # The interpreter flushes sys.stdout again at exit; give that a sink.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+
+    def __getattr__(self, name: str):
+        return getattr(sys.stdout, name)
+
+
+_stdout = _Stdout()
+
 app = typer.Typer(
     help="nightward - regression firewall for AI-driven changes",
     no_args_is_help=True,
     add_completion=False,
 )
-console = Console(legacy_windows=False)
+console = Console(file=_stdout, legacy_windows=False)
 err_console = Console(stderr=True, legacy_windows=False)
 
 DEFAULT_DIR = ".nightward"
@@ -467,7 +511,7 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
     report = store.load_report()
     payload = status_payload(report, stale=is_stale(store, report))
     if json_:
-        print(json.dumps(payload, ensure_ascii=False))
+        print(json.dumps(payload, ensure_ascii=False), file=_stdout)
     else:
         console.print(payload)
 
