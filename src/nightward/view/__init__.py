@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..core.baseline import Store
 from ..runner import is_stale
+from ..shellquote import quote_all
 
 ASSETS = Path(__file__).parent / "assets"
 STATIC_FILES = ("index.html", "app.js", "style.css")
@@ -33,8 +34,13 @@ def collect_data(nightward_dir: Path | str) -> dict:
     run_meta = store.load_run_meta()
     baseline = store.load_baseline()    # {} if absent
     pending = store.load_pending()
+    names = {it["name"] for items in (report or {}).get("blast_radius", {}).values()
+             for it in items}
     return {
         "report": report,
+        # Copy-paste commands use these per-shell forms, never the raw name: a
+        # name from test code must not run code in the approver's shell (R2-WEB-02).
+        "quoted": {n: quote_all(n) for n in sorted(names)},
         "meta": {
             "skipped": run_meta.get("skipped", 0),
             "failed": run_meta.get("failed", 0),

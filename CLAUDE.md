@@ -197,6 +197,11 @@ surface; a guard test freezes this). CSP meta forbids inline script (hence the
 external app.js). `fetch` is CORS-blocked on `file://`, so local viewing goes
 through `--serve`. The dashboard is **read-only** (approve/reject stay in the
 CLI). States intact/breached + `no-baseline`/`no-report` are first-class.
+The clipboard is the other injection surface: behavior names come from test
+code, and the copy-paste commands land in the approver's shell. Never build a
+command from a raw name. `collect_data` emits `data.quoted` (per-shell forms
+from `shellquote.py`, tested against real sh/PowerShell/cmd), and `app.js`
+`cliCommand` uses only those; a name with no safe form gives no command.
 Never publish a real `.nightward/` store to a public site — the only publish
 path is clean-room synthetic data (`scripts/build_demo.py`).
 Design rationale: `docs/superpowers/specs/2026-06-05-nightward-view-dashboard-design.md`.

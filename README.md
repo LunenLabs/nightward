@@ -313,6 +313,12 @@ status, counts, and grouped diffs with copy-paste `approve`/`reject` commands. I
 deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered with
 `textContent` only — captured output never touches an HTML parser.
 
+The copy-paste commands quote every behavior name for the shell picked in
+"commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
+Windows). A name such as `x;touch${IFS}pwned` therefore arrives as one literal
+argument and never runs as code. When a name has no safe form in the selected shell
+(`%` or `!` in cmd.exe), the dashboard says so and offers no command.
+
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data
 > (`scripts/build_demo.py`). The default output dir `nightward-site/` is in the rules

@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from . import shellquote
 from .core.baseline import Store
 from .core.diff import REMOVED, UNCHANGED, compare
 from .errors import NightwardError
@@ -331,7 +332,8 @@ def _print_diff(it: dict, max_lines: int) -> None:
         return
     console.print(escape("\n".join(lines[:max_lines])))
     console.print(f"[dim]... {len(lines) - max_lines:,} more diff line(s) - see all with "
-                  f"`nightward review {escape(it['name'])} --max-lines 0`[/dim]",
+                  f"`{escape(shellquote.command('review', [it['name']]) or '')} "
+                  f"--max-lines 0`[/dim]",
                   soft_wrap=True)
 
 
