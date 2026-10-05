@@ -11,12 +11,12 @@ import sys
 
 import pytest
 
-from nightward import scrub
+from nightward import runner, scrub
 from nightward.core.baseline import Store
 from nightward.core.behavior import Behavior
 from nightward.errors import NightwardError
 from nightward.pytest_plugin import Recorder
-from nightward.runner import recompute
+from nightward.runner import execute_run, recompute
 
 
 def cli(*args, cwd, env=None):
@@ -230,3 +230,39 @@ def test_run_warns_about_a_scrub_rule_that_matched_nothing(tmp_path):
     r = cli("run", ".", "--dir", ".tw", cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "matched nothing" in r.stderr and "request_id" in r.stderr, r.stderr
+
+
+# ---- R1-WEB-05 / R1-OPS-08: pytest start-up failures name the real cause --------
+
+def test_conftest_import_error_is_not_blamed_on_installation(tmp_path):
+    write(tmp_path / "conftest.py", "import not_installed_dependency\n")
+    write(tmp_path / "test_a.py", "def test_a(behavior):\n    behavior('a', 1)\n")
+    r = cli("run", ".", "--dir", ".tw", cwd=tmp_path)
+    assert r.returncode == 2
+    assert "nightward is not installed" not in r.stderr, r.stderr
+    assert "conftest" in r.stderr and "pytest's output" in r.stderr, r.stderr
+
+
+def test_conftest_import_error_reaches_the_agent_with_pytests_reason(tmp_path, monkeypatch):
+    write(tmp_path / "conftest.py", "import not_installed_dependency\n")
+    write(tmp_path / "test_a.py", "def test_a(behavior):\n    behavior('a', 1)\n")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(NightwardError) as exc:
+        execute_run(".", ".tw", capture_output=True)
+    assert "not_installed_dependency" in str(exc.value)
+    assert "nightward is not installed" not in str(exc.value)
+    assert "is nightward installed" not in str(exc.value)
+
+
+def test_install_hint_only_when_pytest_rejects_the_nightward_options():
+    rejected = subprocess.CompletedProcess(
+        [], 4, stdout=b"", stderr=b"error: unrecognized arguments: --nightward-record\n")
+    assert "nightward is not installed" in runner._abort_message(".", rejected)
+
+
+def test_missing_run_path_is_named_before_pytest_starts(tmp_path):
+    r = cli("run", "tset", "--dir", ".tw", cwd=tmp_path)
+    assert r.returncode == 2
+    assert "'tset' does not exist" in r.stderr, r.stderr
+    assert "nightward is not installed" not in r.stderr
+    assert not (tmp_path / ".tw").exists()

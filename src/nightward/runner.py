@@ -6,6 +6,7 @@ surfaces report the same measurement. No console output here.
 from __future__ import annotations
 
 import datetime
+import importlib.metadata
 import importlib.util
 import os
 import subprocess
@@ -92,8 +93,8 @@ def _pytest_cmd(path: str, dir: str, run_id: str) -> list[str]:
 _ABORT_REASONS = {
     2: "pytest was interrupted (collection errors or Ctrl+C)",
     3: "pytest hit an internal error",
-    4: "pytest rejected the command line (is nightward installed in this "
-       "interpreter, so its pytest plugin is registered?)",
+    4: "pytest could not load the test suite (a conftest.py or plugin failed to "
+       "import, or the command line was rejected - see pytest's output)",
     5: "pytest collected no tests",
 }
 
@@ -106,9 +107,23 @@ def _output_tail(result: subprocess.CompletedProcess, lines: int = 15) -> str | 
     return "\n".join(output.decode("utf-8", errors="replace").strip().splitlines()[-lines:])
 
 
+def _plugin_missing(result: subprocess.CompletedProcess) -> bool:
+    """True when pytest ran without nightward's plugin (so it rejects our options)."""
+    tail = _output_tail(result) or ""
+    if "unrecognized arguments" in tail and "--nightward" in tail:
+        return True
+    return not any(ep.value == "nightward.pytest_plugin"
+                   for ep in importlib.metadata.entry_points(group="pytest11"))
+
+
 def _abort_message(path: str, result: subprocess.CompletedProcess) -> str:
     reason = _ABORT_REASONS.get(result.returncode,
                                 f"pytest exited with code {result.returncode}")
+    if result.returncode == 4 and _plugin_missing(result):
+        # Only now: most exit-4s are a conftest import error (R1-WEB-05).
+        reason = ("pytest rejected the --nightward-* options: nightward is not installed "
+                  "in this interpreter, so its pytest plugin is not registered "
+                  "(pip install nightward)")
     return _with_tail(f"{reason} under {path!r}; aborting - the store was left untouched",
                       result)
 
@@ -137,6 +152,11 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     output_tail is pytest's last lines when capture_output=True, so a caller can
     see why tests failed.
     """
+    if not Path(path.split("::", 1)[0]).exists():
+        # pytest would say so too, but behind an exit code nightward can't tell
+        # from a broken install (R1-OPS-08).
+        raise NightwardError(f"path {path!r} does not exist (under {Path.cwd()}); "
+                             f"nothing was run")
     spec = judge_spec or os.environ.get("NIGHTWARD_JUDGE") or None
     run_id = uuid.uuid4().hex
     store = Store(Path(dir))
