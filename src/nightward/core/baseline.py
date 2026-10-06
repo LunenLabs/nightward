@@ -4,7 +4,7 @@ Layout (git-native, approvaltests-style):
     .nightward/
       baseline/<name>.approved.json    # committed — the regression boundary
       pending/<name>.received.json     # gitignored — this run's observed behavior
-      rejected/<name>.rejected.json    # audit trail of confirmed regressions
+      rejected/<name>.rejected.json    # committed — confirmed regressions (approve --all skips)
       report.json                      # last blast radius (+ digests of what it compared)
       run_meta.json                    # last run's counts, run token, judge spec
       reviewed.json                    # the capture a human last saw (approve checks it)

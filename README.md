@@ -64,7 +64,9 @@ nightward approve promote pending behavior(s) into the baseline
                   agent's nightward_run), it refuses until you review again
 nightward reject  confirm a change as a real regression (boundary stays breached;
                   `approve --all` skips it as "kept (rejected)" while that payload
-                  is pending - `approve <name>` overrides and clears the rejection)
+                  is pending - `approve <name>` overrides and clears the rejection).
+                  Commit .nightward/rejected/ like the baseline, so a rejection
+                  protects every clone and CI, not just your machine
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only

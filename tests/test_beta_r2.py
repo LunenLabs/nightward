@@ -289,3 +289,42 @@ def test_legacy_whole_suite_run_proves_removal(legacy_store):
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (tw / "baseline" / "z.approved.json").exists()
+
+
+# ---- R2-COORD-01 (D17): rejections are shared decisions ------------------------
+
+def test_init_does_not_ignore_rejections_and_drops_the_legacy_rule(tmp_path):
+    write(tmp_path / ".gitignore", "node_modules/\n.nightward/rejected/\n")
+    r = cli("init", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".nightward/rejected/" not in gi and "node_modules/" in gi
+    assert ".nightward/pending/" in gi
+    assert "rejected/" in r.stdout          # tells the user why the line went
+
+
+def test_rejection_protects_a_fresh_clone(tmp_path):
+    if subprocess.run(["git", "--version"], capture_output=True).returncode != 0:
+        pytest.skip("git not available")
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=t"]
+    write(origin / "app.py", APP)
+    write(origin / "test_app.py", TEST_APP)
+    subprocess.run(["git", "init", "-q"], cwd=origin, check=True)
+    assert cli("init", cwd=origin).returncode == 0
+    cli("run", ".", cwd=origin)
+    cli("approve", "--all", cwd=origin)
+    write(origin / "app.py", APP.replace('"dev": 1', '"dev": 0'))     # regression
+    cli("run", ".", cwd=origin)
+    assert cli("reject", "replicas", cwd=origin).returncode == 0
+    subprocess.run(["git", "add", "-A"], cwd=origin, check=True)
+    subprocess.run([*git, "commit", "-qm", "reject"], cwd=origin, check=True)
+
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+    assert (clone / ".nightward" / "rejected" / "replicas.rejected.json").exists()
+    cli("run", ".", cwd=clone)
+    r = cli("approve", "--all", cwd=clone)
+    assert "kept (rejected)" in r.stdout
+    assert cli("gate", cwd=clone).returncode == 1

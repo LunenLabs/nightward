@@ -85,10 +85,13 @@ DEFAULT_DIR = ".nightward"
 DEFAULT_SITE = "nightward-site"   # `view` output: holds captured data, never commit it
 
 # Store entries that are per-run state, relative to the store dir.
-# judge_verdicts.json is deliberately NOT here: it is the committed ledger that
-# keeps judged-SAME boundaries deterministic on fresh clones / CI.
-TRANSIENT_ENTRIES = ("pending/", "rejected/", "report.json", "run_meta.json",
+# judge_verdicts.json and rejected/ are deliberately NOT here: the verdict
+# ledger keeps judged-SAME boundaries deterministic on fresh clones / CI, and a
+# rejection must protect every clone, not just the machine that made it (D17).
+TRANSIENT_ENTRIES = ("pending/", "report.json", "run_meta.json",
                      "pending.tmp/", "**/*.tmp", ".lock", "reviewed.json")
+# Ignore rules older versions of `init` wrote that must now go.
+LEGACY_ENTRIES = ("rejected/",)
 GITIGNORE_HEADER = "# nightward: approved baseline IS committed; transient state is not"
 
 # Everything rich prints is parsed as markup, so captured data (names, groups,
@@ -186,9 +189,9 @@ def _check_reviewed(store: Store, pending) -> None:
             f"it shows.")
 
 
-def _gitignore_lines(dir_: str) -> list[str] | None:
-    """Ignore rules for the store's transient entries, or None when the store
-    lives outside the current directory (a .gitignore here can't name it)."""
+def _store_prefix(dir_: str) -> str | None:
+    """The store as a path a .gitignore here can name, or None when it lives
+    outside the current directory."""
     p = Path(dir_)
     if p.is_absolute():
         try:
@@ -198,8 +201,22 @@ def _gitignore_lines(dir_: str) -> list[str] | None:
     prefix = p.as_posix()
     if prefix == ".." or prefix.startswith("../"):
         return None
+    return prefix
+
+
+def _gitignore_lines(dir_: str) -> list[str] | None:
+    """Ignore rules for the store's transient entries, or None when the store
+    lives outside the current directory (a .gitignore here can't name it)."""
+    prefix = _store_prefix(dir_)
+    if prefix is None:
+        return None
     return [GITIGNORE_HEADER, f"{DEFAULT_SITE}/",
             *(f"{prefix}/{entry}" for entry in TRANSIENT_ENTRIES)]
+
+
+def _legacy_gitignore_lines(dir_: str) -> list[str]:
+    prefix = _store_prefix(dir_)
+    return [] if prefix is None else [f"{prefix}/{entry}" for entry in LEGACY_ENTRIES]
 
 
 def _git_ignored(path: Path) -> bool | None:
@@ -263,6 +280,14 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
         lines = []
     gi = Path(".gitignore")
     existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+    legacy = [ln for ln in _legacy_gitignore_lines(dir) if ln in existing]
+    if legacy:
+        existing = [ln for ln in existing if ln not in legacy]
+        eol = "\r\n" if b"\r\n" in gi.read_bytes() else "\n"   # keep the file's style
+        gi.write_text(eol.join(existing) + eol, encoding="utf-8", newline="")
+        console.print(f"[green]updated[/green] .gitignore: removed {escape(', '.join(legacy))} "
+                      f"- rejections (rejected/) are committed now, so they protect every "
+                      f"clone", soft_wrap=True)
     missing = [ln for ln in lines if ln not in existing]
     if missing:
         with gi.open("a", encoding="utf-8") as fh:
@@ -604,6 +629,8 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
         store.mark_rejected(name)
     console.print(f"[red]rejected[/red] {escape(name)} - boundary stays breached. "
                   f"Fix the code and re-run `nightward run`.")
+    console.print(f"[dim]commit {escape(str(store.rejected_dir))}/ with your change: "
+                  f"a rejection protects every clone that has it[/dim]", soft_wrap=True)
 
 
 # doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.

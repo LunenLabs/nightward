@@ -150,7 +150,8 @@ def test_r6_init_gitignore_follows_dir(tmp_path):
 def test_r6_init_default_dir_lines_unchanged(tmp_path):
     cli("init", cwd=tmp_path)
     gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert gi[-8:] == [".nightward/pending/", ".nightward/rejected/",
+    # rejected/ is committed (D17): a rejection must protect every clone.
+    assert gi[-7:] == [".nightward/pending/",
                        ".nightward/report.json", ".nightward/run_meta.json",
                        ".nightward/pending.tmp/", ".nightward/**/*.tmp", ".nightward/.lock",
                        ".nightward/reviewed.json"]
