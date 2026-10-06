@@ -319,13 +319,24 @@ resolves `path` and `dir` against its own working directory.
 | `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the store is left untouched) | runs the tests, captures behaviors, recomputes the boundary |
 | `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
 
-Both return the `status --json` shape: `boundary` (`intact` / `breached` /
-`unknown`), `unapproved`, `changes` (`name`, `kind`, `group`, plus `judged`,
-`judge_model`, `judge_reason` when a judge ruled), `judged_same`, `stale`,
-`generated_at`, and `judge`. `nightward_run` adds `warnings`: `skipped`, `failed`,
-`pytest_returncode`, and `pytest_output_tail` (pytest's last lines, so the agent can
-see why tests failed). The agent is done when `boundary` is `"intact"` and `stale`
-is false.
+Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
+`kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled),
+`judged_same`, `stale`, `incomplete` (`{"failed": n, "errors": m}` or null),
+`generated_at`, and `judge`. `boundary` is one of:
+
+| `boundary` | meaning | what the agent should do |
+|---|---|---|
+| `intact` | no unapproved change | done |
+| `breached` | unapproved changes | fix the code, or stop and ask a human to approve |
+| `incomplete` | nothing unapproved, but capture tests failed or errored | fix the failing tests (see `incomplete` and `pytest_output_tail`) |
+| `stale` | the baseline or capture moved since the report | call `nightward_run` again |
+| `unknown` | no report yet | call `nightward_run` |
+
+`nightward_run` adds `warnings`: `skipped`, `failed`, `errors`, `deselected`,
+`xfailed`, `scrubbed` (values the default scrubbers masked), `scrub_unmatched`
+(custom scrub rules that matched nothing), `pytest_returncode`, and
+`pytest_output_tail` (pytest's last lines, so the agent can see why tests failed).
+The agent is done when `boundary` is `"intact"` and `stale` is false.
 
 Rules for the loop:
 
