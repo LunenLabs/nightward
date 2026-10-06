@@ -328,3 +328,22 @@ def test_rejection_protects_a_fresh_clone(tmp_path):
     r = cli("approve", "--all", cwd=clone)
     assert "kept (rejected)" in r.stdout
     assert cli("gate", cwd=clone).returncode == 1
+
+
+# ---- R2-DATA-03: an incomplete run never prints "Boundary: intact" ---------------
+
+def test_incomplete_run_summary_says_incomplete(tmp_path):
+    write(tmp_path / "test_m.py",
+          'import os\n'
+          'def test_revenue(behavior):\n'
+          '    behavior("revenue_total", {"total": 1234.5}, group="billing")\n'
+          'if os.environ.get("PR") == "1":\n'
+          '    def test_new_metric(behavior):\n'
+          '        behavior("segment_mean", {"mean": float("nan")}, group="billing")\n')
+    tw = tmp_path / ".tw"
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    r = cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"PR": "1"})
+    assert r.returncode == 1
+    assert "Boundary: incomplete (1 failed capture test" in r.stdout, r.stdout
+    assert "intact" not in r.stdout

@@ -162,6 +162,12 @@ def _incomplete_text(incomplete: dict) -> str:
             f"in the capture run - fix them and re-run `nightward run`")
 
 
+def _incomplete_short(incomplete: dict) -> str:
+    parts = [f"{incomplete[k]} {word} capture test(s)"
+             for k, word in (("failed", "failed"), ("errors", "errored")) if incomplete.get(k)]
+    return ", ".join(parts)
+
+
 STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture changed since "
                  "the last report; re-run `nightward run`")
 
@@ -239,11 +245,17 @@ def _warn_unless_ignored(path: Path, what: str) -> None:
 
 def _print_summary(report: dict) -> None:
     c = report["counts"]
-    if report["boundary"] == "intact":
+    # Same word as status --json and the dashboard: a run with failing capture
+    # tests is never "intact", even when nothing captured moved (R2-DATA-03).
+    incomplete = report.get("incomplete")
+    gap = (_incomplete_short(incomplete) if incomplete else "")
+    if report["boundary"] == "intact" and incomplete:
+        console.print(f"\n[bold]Boundary:[/bold] [red]incomplete[/red] ({gap})")
+    elif report["boundary"] == "intact":
         console.print("\n[bold]Boundary:[/bold] [green]intact[/green]")
     else:
         console.print(f"\n[bold]Boundary:[/bold] [red]breached[/red] "
-                      f"({report['unapproved']} unapproved)")
+                      f"({report['unapproved']} unapproved{'; ' + gap if gap else ''})")
     console.print(f"unchanged={c['unchanged']} changed={c['changed']} "
                   f"new={c['new']} removed={c['removed']}")
     if c.get("judged_same"):
