@@ -24,6 +24,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..errors import NightwardError
+from ..shellquote import command
 from .behavior import Behavior, canonical_json, validate_name
 
 
@@ -77,7 +78,8 @@ def _conflict_message(path: Path) -> str:
     for suffix in (".approved.json", ".received.json", ".rejected.json"):
         if path.name.endswith(suffix):
             name = path.name[:-len(suffix)]
-            return msg + f" and `nightward approve {name}` if the result should stand"
+            approve = command("approve", [name]) or "nightward approve <name>"
+            return msg + f" and `{approve}` if the result should stand"
     return msg
 
 

@@ -159,6 +159,9 @@ class Behavior:
     # pytest nodeid of the capturing test: removal evidence only (see
     # cli.approve). Never part of the fingerprint or the comparison.
     source: str | None = None
+    # False when captured with behavior(..., scrub=False): no scrub rule applies,
+    # so doctor must never suggest one for it. Not part of the fingerprint.
+    scrub: bool = True
 
     def fingerprint(self) -> str:
         return hashlib.sha256(canonical_json(self.payload).encode("utf-8")).hexdigest()
@@ -169,6 +172,8 @@ class Behavior:
             d["semantic"] = True
         if self.source is not None:
             d["source"] = self.source
+        if not self.scrub:  # omit the default for the same reason
+            d["scrub"] = False
         return d
 
     @staticmethod
@@ -180,4 +185,5 @@ class Behavior:
         source = d.get("source")
         return Behavior(name=d["name"], payload=d["payload"], group=d.get("group"),
                         semantic=d.get("semantic", False),
-                        source=source if isinstance(source, str) else None)
+                        source=source if isinstance(source, str) else None,
+                        scrub=d.get("scrub", True) is not False)

@@ -13,6 +13,8 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from . import shellquote
+from .config import project_judge
 from .core.baseline import Store, digest
 from .core.diff import REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
@@ -319,8 +321,9 @@ def run(ctx: typer.Context,
         dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"),
         judge: str | None = typer.Option(
             None, help="Semantic judge for semantic=True behaviors, as provider:model "
-                       "(e.g. anthropic:claude-haiku-4-5, persona:editor). "
-                       "Default: $NIGHTWARD_JUDGE")):
+                       "(e.g. anthropic:claude-haiku-4-5, persona:editor), for this run "
+                       "only. Default: $NIGHTWARD_JUDGE, else [tool.nightward] judge "
+                       "in pyproject.toml")):
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
@@ -333,6 +336,16 @@ def run(ctx: typer.Context,
         raise NightwardError(_missing_store_message(dir))
     console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
                   f"--nightward-dir {escape(dir)}[/dim]")
+    # --judge and $NIGHTWARD_JUDGE are per-run overrides; the committed
+    # [tool.nightward] judge is the project's decision (D14).
+    if judge:
+        source = "--judge, this run only"
+    elif os.environ.get("NIGHTWARD_JUDGE"):
+        judge, source = os.environ["NIGHTWARD_JUDGE"], "$NIGHTWARD_JUDGE, this run only"
+    else:
+        judge, source = project_judge(path.split("::", 1)[0]), "pyproject.toml"
+    if judge:
+        console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
     extra = [a for a in ctx.args if a != "--"]
     result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
     not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
@@ -421,7 +434,8 @@ def _print_diff(it: dict, max_lines: int) -> None:
         return
     console.print(escape("\n".join(lines[:max_lines])))
     console.print(f"[dim]... {len(lines) - max_lines:,} more diff line(s) - see all with "
-                  f"`nightward review {escape(it['name'])} --max-lines 0`[/dim]",
+                  f"`{escape(shellquote.command('review', [it['name']]) or '')} "
+                  f"--max-lines 0`[/dim]",
                   soft_wrap=True)
 
 
@@ -564,9 +578,14 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
     raise NightwardError(f"nothing to approve for {name!r}")
 
 
+APPROVE_NAMES_ARG = typer.Argument(
+    None, help="Behavior(s) to approve. One name always applies; several are approved "
+               "like --all --include-removed limited to them", show_default=False)
+
+
 @app.command()
 @handle_errors
-def approve(name: str | None = typer.Argument(None),
+def approve(names: list[str] | None = APPROVE_NAMES_ARG,
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
@@ -575,14 +594,14 @@ def approve(name: str | None = typer.Argument(None),
                      "(drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
-    if all_ and name:
-        raise NightwardError("give a behavior name or --all, not both")
+    if all_ and names:
+        raise NightwardError("give behavior names or --all, not both")
     store = _existing_store(dir)
     with store_lock(store.root, "nightward approve"):
-        _approve(store, dir, name, all_, include_removed)
+        _approve(store, dir, names, all_, include_removed)
 
 
-def _approve(store: Store, dir: str, name: str | None, all_: bool,
+def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
              include_removed: bool) -> None:
     baseline = store.load_baseline()
     pending = store.load_pending()
@@ -617,8 +636,26 @@ def _approve(store: Store, dir: str, name: str | None, all_: bool,
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
         targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
-    elif name:
-        targets = [name]
+    elif names and len(names) == 1:
+        targets = names
+    elif names:
+        # Several names (e.g. the dashboard's group chip) are a bulk approval
+        # limited to them: unproven removals and standing rejections stay, as
+        # with --all --include-removed; one explicit name overrides (R2-WEB-03).
+        names = list(dict.fromkeys(names))
+        unknown = [n for n in names if n not in pending and n not in baseline]
+        if unknown:
+            raise NightwardError(f"no pending or baseline behavior named "
+                                 f"{', '.join(map(repr, unknown))}; nothing was approved")
+        meta = store.load_run_meta()
+        run_doubt = _run_doubt(baseline, meta)
+        doubts = {n: why for n in names
+                  if n not in pending
+                  and (why := run_doubt or _removal_doubt(n, baseline[n], meta))}
+        held = list(doubts)
+        rejected = _standing_rejections(store, baseline, pending)
+        kept_rejected = [n for n in names if n in rejected and n not in held]
+        targets = [n for n in names if n not in held and n not in rejected]
     else:
         raise NightwardError("specify a behavior name or --all")
     if all_:
@@ -635,7 +672,7 @@ def _approve(store: Store, dir: str, name: str | None, all_: bool,
         # The short fingerprint ties the approval to the reviewed content.
         what = f" ({pending[n].fingerprint()[:8]})" if n in pending else ""
         console.print(f"[green]{verb}[/green] {escape(n)}{what}")
-        if name and store.clear_rejection(n):
+        if names and len(names) == 1 and store.clear_rejection(n):
             console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
     if kept_rejected:
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
@@ -673,7 +710,8 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
 
 
 # doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.
-_DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "~",
+# Dates and reorders look real first: they can be the contract (D15).
+_DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "*", "date": "*",
                  "content-hash": "*", "changed": "*", "structural": "!"}
 _DOCTOR_LINES = 20  # per behavior; the rest is summarized
 
@@ -709,18 +747,26 @@ def doctor(names: list[str] | None = NAMES_ARG,
                           f"{escape(detail)}[/dim]", soft_wrap=True)
         if len(found) > _DOCTOR_LINES:
             console.print(f"  [dim]... {len(found) - _DOCTOR_LINES} more path(s)[/dim]")
-    if diag["suggestions"]:
-        console.print("\n[bold]volatile by evidence[/bold] - if this is noise, tame it in "
-                      "conftest.py:")
+    sure = [s for s in diag["suggestions"] if not s["conditional"]]
+    maybe = [s for s in diag["suggestions"] if s["conditional"]]
+    for title, rules in (
+            ("volatile by evidence - if this is noise, tame it in conftest.py:", sure),
+            ("only if these dates are not part of the contract - re-run with no code "
+             "edits first; if they change again, tame them in conftest.py:", maybe)):
+        if not rules:
+            continue
+        console.print(f"\n[bold]{escape(title)}[/bold]", soft_wrap=True)
         console.print("  [cyan]from nightward import scrub[/cyan]")
-        for s in diag["suggestions"]:
+        for s in rules:
             console.print(f"  [cyan]{escape(s['rule'])}[/cyan]  [dim]# {escape(s['reason'])}"
                           f"[/dim]", soft_wrap=True)
-        console.print("then re-run [cyan]nightward run[/cyan] and review what is left.")
+    if diag["suggestions"]:
+        console.print("then re-run [cyan]nightward run[/cyan] and review what is left. "
+                      "Every rule above is scoped to the field or text that drifted and "
+                      "matches no stable value elsewhere in this capture.", soft_wrap=True)
         if any("register_field" in s["rule"] for s in diag["suggestions"]):
             console.print("[yellow]caution:[/yellow] register_field masks that key in "
-                          "[bold]every[/bold] behavior - doctor offers it only for keys "
-                          "that are not stable anywhere else in this capture.")
+                          "[bold]every[/bold] behavior, including ones you add later.")
     if looks_real:
         console.print("\n[bold]*[/bold] / [bold]![/bold] look like real changes: "
                       "`nightward review`, then approve or fix - never scrub a regression. "
@@ -834,7 +880,7 @@ def _print_status(payload: dict) -> None:
 @handle_errors
 def mcp_cmd(judge: str | None = typer.Option(
         None, help="Semantic judge for nightward_run, as provider:model. The agent "
-                   "can't choose it. Default: $NIGHTWARD_JUDGE, else the last run's judge")):
+                   "can't choose it. Default: [tool.nightward] judge in pyproject.toml")):
     """Start the MCP server (stdio) for AI agents - exposes run/status, NOT approve."""
     from .mcp_server import serve
     serve(judge=judge)

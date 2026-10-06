@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .behavior import Behavior, canonical_json
+from .visible import reveal
 
 NEW = "NEW"
 CHANGED = "CHANGED"
@@ -116,6 +117,20 @@ def _positional_opcodes(a: list[str], b: list[str]) -> list[tuple[str, int, int,
     return codes
 
 
+def _replaced(old: list[str], new: list[str]) -> list[str]:
+    """-/+ lines for a replaced block. Line pairs that differ only in invisible or
+    look-alike characters get those characters escaped, plus a "? " line naming
+    them, so the reviewer can see the change (R2-FIN-04)."""
+    old, new, hints = list(old), list(new), []
+    if len(old) == len(new):
+        for k in range(min(len(old), MAX_DIFF_LINES)):
+            shown = reveal(old[k], new[k])
+            if shown:
+                old[k], new[k], note = shown
+                hints.append(f"? invisible or look-alike change: {note}")
+    return ["-" + ln for ln in old] + ["+" + ln for ln in new] + list(dict.fromkeys(hints))
+
+
 def _line_diff(a: list[str], b: list[str], n: int = _CONTEXT) -> list[str]:
     """Unified diff of two line lists, bounded in time and output size."""
     if a == b:
@@ -148,8 +163,7 @@ def _line_diff(a: list[str], b: list[str], n: int = _CONTEXT) -> list[str]:
             if tag == "equal":
                 out.extend(" " + ln for ln in a_win[i1:i2])
                 continue
-            out.extend("-" + ln for ln in a_win[i1:i2])
-            out.extend("+" + ln for ln in b_win[j1:j2])
+            out.extend(_replaced(a_win[i1:i2], b_win[j1:j2]))
         if len(out) > MAX_DIFF_LINES:
             break
     if len(out) > MAX_DIFF_LINES:
@@ -174,8 +188,9 @@ def compare(baseline: dict[str, Behavior], pending: dict[str, Behavior],
     """Fingerprint comparison; optionally soften semantic=True mismatches via a judge.
 
     The judge only ever turns CHANGED into UNCHANGED-by-meaning (recorded as
-    judged=True for audit). It never touches NEW/REMOVED, never runs on
-    deterministic behaviors, and a judge failure keeps the CHANGED verdict —
+    judged=True for audit). It never touches NEW/REMOVED, runs only when both
+    the approved baseline and the capture are semantic (flipping the flag is
+    itself a CHANGED), and a judge failure keeps the CHANGED verdict —
     the gate fails closed. with_diff=False skips rendering diffs (verdicts only).
     """
     diff = _text_diff if with_diff else (lambda old, new: "")
@@ -188,16 +203,26 @@ def compare(baseline: dict[str, Behavior], pending: dict[str, Behavior],
         elif p is None:
             changes.append(Change(name, REMOVED, group=b.group, diff_text=diff(b, None)))
         elif (old_fp := b.fingerprint()) == (new_fp := p.fingerprint()):
+            # Same output, but moved to another feature or switched between
+            # exact and judged comparison: both change how the behavior is
+            # gated, so they need approval like any other change.
+            moves = []
             if b.group != p.group:
-                # Same output, moved to another feature: the blast radius would
-                # keep pointing at the old group until someone approves the move.
-                changes.append(Change(name, CHANGED, group=p.group,
-                                      diff_text=f"group: {b.group!r} -> {p.group!r}"))
+                moves.append(f"group: {b.group!r} -> {p.group!r}")
+            if b.semantic != p.semantic:
+                moves.append(f"semantic: {b.semantic} -> {p.semantic}")
+            if moves:
+                changes.append(Change(name, CHANGED, group=p.group, diff_text="\n".join(moves)))
             else:
                 changes.append(Change(name, UNCHANGED, group=b.group))
         else:
-            change = Change(name, CHANGED, group=p.group, diff_text=diff(b, p))
-            if judge is not None and p.semantic:
+            text = diff(b, p)
+            if b.semantic != p.semantic:
+                text = f"semantic: {b.semantic} -> {p.semantic}\n{text}"
+            change = Change(name, CHANGED, group=p.group, diff_text=text)
+            # Judge only what was APPROVED as semantic: turning semantic=True on
+            # in a test must not open lenient comparison without approval (D14).
+            if judge is not None and b.semantic and p.semantic:
                 verdict = judge.equivalent(b.payload, p.payload, old_fp, new_fp, name=name)
                 if verdict is not None:
                     change.judged = True

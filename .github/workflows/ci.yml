@@ -62,6 +62,11 @@ jobs:
           # ...and a judge collapses it to intact, with an audit trail
           NEWSROOM_REWRITE=1 nightward run . --judge persona:lenient
           nightward gate
+          # --judge is a one-run override: the next plain run is exact again (D14)
+          NEWSROOM_REWRITE=1 nightward run .
+          if nightward gate; then
+            echo "a --judge override leaked into a later run" && exit 1
+          fi
 
   # Non-blocking: build the dashboard from clean-room demo data and upload it as
   # a preview artifact. This must NOT gate the PR — view explains, gate blocks.

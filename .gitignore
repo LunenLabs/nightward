@@ -1,10 +1,11 @@
 # nightward: approved baseline IS committed; everything transient is not
 .nightward/pending/
-.nightward/rejected/
 .nightward/report.json
 .nightward/run_meta.json
 .nightward/pending.tmp/
 .nightward/**/*.tmp
+.nightward/.lock
+.nightward/reviewed.json
 
 __pycache__/
 *.pyc

@@ -474,3 +474,19 @@ def test_masked_note_names_behaviors_and_repeats_only_on_change(tmp_path):
     assert "masked" not in again.stderr
     more = cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"MORE": "1"})
     assert "masked 2 value(s) in 2 behavior(s)" in more.stderr and "due" in more.stderr
+
+
+# The repo's own ignore files must cover every transient store entry `init`
+# writes (a new transient file once showed up as untracked in every example).
+def test_repo_gitignores_cover_transient_entries():
+    from pathlib import Path
+
+    from nightward.cli import LEGACY_ENTRIES, TRANSIENT_ENTRIES
+
+    root = Path(__file__).resolve().parents[1]
+    for gi in [root / ".gitignore", *sorted(root.glob("examples/*/.gitignore"))]:
+        lines = gi.read_text(encoding="utf-8").splitlines()
+        for entry in TRANSIENT_ENTRIES:
+            assert f".nightward/{entry}" in lines, f"{gi}: missing .nightward/{entry}"
+        for entry in LEGACY_ENTRIES:
+            assert f".nightward/{entry}" not in lines, f"{gi}: still ignores {entry}"

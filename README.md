@@ -60,7 +60,9 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
                   for values that are volatile by evidence (see below); takes the
                   same NAME... / --group scope as review
 nightward approve promote pending behavior(s) into the baseline
-                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed).
+                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
+                  `approve A B C` works like --all --include-removed limited to those
+                  names, while one name always applies, even a removal or a rejection).
                   It promotes only the capture a human last saw through `run`,
                   `review` or `view`; if anything captured again since (e.g. an
                   agent's nightward_run), it refuses until you review again
@@ -200,6 +202,16 @@ fingerprints, and a diff is capped at 2,000 lines (huge payloads end with a
 "diff truncated" marker; very large scattered changes are compared by line
 position), so `run`/`approve` stay fast on big captures.
 
+Some changes print the same on both sides: NO-BREAK SPACE vs NARROW NO-BREAK SPACE
+after a CLDR upgrade, a zero-width space or bidi mark, doubled or trailing
+whitespace, a Cyrillic `а` in place of a Latin `a`, or `−` (minus) in place of `-`.
+For such a -/+ pair, `review` and the dashboard escape only the characters that
+differ (`"1 234"` -> `"1 234"`) and add a `? invisible or look-alike
+change: U+00A0 NO-BREAK SPACE -> U+202F NARROW NO-BREAK SPACE` line, and `doctor`
+names them in its note. This is display only and never affects the fingerprint.
+The committed baseline file stores the raw characters, so its git diff still
+looks unchanged; use `nightward review` to read it.
+
 Add your own rules for project-specific noise (prefer `register_field` - it
 replaces a JSON value and can't corrupt the payload):
 
@@ -228,47 +240,85 @@ every `register`/`register_field` rule that matched nothing in that run
 silently does nothing can't pass for handled noise.
 
 `nightward doctor` sees one before/after pair, which is no evidence that a value is
-noise, so it only calls a value volatile when the value itself shows it, and then
-suggests the narrowest rule that hides exactly that:
+noise. It calls a value volatile only when the value itself shows it. A date or an
+order can be the product (a deadline, an event sequence), so those look like a real
+change first:
 
-| doctor sees | it suggests |
-|---|---|
-| a date-time or HTTP date | a `scrub.register(...)` pattern for that date shape |
-| a random token behind a stable prefix (`chatcmpl-…`, `call_…`, a CSRF value in HTML) | a `scrub.register(...)` pattern anchored on that prefix, never the whole field or body |
-| a Unix epoch under a time-like key (`created`, `updated_at`) | `scrub.register_field(key)`, only if that key is not stable in any other behavior |
-| a float that moved only in its last digits | round it before capturing (`round(x, 10)`), no mask |
-| a list with the same elements in a new order | sort it before capturing, no mask |
-| a changed content hash, a type change, a new key, anything else | "looks like a real change": review, then approve or fix |
+| doctor sees | it says | it suggests |
+|---|---|---|
+| a random token behind a stable prefix (`chatcmpl-…`, `call_…`, `req_…`, a CSRF value in HTML) | `~` volatile | a `scrub.register(...)` pattern anchored on that prefix, with a base62 class and open length (`[0-9A-Za-z]{8,}`), never the whole field or body |
+| a date-time, HTTP date or Unix timestamp (also as a string, e.g. `X-RateLimit-Reset`) | `*` looks like a real change | only *if it is not part of the contract*: `scrub.register_field(key)` for that key, or a pattern anchored on the text before it; for a date in a list, "mask it at capture time" (no global date pattern) |
+| several dates that all moved by the same amount | `*` looks like a real change ("all 2 values moved by -1 day") | nothing |
+| a list with the same elements in a new order | `*` looks like a real change | only *if it is not part of the contract* (e.g. a set): sort it before capturing |
+| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing (`float(f"{x:.12g}")`, or `.6g` for float32), no mask. Integral floats and deltas of 1 or more are never noise |
+| `0.0` -> `-0.0` | `~` sign of zero | `x + 0.0` before capturing |
+| a changed content hash, a type change, a new key, anything else | `*` / `!` looks like a real change | nothing: review, then approve or fix |
 
-If a value marked as a real change changes again on a re-run with no code edits, it
-is volatile: mask it at capture time in that test.
+Every suggested rule is checked to make both samples equal. It is withheld when it
+would also match a stable value anywhere else in the capture, and for behaviors
+captured with `scrub=False`. If a value marked as a real change changes again on a
+re-run with no code edits, it is volatile: apply the conditional suggestion, or mask
+it at capture time in that test.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 
 Free-text AI output breaches the fingerprint gate on every rewording (measured:
-25/25 false positives on real data). Mark such behaviors `semantic=True` and pick
-a judge model per run — the judge rules **equivalence only**; approval stays human:
+25/25 false positives on real data). Mark such behaviors `semantic=True` and commit
+the project's judge — the judge rules **equivalence only**; approval stays human:
 
 ```python
 def test_summary(behavior):
     behavior("daily_summary", summarize(items), group="ai", semantic=True)
 ```
 
+The flag is part of the approved behavior. Turning `semantic=True` on (or off) for
+an approved behavior is itself a CHANGED (`semantic: False -> True`). The judge runs
+only once a human has approved the behavior as semantic, so a one-word test edit can't
+switch an exact behavior to lenient comparison.
+
+The judge is a project decision, so it lives in your committed `pyproject.toml`.
+`nightward run`, CI and the MCP agent all use it, and changing it shows up in a PR:
+
+```toml
+[tool.nightward]
+judge = "anthropic:claude-haiku-4-5"   # real LLM (pip install "nightward[judge]")
+# judge = "persona:editor"             # deterministic, key-free (see below)
+```
+
+nightward reads the nearest `pyproject.toml` at or above the path you run, the same
+way pytest finds its rootdir. To try another judge for **one run**, override it.
+The override is never remembered: the next plain `nightward run` and every MCP run
+go back to the committed judge.
+
 ```bash
-nightward run . --judge anthropic:claude-haiku-4-5   # real LLM (pip install nightward[judge])
-nightward run . --judge persona:editor               # deterministic, key-free (see below)
-NIGHTWARD_JUDGE=anthropic:claude-haiku-4-5 nightward run .   # or via env
+nightward run . --judge persona:strict                        # this run only
+NIGHTWARD_JUDGE=persona:strict nightward run .                # same, via env (CLI only)
 ```
 
 The `persona:*` judges are deterministic and need no key. Both judging personas
 **fail closed**: a change to any digit or number, sign, currency or unit symbol,
 operator (`+ - < > = !=` ...), emoji, negation word, JSON key, or value type
-(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT. In structured payloads
-only string values are compared loosely.
+(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT.
 
-| persona | rules SAME when... | use it for |
+Only natural-language **prose** is compared loosely. Everything else is compared
+exactly:
+
+- a string with no whitespace: ids, enums, currency and event codes, URLs
+  (`acct_XyZwQ`, `usd`, `REFUND`, `charge.refunded`);
+- code and markup: a string containing `= { } [ ] < > | ` * ` or an indented line
+  (Python, YAML, Markdown tables);
+- a string that is a JSON object or array, such as a tool call's `arguments`. It is
+  compared as parsed JSON: keys, types and literals count, and JSON on one side only
+  (`True` vs `true`) is a change.
+
+Inside prose, line breaks count, and identifier-like words keep their case:
+mixed case (`iPhone`), ALL CAPS (`USD`), or words joined by `_ . / - @ :`.
+In structured payloads only string values are compared loosely, and only when
+they are prose.
+
+| persona | rules prose SAME when... | use it for |
 |---|---|---|
-| `persona:editor` | only letter case, whitespace, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
 | `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
 | `persona:strict` | never | forcing every mismatch to stay breached |
 
@@ -317,13 +367,24 @@ resolves `path` and `dir` against its own working directory.
 | `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated) | runs the tests, captures behaviors, recomputes the boundary |
 | `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
 
-Both return the `status --json` shape: `boundary` (`intact` / `breached` /
-`unknown`), `unapproved`, `changes` (`name`, `kind`, `group`, plus `judged`,
-`judge_model`, `judge_reason` when a judge ruled), `judged_same`, `stale`,
-`generated_at`, and `judge`. `nightward_run` adds `warnings`: `skipped`, `failed`,
-`pytest_returncode`, and `pytest_output_tail` (pytest's last lines, so the agent can
-see why tests failed). The agent is done when `boundary` is `"intact"` and `stale`
-is false.
+Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
+`kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled),
+`judged_same`, `stale`, `incomplete` (`{"failed": n, "errors": m}` or null),
+`generated_at`, and `judge`. `boundary` is one of:
+
+| `boundary` | meaning | what the agent should do |
+|---|---|---|
+| `intact` | no unapproved change | done |
+| `breached` | unapproved changes | fix the code, or stop and ask a human to approve |
+| `incomplete` | nothing unapproved, but capture tests failed or errored | fix the failing tests (see `incomplete` and `pytest_output_tail`) |
+| `stale` | the baseline or capture moved since the report | call `nightward_run` again |
+| `unknown` | no report yet | call `nightward_run` |
+
+`nightward_run` adds `warnings`: `skipped`, `failed`, `errors`, `deselected`,
+`xfailed`, `scrubbed` (values the default scrubbers masked), `scrub_unmatched`
+(custom scrub rules that matched nothing), `pytest_returncode`, and
+`pytest_output_tail` (pytest's last lines, so the agent can see why tests failed).
+The agent is done when `boundary` is `"intact"` and `stale` is false.
 
 Rules for the loop:
 
@@ -333,11 +394,12 @@ Rules for the loop:
 - **The agent can't approve.** `approve` and `reject` are not exposed. If the agent
   that makes a change could also approve it, the gate would turn into a changelog.
   A human approves with the CLI and commits the baseline.
-- **The judge is the human's choice.** `semantic=True` behaviors are judged by
-  `nightward mcp --judge <provider:model>`, else `$NIGHTWARD_JUDGE` in the server's
-  environment, else the judge the last run used (for example the team's
-  `nightward run --judge persona:editor`). The tool has no judge argument, so the agent
-  can't pick a lenient judge, and it gets the same verdict as the CLI.
+- **The judge is the humans' committed choice.** Behaviors approved as `semantic=True`
+  are judged by `nightward mcp --judge <provider:model>` if the server was started
+  with it, else by the committed `[tool.nightward] judge`. MCP ignores
+  `$NIGHTWARD_JUDGE` and any `nightward run --judge` override, so a one-off demo run
+  can't change the agent's gate. The tool has no judge argument, so the agent can't
+  pick a lenient judge, and it gets the same verdict as a plain `nightward run`.
 
 ## Dashboard (`nightward view`)
 
@@ -348,6 +410,12 @@ status, counts, and grouped diffs with copy-paste `approve`/`reject` commands. I
 **read-only** (decisions stay in the CLI) and **static** (no backend), so it also
 deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered with
 `textContent` only — captured output never touches an HTML parser.
+
+The copy-paste commands quote every behavior name for the shell picked in
+"commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
+Windows). A name such as `x;touch${IFS}pwned` therefore arrives as one literal
+argument and never runs as code. When a name has no safe form in the selected shell
+(`%` or `!` in cmd.exe), the dashboard says so and offers no command.
 
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data
@@ -380,6 +448,11 @@ changed** — nothing more. Read these four limits before trusting the green lig
    (unsure → DIFFERENT), failures fall back to exact comparison, and every
    ruling is recorded in the committed `judge_verdicts.json` for human review.
    If a behavior must never be judged leniently, don't mark it `semantic=True`.
+   Captured output is untrusted input to an LLM judge (it may quote retrieved
+   documents or user text). The prompt inserts each output once, verbatim, in a
+   block tagged with a fresh random id the text can't contain, and tells the model
+   the blocks are data. That is a mitigation, not a guarantee, which is one more
+   reason to review the rulings.
 4. **Normalization defines "the same".** Default timestamp/UUID scrubbing, key
    order and JSON key coercion erase some differences by design — see
    [What nightward normalizes](#what-nightward-normalizes-what-counts-as-the-same-payload).

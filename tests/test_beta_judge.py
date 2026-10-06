@@ -108,18 +108,33 @@ def test_cli_run_warns_when_the_judge_is_unavailable(tmp_path):
 # --- R1-LLM-03: MCP nightward_run judges like the team's CLI run ---------------
 
 
-def test_mcp_run_reuses_the_judge_of_the_last_run(tmp_path, monkeypatch):
-    from nightward import mcp_server
-    monkeypatch.delenv("NIGHTWARD_JUDGE", raising=False)
-    path, dir_, _store = _approved_project(tmp_path)
-    monkeypatch.setenv("REPLY", REWORDED)
-    assert execute_run(path, dir_, judge_spec="persona:editor")["report"]["boundary"] == "intact"
+def _pyproject(tmp_path, judge: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(f'[tool.nightward]\njudge = "{judge}"\n',
+                                             encoding="utf-8")
 
+
+def test_mcp_run_uses_the_committed_project_judge(tmp_path, monkeypatch):
+    # R2-LLM-02 (D14): the agent's judge is the committed project setting.
+    from nightward import mcp_server
+    monkeypatch.setattr(mcp_server, "_server_judge", None)
+    path, dir_, _store = _approved_project(tmp_path)
+    _pyproject(tmp_path, "persona:editor")
+    monkeypatch.setenv("REPLY", REWORDED)
     out = mcp_server.run_tool(path, dir_)
-    assert out["boundary"] == "intact"                 # same verdict as the CLI
+    assert out["boundary"] == "intact"
     assert out["judge"]["spec"] == "persona:editor"
-    meta = json.loads((tmp_path / ".nightward" / "run_meta.json").read_text(encoding="utf-8"))
-    assert meta["judge"] == "persona:editor"           # not erased by the agent's run
+
+
+def test_mcp_never_inherits_a_cli_override_or_env(tmp_path, monkeypatch):
+    # R2-LLM-02: one `--judge persona:lenient` demo used to become the agent's judge.
+    from nightward import mcp_server
+    monkeypatch.setattr(mcp_server, "_server_judge", None)
+    path, dir_, _store = _approved_project(tmp_path)
+    monkeypatch.setenv("REPLY", "Your refund of $50 has been denied.")
+    assert execute_run(path, dir_, judge_spec="persona:lenient")["report"]["boundary"] == "intact"
+    monkeypatch.setenv("NIGHTWARD_JUDGE", "persona:lenient")
+    out = mcp_server.run_tool(path, dir_)
+    assert out["boundary"] == "breached" and out["judge"] is None
 
 
 def test_mcp_server_judge_is_set_by_the_human(tmp_path, monkeypatch):
@@ -208,3 +223,87 @@ def test_dashboard_data_lists_judged_same(tmp_path, monkeypatch):
     data = json.loads((out / "data.json").read_text(encoding="utf-8"))
     assert [it["name"] for it in data["report"]["judged_same"]] == ["reply.refund"]
     assert "report.judged_same" in (out / "app.js").read_text(encoding="utf-8")
+
+
+# --- R2-LLM-05 (D14): the semantic flag is part of the approved identity -----
+
+
+def _flip_pair(old_text, new_text, old_semantic, new_semantic):
+    from nightward.core.behavior import Behavior
+    return ({"p": Behavior("p", old_text, group="g", semantic=old_semantic)},
+            {"p": Behavior("p", new_text, group="g", semantic=new_semantic)})
+
+
+def test_turning_semantic_on_is_a_change_and_is_not_judged(tmp_path, monkeypatch):
+    import nightward.judge as judge_mod
+    from nightward.core.diff import CHANGED, compare
+
+    def explode(model, old, new):
+        raise AssertionError("an exact baseline must not be judged")
+
+    monkeypatch.setitem(judge_mod._BACKENDS, "persona", explode)
+    judge = Judge("persona:lenient", cache_path=tmp_path / "c.json")
+    [c] = compare(*_flip_pair("Refunds need approval.", "refunds need approval",
+                              False, True), judge=judge)
+    assert c.kind == CHANGED and not c.judged
+    assert "semantic: False -> True" in c.diff_text
+
+
+def test_semantic_flip_alone_is_a_change(tmp_path):
+    from nightward.core.diff import CHANGED, compare
+    for old, new in ((False, True), (True, False)):
+        [c] = compare(*_flip_pair("same", "same", old, new))
+        assert c.kind == CHANGED and f"semantic: {old} -> {new}" in c.diff_text
+
+
+def test_judge_runs_only_when_baseline_and_capture_are_semantic(tmp_path):
+    from nightward.core.diff import UNCHANGED, compare
+    judge = Judge("persona:editor", cache_path=tmp_path / "c.json")
+    [c] = compare(*_flip_pair("Refund approved.", "refund approved", True, True), judge=judge)
+    assert c.kind == UNCHANGED and c.judged
+
+
+# --- R2-LLM-02 (D14): the judge is a committed project setting ---------------
+
+
+def test_project_judge_reads_the_nearest_pyproject(tmp_path):
+    from nightward.config import project_judge
+    _pyproject(tmp_path, "persona:editor")
+    (tmp_path / "tests").mkdir()
+    assert project_judge(tmp_path / "tests") == "persona:editor"
+    assert project_judge(tmp_path) == "persona:editor"
+
+
+def test_project_judge_none_without_setting(tmp_path):
+    from nightward.config import project_judge
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n', encoding="utf-8")
+    assert project_judge(tmp_path) is None
+
+
+@pytest.mark.parametrize("body,match", [
+    ('[tool.nightward]\njudge = "persona:edtior"\n', "edtior"),
+    ("[tool.nightward]\njudge = 3\n", "provider:model"),
+    ("[tool.nightward\n", "pyproject.toml"),
+])
+def test_project_judge_errors_name_the_file(tmp_path, body, match):
+    from nightward.config import project_judge
+    (tmp_path / "pyproject.toml").write_text(body, encoding="utf-8")
+    with pytest.raises(NightwardError, match=match) as exc:
+        project_judge(tmp_path)
+    assert "pyproject.toml" in str(exc.value)
+
+
+def test_cli_run_uses_project_judge_and_override_is_not_inherited(tmp_path):
+    import os
+    _project(tmp_path)
+    assert cli("run", ".", cwd=tmp_path).returncode == 0
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    _pyproject(tmp_path, "persona:editor")
+    env = {k: v for k, v in os.environ.items() if k != "NIGHTWARD_JUDGE"}
+    env["REPLY"] = REWORDED
+    r = cli("run", ".", cwd=tmp_path, env=env)
+    assert "intact" in r.stdout and "persona:editor" in r.stdout   # says which judge
+    env["REPLY"] = "Your refund of $50 has been denied."
+    assert "intact" in cli("run", ".", "--judge", "persona:lenient", cwd=tmp_path,
+                           env=env).stdout
+    assert "breached" in cli("run", ".", cwd=tmp_path, env=env).stdout   # back to editor

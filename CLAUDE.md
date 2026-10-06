@@ -219,6 +219,11 @@ surface; a guard test freezes this). CSP meta forbids inline script (hence the
 external app.js). `fetch` is CORS-blocked on `file://`, so local viewing goes
 through `--serve`. The dashboard is **read-only** (approve/reject stay in the
 CLI). States intact/breached + `no-baseline`/`no-report` are first-class.
+The clipboard is the other injection surface: behavior names come from test
+code, and the copy-paste commands land in the approver's shell. Never build a
+command from a raw name. `collect_data` emits `data.quoted` (per-shell forms
+from `shellquote.py`, tested against real sh/PowerShell/cmd), and `app.js`
+`cliCommand` uses only those; a name with no safe form gives no command.
 Never publish a real `.nightward/` store to a public site — the only publish
 path is clean-room synthetic data (`scripts/build_demo.py`).
 Design rationale: `docs/superpowers/specs/2026-06-05-nightward-view-dashboard-design.md`.
@@ -238,10 +243,14 @@ surface, and tests freeze that approve is absent
 `execute_run(capture_output=True)` so pytest stdout can't break the MCP
 protocol channel (diagnostics to stderr only). `mcp` is an optional extra;
 tool functions don't depend on the SDK, so they're testable without it.
-**The judge is the human's choice too**: `nightward_run` takes no judge argument
-(an agent could pick `persona:lenient`); it uses `nightward mcp --judge`, else
-`$NIGHTWARD_JUDGE`, else the judge recorded in run_meta by the last run, so it
-gives the same verdict as the team's CLI run (`tests/test_beta_judge.py::test_mcp_*`).
+**The judge is a committed project decision (D14)**: `nightward_run` takes no
+judge argument (an agent could pick `persona:lenient`); it uses `nightward mcp
+--judge`, else `[tool.nightward] judge` in the nearest pyproject.toml
+(`config.project_judge`). Never `$NIGHTWARD_JUDGE` or run_meta: a CLI `--judge` is a
+one-run override and must not leak into the agent's gate
+(`tests/test_beta_judge.py::test_mcp_*`). run_meta's judge exists only so `approve`
+recomputes with the verdicts of the report the human reviewed. The judge runs only on
+behaviors approved as semantic; flipping the flag is CHANGED.
 Design rationale: `docs/superpowers/specs/2026-06-07-nightward-mcp-agent-gate-design.md`.
 
 ---

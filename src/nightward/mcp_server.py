@@ -6,9 +6,9 @@ NOT import mcp, so the gate logic stays testable without the optional dependency
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from .config import project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
@@ -29,11 +29,11 @@ def configure(judge: str | None = None) -> None:
     _server_judge = judge
 
 
-def _judge_spec(dir: str) -> str | None:
-    # Server option > $NIGHTWARD_JUDGE > the judge of the last run (e.g. the
-    # team's `nightward run --judge`), so the agent sees the CLI's verdict.
-    return (_server_judge or os.environ.get("NIGHTWARD_JUDGE")
-            or Store(Path(dir)).load_run_meta().get("judge"))
+def _judge_spec(path: str) -> str | None:
+    # The server option, else the committed [tool.nightward] judge (D14). Never
+    # $NIGHTWARD_JUDGE or the last run's judge: a human's one-off
+    # `nightward run --judge persona:lenient` must not become the agent's gate.
+    return _server_judge or project_judge(path.split("::", 1)[0])
 
 
 def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> dict:
@@ -42,19 +42,27 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     Call this after every code edit: nightward_status only reports the last run.
     path: what pytest runs (relative to the server's working directory);
     dir: the nightward store; timeout: seconds before pytest is stopped (the
-    capture is then left untouched and the last report invalidated).
-    Returns {boundary: intact|breached|unknown, unapproved, changes: [{name,
-    kind, group, judged...}], judged_same, stale, generated_at, judge, warnings:
-    {skipped, failed, scrub_unmatched (custom scrub rules that matched
-    nothing), pytest_returncode, pytest_output_tail}}. Done means
-    boundary == "intact" and stale is false. Behaviors captured with
-    semantic=True are judged by the judge the human configured (server
-    --judge, $NIGHTWARD_JUDGE, or the last run's judge); "judge" says which,
-    and why it was unavailable if it was. This tool cannot approve changes:
-    a human does that with the nightward CLI.
+    store is then left untouched and the last report invalidated).
+    Returns {boundary, unapproved, changes: [{name, kind, group, judged,
+    judge_model, judge_reason}], judged_same, stale, incomplete, generated_at,
+    judge, warnings: {skipped, failed, errors, deselected, xfailed, scrubbed,
+    scrub_unmatched (custom scrub rules that matched nothing),
+    pytest_returncode, pytest_output_tail}}.
+    boundary is one of:
+      "intact"     done: no unapproved change;
+      "breached"   unapproved changes: fix the code, or ask a human to approve;
+      "incomplete" nothing unapproved, but capture tests failed or errored
+                   (see incomplete and pytest_output_tail): fix the tests;
+      "stale"      the baseline or capture moved since the report: run again;
+      "unknown"    no report yet: run.
+    Done means boundary == "intact" and stale is false. Behaviors approved with
+    semantic=True are judged by the judge the humans committed
+    ([tool.nightward] judge in pyproject.toml, or `nightward mcp --judge`);
+    "judge" says which, and why it was unavailable if it was. This tool cannot
+    approve changes: a human does that with the nightward CLI.
     """
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
-                         judge_spec=_judge_spec(dir), command="nightward_run (MCP)")
+                         judge_spec=_judge_spec(path), command="nightward_run (MCP)")
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],
@@ -74,9 +82,12 @@ def status_tool(dir: str = ".nightward") -> dict:
     """Read the boundary signal of the LAST nightward_run, without running tests.
 
     It does not see code edits made since that run: after changing code, call
-    nightward_run for a fresh verdict. stale=True means the baseline changed
-    since that run, so its verdict can't be trusted either; generated_at says
-    when it ran. A missing report gives boundary "unknown".
+    nightward_run for a fresh verdict. Same shape as nightward_run, without
+    warnings. boundary is "intact" (done), "breached" (unapproved changes),
+    "incomplete" (capture tests failed or errored; see incomplete), "stale"
+    (the baseline or capture moved since that run, so its verdict can't be
+    trusted: run again) or "unknown" (no report yet). generated_at says when
+    the run happened.
     """
     store = Store(Path(dir))
     report = store.load_report()
