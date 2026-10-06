@@ -169,6 +169,12 @@ normalization erases, because a change there never trips the gate:
   baseline file stores one escaped string, so its git diff is one long line -
   capture `text.splitlines()` when you want per-line git diffs too.
 
+**Names are file names.** A behavior name becomes `<store>/baseline/<name>.approved.json`:
+no whitespace or path characters, at most 200 characters, and on Windows the whole store
+file path must stay under 260 characters (Git for Windows can't add longer paths without
+`core.longpaths`). A name that would cross that limit fails its test at capture time -
+keep names short when the project lives in a deep directory.
+
 **Non-JSON values are rejected, never coerced.** A capture fails its test with the
 path, the type and a fix, e.g. `behavior 'daily': payload is not JSON-serializable: value at
 $.units is numpy.int64, which is not JSON - use .item() (or int()/float()/bool())`.

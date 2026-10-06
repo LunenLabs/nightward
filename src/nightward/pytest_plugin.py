@@ -7,6 +7,7 @@ it. Behaviors are flushed to .nightward/pending only when --nightward-record is 
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 
 import pytest
@@ -17,9 +18,29 @@ from .core.lock import read_lock, store_lock
 from .errors import NightwardError
 from .scrub import scrub_counted, unmatched_rules
 
+# Windows tools (Git for Windows without core.longpaths, apps without
+# LongPathsEnabled) refuse paths of MAX_PATH (260) characters or more.
+_WINDOWS = os.name == "nt"
+_MAX_PATH = 259
+
+
+def _check_path_length(store_root: Path, name: str) -> None:
+    # Longest file a behavior gets: <store>/pending.tmp/<name>.received.json
+    # (baseline/ and rejected/ are a little shorter).
+    longest = len(str(store_root.resolve() / "pending.tmp" / f"{name}.received.json"))
+    if _WINDOWS and longest > _MAX_PATH:
+        fit = len(name) - (longest - _MAX_PATH)
+        raise NightwardError(
+            f"behavior name {name!r} is too long for Windows paths here: its store file "
+            f"would be {longest} characters (limit {_MAX_PATH}; git can't add it without "
+            f"core.longpaths). Use a shorter name (at most {max(fit, 0)} characters at "
+            f"this location) or a shorter project path.")
+
 
 class Recorder:
-    def __init__(self) -> None:
+    def __init__(self, store_root: Path | None = None) -> None:
+        # Set when recording: names are checked against the store's path length.
+        self.store_root = store_root
         self.behaviors: list[Behavior] = []
         self._seen: dict[str, str] = {}  # casefolded name -> name as captured
         self.masked: dict[str, int] = {}  # name -> values the default scrubbers masked
@@ -58,6 +79,8 @@ class Recorder:
             semantic: bool = False, source: str | None = None,
             scrub: bool = True) -> None:
         validate_name(name)
+        if self.store_root is not None:
+            _check_path_length(self.store_root, name)
         # Names are filenames: "Total" and "total" are the same file on
         # Windows/macOS, so one would silently overwrite the other.
         prior = self._seen.get(name.casefold())
@@ -103,7 +126,9 @@ def pytest_configure(config):
         raise pytest.UsageError(
             "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
         )
-    config._nightward_recorder = Recorder()
+    recording = config.getoption("--nightward-record")
+    config._nightward_recorder = Recorder(
+        Path(config.getoption("--nightward-dir")) if recording else None)
     config.pluginmanager.register(config._nightward_recorder, "nightward-recorder")
 
 

@@ -426,3 +426,19 @@ def test_run_passes_pytest_args_through(approved_x):
     assert meta["deselected"] == 1 and meta["narrowed"] is True
     bad = cli("run", ".", "--dir", str(tw), "--", "--nightward-dir", "elsewhere", cwd=tmp_path)
     assert bad.returncode == 2 and "--nightward" in bad.stderr
+
+
+# ---- R2-OPS-04: a store path past Windows MAX_PATH fails at capture time ---------
+
+def test_name_too_long_for_windows_paths_fails_at_capture(tmp_path, monkeypatch):
+    from nightward import pytest_plugin
+    from nightward.pytest_plugin import Recorder
+    monkeypatch.setattr(pytest_plugin, "_WINDOWS", True)
+    deep = tmp_path / ("d" * (190 - len(str(tmp_path)))) / ".nightward"
+    name = "k8s.deployment." + "very-long-service-name-" * 3 + "prod"
+    with pytest.raises(NightwardError, match="too long for Windows") as exc:
+        Recorder(deep).add(name, {"replicas": 3})
+    assert name in str(exc.value) and "shorter" in str(exc.value)
+    Recorder(deep).add("k8s.prod", {"replicas": 3})            # short names still fine
+    monkeypatch.setattr(pytest_plugin, "_WINDOWS", False)
+    Recorder(deep).add(name, {"replicas": 3})                  # POSIX has no such limit

@@ -98,7 +98,8 @@ def test_checkout(behavior):
 ```
 
 - `name` doubles as a filename → `validate_name` enforces: no whitespace /
-  control chars / path chars (`/\<>:"|?*`), ≤200 chars, no `.`/`..`, must not
+  control chars / path chars (`/\<>:"|?*`), ≤200 chars (and, on Windows, a store
+  file path under 260 chars - checked at capture time), no `.`/`..`, must not
   end with `.`. Unicode (e.g. Hangul) is allowed.
 - `payload` must be JSON-serializable (dict/list/str/number/bool/None); the error names the JSON path, the type and a conversion hint (`core/behavior._find_unjsonable`).
   `NaN`/`Inf` rejected (`NightwardError`). Duplicate names rejected.
