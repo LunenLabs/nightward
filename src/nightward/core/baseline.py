@@ -30,8 +30,14 @@ from .behavior import Behavior, canonical_json, validate_name
 def _atomic_write(path: Path, text: str) -> None:
     """Write via a sibling temp file + os.replace, so readers never see a torn file."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    _write_lf(tmp, text)
     os.replace(tmp, path)
+
+
+def _write_lf(path: Path, text: str) -> None:
+    # Always "\n": write_text would emit CRLF on Windows, and a baseline
+    # committed from Linux would then diff on every line (R2-OPS-05).
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def digest(behaviors: dict[str, Behavior]) -> str:
@@ -96,9 +102,7 @@ class Store:
     # ---- pending (this run) --------------------------------------------
     def write_pending(self, b: Behavior) -> None:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
-        self._file(self.pending_dir, b.name, "received").write_text(
-            _file_text(b), encoding="utf-8"
-        )
+        _write_lf(self._file(self.pending_dir, b.name, "received"), _file_text(b))
 
     def clear_pending(self) -> None:
         if self.pending_dir.exists():
@@ -117,9 +121,7 @@ class Store:
         staging.mkdir(parents=True)
         try:
             for b in behaviors:
-                self._file(staging, b.name, "received").write_text(
-                    _file_text(b), encoding="utf-8"
-                )
+                _write_lf(self._file(staging, b.name, "received"), _file_text(b))
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise

@@ -442,3 +442,17 @@ def test_name_too_long_for_windows_paths_fails_at_capture(tmp_path, monkeypatch)
     Recorder(deep).add("k8s.prod", {"replicas": 3})            # short names still fine
     monkeypatch.setattr(pytest_plugin, "_WINDOWS", False)
     Recorder(deep).add(name, {"replicas": 3})                  # POSIX has no such limit
+
+
+# ---- R2-OPS-05: store files are LF on every OS ------------------------------------
+
+def test_store_files_are_written_with_lf(approved_app):
+    tmp_path, tw = approved_app
+    write(tmp_path / "app.py", APP.replace('"dev": 1', '"dev": 2'))
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("reject", "replicas", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "replicas", "--dir", str(tw), cwd=tmp_path)
+    files = [p for p in tw.rglob("*.json") if p.is_file()]
+    assert any(p.parent.name == "baseline" for p in files)
+    for p in files:
+        assert b"\r\n" not in p.read_bytes(), p
