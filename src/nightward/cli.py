@@ -341,11 +341,15 @@ def run(ctx: typer.Context,
                           "behaviors they capture appear as REMOVED; blast radius may show "
                           "false positives")
     scrubbed = result["scrubbed"]
-    if scrubbed["values"]:
+    if scrubbed["values"] and scrubbed.get("changed", True):
         # Masking is noise control, but it can also hide a real datetime change.
+        # Said again only when the set of masked behaviors changes.
+        names = scrubbed.get("names") or []
+        shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         err_console.print(f"[dim]note: default scrubbers masked {scrubbed['values']} value(s) "
-                          f"in {scrubbed['behaviors']} behavior(s) (timestamps/uuids) - opt "
-                          f"out with scrub=False[/dim]", soft_wrap=True)
+                          f"in {scrubbed['behaviors']} behavior(s) (timestamps/uuids)"
+                          f"{': ' + escape(shown) if shown else ''} - opt out with "
+                          f"scrub=False[/dim]", soft_wrap=True)
     for rule in result["scrub_unmatched"]:
         # The user believes this noise is handled; it isn't (R1-WEB-03).
         why = ("no captured dict has that key" if rule.startswith("register_field(") else

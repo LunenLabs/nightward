@@ -456,3 +456,21 @@ def test_store_files_are_written_with_lf(approved_app):
     assert any(p.parent.name == "baseline" for p in files)
     for p in files:
         assert b"\r\n" not in p.read_bytes(), p
+
+
+# ---- polish: the masked-values note names behaviors and repeats only on change ----
+
+def test_masked_note_names_behaviors_and_repeats_only_on_change(tmp_path):
+    body = ('import os\n'
+            'def test_t(behavior):\n'
+            '    behavior("seen", {"at": "2024-01-05T09:00:00Z"}, group="g")\n'
+            '    if os.environ.get("MORE"):\n'
+            '        behavior("due", {"at": "2024-02-05T09:00:00Z"}, group="g")\n')
+    write(tmp_path / "test_t.py", body)
+    tw = tmp_path / ".tw"
+    first = cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    assert "masked 1 value(s) in 1 behavior(s)" in first.stderr and "seen" in first.stderr
+    again = cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    assert "masked" not in again.stderr
+    more = cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"MORE": "1"})
+    assert "masked 2 value(s) in 2 behavior(s)" in more.stderr and "due" in more.stderr

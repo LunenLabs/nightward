@@ -230,10 +230,16 @@ def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
     meta |= _scope(session, meta["deselected"])
     # The test that LAST captured each behavior, carried across runs: a capture
     # moved to another test must not leave its old test as removal proof.
-    previous = store.load_run_meta().get("sources")
+    last = store.load_run_meta()
+    previous = last.get("sources")
     meta["sources"] = {**(previous if isinstance(previous, dict) else {}),
                        **{b.name: b.source for b in rec.behaviors if b.source}}
-    meta["scrubbed"] = {"values": sum(rec.masked.values()), "behaviors": len(rec.masked)}
+    # Which behaviors the default scrubbers touched; "changed" lets `run` show
+    # its note when that set moves instead of on every run.
+    names = sorted(rec.masked)
+    was = (last.get("scrubbed") or {}).get("names")
+    meta["scrubbed"] = {"values": sum(rec.masked.values()), "behaviors": len(names),
+                        "names": names, "changed": names != was}
     # A custom rule that never fired leaves the user believing noise is handled.
     meta["scrub_unmatched"] = unmatched_rules()
     # Written last: its presence proves to the runner that THIS run's flush landed.
