@@ -146,6 +146,10 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   behavior whose current pending (or, for a removal, baseline) state matches its
   `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
   `approve <name>` overrides and deletes the record.
+- **`nightward report` = verdict without pytest.** `runner.recompute_capture` trusts
+  `pending/` only if it matches run_meta `pending_digest` (written by the plugin in
+  the same flush), then recomputes under the lock. `run PATH -- <pytest args>`
+  passes args through (`--nightward-*` rejected; ours go last so they win).
 - **Approve what was reviewed (D10).** CLI `run`, `review` and `view` (never MCP)
   write `reviewed.json` = the `pending_digest` a human just saw; `approve` refuses
   unless `digest(pending)` still matches, so an agent's run between review and

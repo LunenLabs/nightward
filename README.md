@@ -52,6 +52,8 @@ nightward view              # builds a static site + serves it on localhost
 nightward init    create the store and add .gitignore rules (once per repo; `run`
                   warns while its per-run files are not git-ignored)
 nightward run     re-run tests → capture → compute blast radius
+nightward report  verdict from an existing `pytest --nightward-record` capture
+                  (no pytest run) - see "Using the plugin directly" below
 nightward review  show changed behaviors with diffs; scope with `review NAME...` or
                   `--group G`; each diff shows 60 lines (`--max-lines N`, 0 = all)
 nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
@@ -116,6 +118,23 @@ pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 One writer per store: `run` (and MCP `nightward_run`), `approve` and `reject` hold
 `.nightward/.lock`, so a second concurrent writer (`tox -p`, an agent next to a
 human) fails fast and names the holder instead of corrupting the capture.
+
+## Using the plugin directly in an existing pytest job
+
+If CI already runs pytest (with its own `-m`, `-p`, `--timeout` ...), capture in that
+same run and turn it into a verdict without running the suite twice:
+
+```bash
+pytest -m "not gpu" --nightward-record     # the plugin writes .nightward/pending + run_meta
+nightward report                           # verdict from that capture (no pytest run)
+nightward gate
+```
+
+`nightward report` trusts the capture only if `run_meta.json` proves `pending/` is
+exactly what a complete pytest session flushed; a failed/errored session exits 1 like
+`run`. Or let nightward drive pytest and pass the arguments through:
+`nightward run tests -- -m "not gpu" -p no:randomly`. Either way a narrowed run
+(`-k`, `-m`, deselection, a test id) never proves a removal.
 
 ## What nightward normalizes (what counts as "the same payload")
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from .core.baseline import Store
+from .core.baseline import Store, digest
 from .core.behavior import Behavior, validate_name
 from .core.lock import read_lock, store_lock
 from .errors import NightwardError
@@ -199,6 +199,9 @@ def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
     stats = reporter.stats if reporter else {}
     meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
     meta["completed"] = rec.completed()
+    # Ties run_meta to exactly this flush: `nightward report` trusts pending/
+    # only when it still matches (R2-DATA-04).
+    meta["pending_digest"] = digest({b.name: b for b in rec.behaviors})
     meta |= _scope(session, meta["deselected"])
     # The test that LAST captured each behavior, carried across runs: a capture
     # moved to another test must not leave its old test as removal proof.

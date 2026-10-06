@@ -347,3 +347,82 @@ def test_incomplete_run_summary_says_incomplete(tmp_path):
     assert r.returncode == 1
     assert "Boundary: incomplete (1 failed capture test" in r.stdout, r.stdout
     assert "intact" not in r.stdout
+
+
+# ---- R2-DATA-04: a verdict from an existing capture; pytest-arg passthrough ------
+
+TEST_X = ('import os, pytest\n'
+          'def test_x(behavior):\n'
+          '    behavior("x", {"v": int(os.environ.get("V", "1"))}, group="g")\n'
+          '@pytest.mark.slow\n'
+          'def test_slow(behavior):\n'
+          '    behavior("slow", 1, group="g")\n'
+          'def test_bad(behavior):\n'
+          '    if os.environ.get("BAD"):\n'
+          '        raise RuntimeError("boom")\n')
+
+
+@pytest.fixture
+def approved_x(tmp_path):
+    write(tmp_path / "test_x.py", TEST_X)
+    write(tmp_path / "pytest.ini", "[pytest]\nmarkers =\n    slow: slow\n")
+    tw = tmp_path / ".tw"
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    return tmp_path, tw
+
+
+def record(tmp_path, tw, *extra, env=None):
+    return subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                           "--nightward-record", "--nightward-dir", str(tw), *extra],
+                          cwd=str(tmp_path), capture_output=True, text=True,
+                          env={**os.environ, **(env or {})})
+
+
+def test_report_turns_a_plugin_capture_into_a_verdict(approved_x):
+    tmp_path, tw = approved_x
+    assert record(tmp_path, tw, env={"V": "2"}).returncode == 0
+    r = cli("report", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "breached" in r.stdout and "x" in r.stdout
+    gate = cli("gate", "--dir", str(tw), cwd=tmp_path)
+    assert gate.returncode == 1 and "breached" in gate.stdout     # a verdict, not "stale"
+    assert cli("approve", "x", "--dir", str(tw), cwd=tmp_path).returncode == 0
+
+
+def test_report_of_an_incomplete_session_exits_1(approved_x):
+    tmp_path, tw = approved_x
+    record(tmp_path, tw, env={"BAD": "1"})
+    r = cli("report", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 1 and "incomplete" in r.stdout + r.stderr
+
+
+def test_report_refuses_a_capture_no_session_recorded(approved_x):
+    tmp_path, tw = approved_x
+    record(tmp_path, tw, env={"V": "2"})
+    f = tw / "pending" / "x.received.json"
+    f.write_text(f.read_text("utf-8").replace('"v": 2', '"v": 3'), encoding="utf-8")
+    r = cli("report", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 2 and "does not match" in r.stderr
+    (tw / "run_meta.json").unlink()
+    r = cli("report", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 2 and "pytest --nightward-record" in r.stderr
+
+
+def test_narrowed_plugin_capture_proves_no_removal(approved_x):
+    tmp_path, tw = approved_x
+    record(tmp_path, tw, "-m", "not slow")
+    cli("report", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert (tw / "baseline" / "slow.approved.json").exists()
+    assert "narrowed" in r.stdout
+
+
+def test_run_passes_pytest_args_through(approved_x):
+    tmp_path, tw = approved_x
+    r = cli("run", ".", "--dir", str(tw), "--", "-m", "not slow", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    meta = json.loads((tw / "run_meta.json").read_text("utf-8"))
+    assert meta["deselected"] == 1 and meta["narrowed"] is True
+    bad = cli("run", ".", "--dir", str(tw), "--", "--nightward-dir", "elsewhere", cwd=tmp_path)
+    assert bad.returncode == 2 and "--nightward" in bad.stderr

@@ -17,7 +17,7 @@ from .core.baseline import Store, digest
 from .core.diff import REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
-from .runner import execute_run, is_stale, judge_from_meta, recompute
+from .runner import execute_run, is_stale, judge_from_meta, recompute, recompute_capture
 from .signal import status_payload
 from .view import build_site
 
@@ -169,7 +169,8 @@ def _incomplete_short(incomplete: dict) -> str:
 
 
 STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture changed since "
-                 "the last report; re-run `nightward run`")
+                 "the last report; re-run `nightward run` (or `nightward report` after "
+                 "`pytest --nightward-record`)")
 
 
 def _mark_reviewed(store: Store, report: dict | None, via: str) -> None:
@@ -311,15 +312,20 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                   "then `nightward run <path>` and `nightward approve --all`.")
 
 
-@app.command()
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 @handle_errors
-def run(path: str = typer.Argument(".", help="Path passed to pytest"),
+def run(ctx: typer.Context,
+        path: str = typer.Argument(".", help="Path passed to pytest"),
         dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"),
         judge: str | None = typer.Option(
             None, help="Semantic judge for semantic=True behaviors, as provider:model "
                        "(e.g. anthropic:claude-haiku-4-5, persona:editor). "
                        "Default: $NIGHTWARD_JUDGE")):
-    """Re-run tests, capture behaviors, compute the blast radius."""
+    """Re-run tests, capture behaviors, compute the blast radius.
+
+    Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
+    (a -k/-m/deselecting run never proves a removal).
+    """
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
         # pytest finds the rootdir from anywhere; a second store here would
@@ -327,7 +333,8 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
         raise NightwardError(_missing_store_message(dir))
     console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
                   f"--nightward-dir {escape(dir)}[/dim]")
-    result = execute_run(path, dir, judge_spec=judge)
+    extra = [a for a in ctx.args if a != "--"]
+    result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
     not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
     if not_run:
         err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
@@ -352,14 +359,30 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
     _warn_unless_ignored(Path(dir) / "report.json",
                          "per-run state (pending/, report.json, run_meta.json) must not be "
                          "committed")
-    incomplete = result["report"].get("incomplete")
-    if incomplete or result["pytest_returncode"] == 1:
+    _exit_if_incomplete(result["report"], result["pytest_returncode"])
+
+
+def _exit_if_incomplete(report: dict, pytest_returncode: int = 0) -> None:
+    incomplete = report.get("incomplete")
+    if incomplete or pytest_returncode == 1:
         # A failing capture test means behaviors are missing from the blast
         # radius; a green exit here would let CI merge it (`gate` fails too).
         detail = (_incomplete_text(incomplete) if incomplete
                   else "pytest reported failures - fix them and re-run `nightward run`")
         err_console.print(f"\n[red]capture incomplete:[/red] {detail}")
         raise typer.Exit(1)
+
+
+@app.command("report")
+@handle_errors
+def report_cmd(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
+    """Compute the verdict from the capture `pytest --nightward-record` already wrote,
+    without running pytest again (for CI jobs that run pytest themselves)."""
+    store = _existing_store(dir)
+    report = recompute_capture(store)
+    _print_summary(report)
+    _mark_reviewed(store, report, "report")
+    _exit_if_incomplete(report)
 
 
 NAMES_ARG = typer.Argument(None, help="Only these behaviors (default: all)",

@@ -76,10 +76,33 @@ def is_stale(store: Store, report: dict | None) -> bool:
             or report.get("pending_digest") != digest(store.load_pending()))
 
 
-def _pytest_cmd(path: str, dir: str, run_id: str) -> list[str]:
+def recompute_capture(store: Store) -> dict:
+    """The verdict for the capture already in pending/, without running pytest.
+
+    For CI that captures with `pytest --nightward-record` in its own test job
+    (R2-DATA-04). Trusted only when run_meta proves pending/ is exactly what a
+    complete pytest session flushed (the plugin records its digest), so a
+    hand-edited or half-written capture never becomes a verdict.
+    """
+    with store_lock(store.root, "nightward report"):
+        meta = store.load_run_meta()
+        if not meta.get("pending_digest"):
+            raise NightwardError(
+                f"no recorded capture session in {store.root} - capture first with "
+                f"`pytest --nightward-record` (or `nightward run`)")
+        if meta["pending_digest"] != digest(store.load_pending()):
+            raise NightwardError(
+                f"{store.pending_dir} does not match the last recorded capture session "
+                f"(edited by hand, or written by an older nightward) - capture again with "
+                f"`pytest --nightward-record` or `nightward run`")
+        return recompute(store, judge=judge_from_meta(store))
+
+
+def _pytest_cmd(path: str, dir: str, run_id: str, extra: list[str]) -> list[str]:
     # -B: no bytecode cache. Rewriting a test file between runs can otherwise
     # re-import a stale .pyc and silently capture OLD behavior (flaky in CI).
-    cmd = [sys.executable, "-B", "-m", "pytest", path,
+    # The user's args go first so ours (and "-n 0") win.
+    cmd = [sys.executable, "-B", "-m", "pytest", path, *extra,
            "--nightward-record", "--nightward-dir", dir,
            "--nightward-run-id", run_id, "-q"]
     # Capture needs one process: under xdist each worker sees only its share.
@@ -145,7 +168,8 @@ def _with_tail(msg: str, result: subprocess.CompletedProcess) -> str:
 
 def execute_run(path: str = ".", dir: str = ".nightward", *,
                 capture_output: bool = False, judge_spec: str | None = None,
-                timeout: float | None = None, command: str = "nightward run") -> dict:
+                timeout: float | None = None, command: str = "nightward run",
+                pytest_args: list[str] | None = None) -> dict:
     """Run pytest in a subprocess to capture behaviors, then recompute.
 
     capture_output=True keeps pytest's stdout off this process's stdout — required
@@ -156,12 +180,18 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     timeout (seconds) bounds the pytest run. Any run without a verified capture
     (abort, timeout, unrecorded flush) invalidates report.json. command names
     the holder in the store lock; a concurrent writer fails with NightwardError.
+    pytest_args are passed to pytest as-is (-m, -p, --timeout ...); a narrowed
+    run is recorded as such and never proves a removal (D13).
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched, pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can
     see why tests failed.
     """
     store = Store(Path(dir))
+    extra = list(pytest_args or ())
+    if any(a.startswith("--nightward") for a in extra):
+        raise NightwardError("pytest args may not set --nightward-* options - nightward "
+                             "run sets them itself (use --dir for the store)")
     if not Path(path.split("::", 1)[0]).exists():
         # pytest would say so too, but behind an exit code nightward can't tell
         # from a broken install (R1-OPS-08). E.g. an agent deleted the test dir.
@@ -176,16 +206,16 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     # One writer per store (D11): the pytest child flushes under this lock (it
     # recognizes the run id), and the recompute below stays inside it too.
     with store_lock(store.root, command, token=run_id):
-        return _run_locked(store, path, dir, run_id, spec, judge,
+        return _run_locked(store, path, dir, run_id, spec, judge, extra,
                            capture_output=capture_output, timeout=timeout)
 
 
-def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None, judge, *,
-                capture_output: bool, timeout: float | None) -> dict:
+def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None, judge,
+                extra: list[str], *, capture_output: bool, timeout: float | None) -> dict:
     try:
         # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
         # child inheriting it hangs on Windows while the server reads it.
-        result = subprocess.run(_pytest_cmd(path, dir, run_id), stdin=subprocess.DEVNULL,
+        result = subprocess.run(_pytest_cmd(path, dir, run_id, extra), stdin=subprocess.DEVNULL,
                                 capture_output=capture_output, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         store.invalidate_report()
