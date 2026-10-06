@@ -259,7 +259,7 @@ def test_semantic_flip_alone_is_a_change(tmp_path):
 def test_judge_runs_only_when_baseline_and_capture_are_semantic(tmp_path):
     from nightward.core.diff import UNCHANGED, compare
     judge = Judge("persona:editor", cache_path=tmp_path / "c.json")
-    [c] = compare(*_flip_pair("Approved.", "approved", True, True), judge=judge)
+    [c] = compare(*_flip_pair("Refund approved.", "refund approved", True, True), judge=judge)
     assert c.kind == UNCHANGED and c.judged
 
 

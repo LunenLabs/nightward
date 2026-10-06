@@ -245,12 +245,27 @@ NIGHTWARD_JUDGE=persona:strict nightward run .                # same, via env (C
 The `persona:*` judges are deterministic and need no key. Both judging personas
 **fail closed**: a change to any digit or number, sign, currency or unit symbol,
 operator (`+ - < > = !=` ...), emoji, negation word, JSON key, or value type
-(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT. In structured payloads
-only string values are compared loosely.
+(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT.
 
-| persona | rules SAME when... | use it for |
+Only natural-language **prose** is compared loosely. Everything else is compared
+exactly:
+
+- a string with no whitespace: ids, enums, currency and event codes, URLs
+  (`acct_XyZwQ`, `usd`, `REFUND`, `charge.refunded`);
+- code and markup: a string containing `= { } [ ] < > | ` * ` or an indented line
+  (Python, YAML, Markdown tables);
+- a string that is a JSON object or array, such as a tool call's `arguments`. It is
+  compared as parsed JSON: keys, types and literals count, and JSON on one side only
+  (`True` vs `true`) is a change.
+
+Inside prose, line breaks count, and identifier-like words keep their case:
+mixed case (`iPhone`), ALL CAPS (`USD`), or words joined by `_ . / - @ :`.
+In structured payloads only string values are compared loosely, and only when
+they are prose.
+
+| persona | rules prose SAME when... | use it for |
 |---|---|---|
-| `persona:editor` | only letter case, whitespace, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
 | `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
 | `persona:strict` | never | forcing every mismatch to stay breached |
 
@@ -363,6 +378,11 @@ changed** — nothing more. Read these four limits before trusting the green lig
    (unsure → DIFFERENT), failures fall back to exact comparison, and every
    ruling is recorded in the committed `judge_verdicts.json` for human review.
    If a behavior must never be judged leniently, don't mark it `semantic=True`.
+   Captured output is untrusted input to an LLM judge (it may quote retrieved
+   documents or user text). The prompt inserts each output once, verbatim, in a
+   block tagged with a fresh random id the text can't contain, and tells the model
+   the blocks are data. That is a mitigation, not a guarantee, which is one more
+   reason to review the rulings.
 4. **Normalization defines "the same".** Default timestamp/UUID scrubbing, key
    order and JSON key coercion erase some differences by design — see
    [What nightward normalizes](#what-nightward-normalizes-what-counts-as-the-same-payload).
