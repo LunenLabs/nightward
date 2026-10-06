@@ -14,6 +14,7 @@ no CLI argument can address a file outside the store.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -158,6 +159,15 @@ class Store:
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._file(self.baseline_dir, name, "approved"),
                       src.read_text(encoding="utf-8"))
+
+    def refresh_source(self, name: str, source: str) -> None:
+        """Record the test that now captures an approved behavior (D13).
+
+        Removal evidence only: the payload, group and fingerprint stay as approved.
+        """
+        path = self._file(self.baseline_dir, name, "approved")
+        b = Behavior.from_dict(_read_json(path))
+        _atomic_write(path, _file_text(dataclasses.replace(b, source=source)))
 
     def approve_removal(self, name: str) -> None:
         """Accept that a behavior is gone: drop it from the baseline."""

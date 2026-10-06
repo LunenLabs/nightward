@@ -102,11 +102,14 @@ A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
 so they read as REMOVED. That is why `approve --all` leaves removals alone. Each
 behavior records the test that captured it (`source`, never compared), and
-`--include-removed` only drops a removal when that test ran to completion this run
-without capturing it; the rest are kept and listed with the reason (a deleted test
-counts as "did not run" - approve such removals by name). Baselines from before
-sources existed need a run with nothing skipped, failed, errored, deselected or
-xfailed. Capture runs in a single process: `nightward run` forces `-n 0` if
+`--include-removed` only drops a removal that a **whole-suite** run proves: the run
+was not narrowed (no `-k`/`-m`, deselection or test-id argument, and every test file
+any baseline points at was collected) and every test known to capture the behavior
+ran to completion without capturing it. The rest are kept and listed with the reason
+(a deleted test counts as "did not run" - approve such removals by name). Baselines
+from before sources existed need a clean whole-suite run (nothing skipped, failed,
+errored, deselected or xfailed); `approve --all` backfills `source` into unchanged
+baselines whose capturing test moved. Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 One writer per store: `run` (and MCP `nightward_run`), `approve` and `reject` hold
 `.nightward/.lock`, so a second concurrent writer (`tox -p`, an agent next to a

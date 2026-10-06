@@ -207,3 +207,85 @@ def test_approve_refuses_when_only_an_agent_has_run(tmp_path, monkeypatch):
     assert r.returncode == 2 and "nightward review" in r.stderr
     assert cli("view", "--no-serve", "--dir", ".tw", cwd=tmp_path).returncode == 0
     assert cli("approve", "--all", "--dir", ".tw", cwd=tmp_path).returncode == 0
+
+
+# ---- R2-OPS-02 (D13): removal proof needs a whole-suite run and current sources --
+
+MOVED_V1 = ('def test_one(behavior):\n'
+            '    behavior("render.dev", "kind: Deployment\\nreplicas: 1\\n", group="render")\n'
+            '    behavior("render.meta", {"api": "apps/v1"}, group="render")\n')
+MOVED_V2 = ('import os, pytest\n'
+            'def test_one(behavior):\n'
+            '    behavior("render.meta", {"api": "apps/v1"}, group="render")\n'
+            '@pytest.mark.skipif(os.environ.get("CI_NO_K8S") == "1", reason="no schema")\n'
+            'def test_dev(behavior):\n'
+            '    behavior("render.dev", "kind: Deployment\\nreplicas: 1\\n", group="render")\n')
+
+
+def test_moved_capture_is_not_proven_removed_by_its_old_test(tmp_path):
+    write(tmp_path / "test_a.py", MOVED_V1)
+    tw = tmp_path / ".tw"
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    write(tmp_path / "test_a.py", MOVED_V2)
+    assert cli("run", ".", "--dir", str(tw), cwd=tmp_path).returncode == 0   # intact
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"CI_NO_K8S": "1"})
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert (tw / "baseline" / "render.dev.approved.json").exists()
+    assert "test_a.py::test_dev" in r.stdout
+
+
+def test_approve_all_backfills_sources_of_unchanged_behaviors(tmp_path):
+    write(tmp_path / "test_a.py", MOVED_V1)
+    tw = tmp_path / ".tw"
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    write(tmp_path / "test_a.py", MOVED_V2)
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "refreshed" in r.stdout
+    dev = json.loads((tw / "baseline" / "render.dev.approved.json").read_text("utf-8"))
+    assert dev["source"] == "test_a.py::test_dev"
+
+
+LEGACY = {"test_a.py": 'def test_x(behavior):\n    behavior("x", 1, group="g")\n',
+          "test_b.py": ('def test_y(behavior):\n    behavior("y", 2, group="g")\n'
+                        'def test_z(behavior):\n    behavior("z", 3, group="g")\n')}
+
+
+@pytest.fixture
+def legacy_store(tmp_path):
+    """A v0.2.0-style store: no `source` in the baseline, no run history."""
+    for name, body in LEGACY.items():
+        write(tmp_path / name, body)
+    tw = tmp_path / ".tw"
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
+    for f in (tw / "baseline").glob("*.json"):
+        data = json.loads(f.read_text("utf-8"))
+        data.pop("source", None)
+        f.write_text(json.dumps(data), encoding="utf-8")
+    (tw / "run_meta.json").unlink()
+    return tmp_path, tw
+
+
+@pytest.mark.parametrize("path", ["test_a.py", "test_b.py::test_y"])
+def test_legacy_partial_path_proves_no_removal(legacy_store, path):
+    tmp_path, tw = legacy_store
+    cli("run", path, "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert len(list((tw / "baseline").glob("*.json"))) == 3
+    assert "whole-suite" in r.stdout
+
+
+def test_legacy_whole_suite_run_proves_removal(legacy_store):
+    tmp_path, tw = legacy_store
+    write(tmp_path / "test_b.py", 'def test_y(behavior):\n    behavior("y", 2, group="g")\n'
+                                  'def test_z(behavior):\n    pass\n')
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert not (tw / "baseline" / "z.approved.json").exists()

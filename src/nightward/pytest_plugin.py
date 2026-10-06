@@ -156,10 +156,32 @@ def pytest_sessionfinish(session, exitstatus):
     owned = run_id and (read_lock(store.root) or {}).get("token") == run_id
     with contextlib.nullcontext() if owned else store_lock(store.root,
                                                            "pytest --nightward-record"):
-        _flush(config, rec, store, run_id)
+        _flush(session, rec, store, run_id)
 
 
-def _flush(config, rec: Recorder, store: Store, run_id: str | None) -> None:
+def _scope(session, deselected: int) -> dict:
+    """How much of the suite this run covered - removal evidence (D13).
+
+    narrowed: -k/-m, deselection (incl. --lf) or a test-id argument; such a run
+    never proves a removal. whole_suite: not narrowed, and every path argument
+    is the rootdir (or above it) or a configured testpath.
+    """
+    config = session.config
+    args = [str(a) for a in config.args]
+    narrowed = bool(deselected or config.option.keyword or config.option.markexpr
+                    or any("::" in a for a in args))
+    root = Path(config.rootpath).resolve()
+    allowed = {root, *((root / t).resolve() for t in config.getini("testpaths"))}
+    here = Path(config.invocation_params.dir)
+    targets = [(here / a).resolve() for a in args]
+    whole = not narrowed and all(t in allowed or t in root.parents for t in targets)
+    return {"narrowed": narrowed, "whole_suite": whole,
+            "collected_files": sorted({item.nodeid.split("::", 1)[0]
+                                       for item in session.items})}
+
+
+def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
+    config = session.config
     try:
         store.ensure()
         store.replace_pending(rec.behaviors)
@@ -177,6 +199,12 @@ def _flush(config, rec: Recorder, store: Store, run_id: str | None) -> None:
     stats = reporter.stats if reporter else {}
     meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
     meta["completed"] = rec.completed()
+    meta |= _scope(session, meta["deselected"])
+    # The test that LAST captured each behavior, carried across runs: a capture
+    # moved to another test must not leave its old test as removal proof.
+    previous = store.load_run_meta().get("sources")
+    meta["sources"] = {**(previous if isinstance(previous, dict) else {}),
+                       **{b.name: b.source for b in rec.behaviors if b.source}}
     meta["scrubbed"] = {"values": sum(rec.masked.values()), "behaviors": len(rec.masked)}
     # A custom rule that never fired leaves the user believing noise is handled.
     meta["scrub_unmatched"] = unmatched_rules()

@@ -435,22 +435,59 @@ def _standing_rejections(store: Store, baseline, pending) -> set[str]:
 _NOT_RUN = ("skipped", "failed", "errors", "deselected", "xfailed")
 
 
-def _removal_doubt(b, meta: dict) -> str | None:
+def _sources(name: str, b, meta: dict) -> set[str]:
+    """Every test known to capture `name`: the approved record and the latest run's."""
+    latest = (meta.get("sources") or {}).get(name)
+    return {s for s in (b.source, latest) if isinstance(s, str)}
+
+
+def _run_doubt(baseline, meta: dict) -> str | None:
+    """Why the last run can't prove any removal, or None (D13 (a))."""
+    if meta.get("narrowed", True):
+        return ("the last run was narrowed (-k/-m, deselected tests or a test id) - "
+                "only a whole-suite run proves removals")
+    collected = set(meta.get("collected_files") or ())
+    files = {s.split("::", 1)[0] for n, b in baseline.items() for s in _sources(n, b, meta)}
+    missing = sorted(files - collected)
+    if missing:
+        shown = ", ".join(missing[:3]) + (" ..." if len(missing) > 3 else "")
+        return (f"the last run did not collect {shown} - only a whole-suite run "
+                f"proves removals")
+    return None
+
+
+def _removal_doubt(name: str, b, meta: dict) -> str | None:
     """Why a REMOVED behavior may be false, or None when the run proves it gone.
 
-    Proof: its source test ran to completion this run and did not capture it.
-    Baselines recorded before sources existed fall back to a fully clean run.
+    Proof (D13): every test known to capture it ran to completion this run and
+    did not capture it. Without any recorded test (legacy baselines), only a
+    clean whole-suite run proves it.
     """
-    if b.source is not None:
-        if b.source in meta.get("completed", ()):
+    sources = _sources(name, b, meta)
+    if sources:
+        not_done = sorted(sources - set(meta.get("completed", ())))
+        if not not_done:
             return None
-        return (f"its test {b.source} did not run to completion this run (skipped, "
+        return (f"its test {not_done[0]} did not run to completion this run (skipped, "
                 f"failed, deselected, xfailed, deleted, or outside the run path)")
     counts = [f"{meta[k]} {k}" for k in _NOT_RUN if meta.get(k)]
-    if counts:
-        return (f"no recorded source test, and the last run was partial "
-                f"({', '.join(counts)})")
+    if not meta.get("whole_suite") or counts:
+        detail = f" ({', '.join(counts)})" if counts else ""
+        return (f"no recorded source test - only a clean whole-suite run proves its "
+                f"removal{detail}")
     return None
+
+
+def _backfill_sources(store: Store, baseline, pending) -> int:
+    """Point unchanged baselines at the test that captures them now (D13)."""
+    n = 0
+    for name, b in baseline.items():
+        p = pending.get(name)
+        if (p is not None and p.source and p.source != b.source
+                and p.fingerprint() == b.fingerprint() and p.group == b.group):
+            store.refresh_source(name, p.source)
+            n += 1
+    return n
 
 
 def _approve_one(store: Store, name: str, baseline, pending) -> str:
@@ -469,8 +506,9 @@ def approve(name: str | None = typer.Argument(None),
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
-                help="With --all, also accept REMOVED behaviors whose test ran to completion "
-                     "this run without capturing them (drops them from the baseline)"),
+                help="With --all, also accept REMOVED behaviors that a whole-suite run "
+                     "proves gone: their test ran to completion without capturing them "
+                     "(drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
     if all_ and name:
@@ -505,7 +543,9 @@ def _approve(store: Store, dir: str, name: str | None, all_: bool,
             # A test that didn't run captures nothing and looks REMOVED; approving
             # that would silently shrink the boundary. Only proven removals go.
             meta = store.load_run_meta()
-            doubts = {n: why for n in removed if (why := _removal_doubt(baseline[n], meta))}
+            run_doubt = _run_doubt(baseline, meta)
+            doubts = {n: why for n in removed
+                      if (why := run_doubt or _removal_doubt(n, baseline[n], meta))}
             held = list(doubts)
         else:
             held = removed
@@ -517,6 +557,11 @@ def _approve(store: Store, dir: str, name: str | None, all_: bool,
         targets = [name]
     else:
         raise NightwardError("specify a behavior name or --all")
+    if all_:
+        refreshed = _backfill_sources(store, baseline, pending)
+        if refreshed:
+            console.print(f"[dim]refreshed the recorded test of {refreshed} unchanged "
+                          f"behavior(s) (removal evidence only)[/dim]")
     if not targets and not held and not kept_rejected:
         console.print("nothing to approve - boundary already intact")
         return

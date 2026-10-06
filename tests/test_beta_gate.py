@@ -322,18 +322,28 @@ def test_include_removed_holds_unproven_removals(suite, path, env, lost):
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / f"{lost}.approved.json").exists()
-    assert lost in r.stdout and "did not run to completion" in r.stdout
+    assert lost in r.stdout and "can't prove gone" in r.stdout
 
 
 def test_include_removed_approves_proven_removal(suite):
     # test_keep ran to completion and no longer captures always2: a real removal.
     tmp_path, tw = suite
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"DROP_ALWAYS2": "1"})
+    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert not (tw / "baseline" / "always2.approved.json").exists()
+
+
+def test_narrowed_run_proves_no_removal(suite):
+    # R2-OPS-02 (D13): -m/-k narrowing never proves a removal, even one whose
+    # own test completed.
+    tmp_path, tw = suite
     cli("run", ".", "--dir", str(tw), cwd=tmp_path,
         env={"DROP_ALWAYS2": "1", "PYTEST_ADDOPTS": '-m "not slow"'})
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert not (tw / "baseline" / "always2.approved.json").exists()
-    assert (tw / "baseline" / "slow_report.approved.json").exists()
+    assert (tw / "baseline" / "always2.approved.json").exists()
+    assert "narrowed" in r.stdout
 
 
 def test_run_warns_about_deselected_and_xfailed(suite):
