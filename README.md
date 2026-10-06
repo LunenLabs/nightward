@@ -58,7 +58,9 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
                   for values that are volatile by evidence (see below); takes the
                   same NAME... / --group scope as review
 nightward approve promote pending behavior(s) into the baseline
-                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
+                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
+                  `approve A B C` works like --all --include-removed limited to those
+                  names, while one name always applies, even a removal or a rejection)
 nightward reject  confirm a change as a real regression (boundary stays breached;
                   `approve --all` skips it as "kept (rejected)" while that payload
                   is pending - `approve <name>` overrides and clears the rejection)
@@ -163,6 +165,16 @@ Diffs are for reading, never for the verdict: the verdict comes from
 fingerprints, and a diff is capped at 2,000 lines (huge payloads end with a
 "diff truncated" marker; very large scattered changes are compared by line
 position), so `run`/`approve` stay fast on big captures.
+
+Some changes print the same on both sides: NO-BREAK SPACE vs NARROW NO-BREAK SPACE
+after a CLDR upgrade, a zero-width space or bidi mark, doubled or trailing
+whitespace, a Cyrillic `а` in place of a Latin `a`, or `−` (minus) in place of `-`.
+For such a -/+ pair, `review` and the dashboard escape only the characters that
+differ (`"1 234"` -> `"1 234"`) and add a `? invisible or look-alike
+change: U+00A0 NO-BREAK SPACE -> U+202F NARROW NO-BREAK SPACE` line, and `doctor`
+names them in its note. This is display only and never affects the fingerprint.
+The committed baseline file stores the raw characters, so its git diff still
+looks unchanged; use `nightward review` to read it.
 
 Add your own rules for project-specific noise (prefer `register_field` - it
 replaces a JSON value and can't corrupt the payload):
@@ -362,6 +374,12 @@ status, counts, and grouped diffs with copy-paste `approve`/`reject` commands. I
 **read-only** (decisions stay in the CLI) and **static** (no backend), so it also
 deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered with
 `textContent` only — captured output never touches an HTML parser.
+
+The copy-paste commands quote every behavior name for the shell picked in
+"commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
+Windows). A name such as `x;touch${IFS}pwned` therefore arrives as one literal
+argument and never runs as code. When a name has no safe form in the selected shell
+(`%` or `!` in cmd.exe), the dashboard says so and offers no command.
 
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data

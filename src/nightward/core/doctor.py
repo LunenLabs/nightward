@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from .behavior import Behavior, canonical_json
+from .visible import reveal
 
 ROOT = "$"
 
@@ -281,7 +282,21 @@ def _classify(path: str, key: str | None, old: Any, new: Any) -> dict:
             return _finding(path, FLOAT, f"{width} noise in the last digits: round to "
                             f"{digits} significant digits before capturing, e.g. "
                             f'float(f"{{x:.{digits}g}}") - don\'t mask it', detail=detail)
+    if isinstance(old, str) and isinstance(new, str) and (shown := reveal(old, new)):
+        # Both sides print the same: show and name what differs (R2-FIN-04).
+        return _finding(path, REAL, f"{_REAL} - invisible or look-alike "
+                        f"characters: {shown[2]}",
+                        detail=f'"{_clip(shown[0])}" -> "{_clip(shown[1])}"')
     return _finding(path, REAL, _REAL, detail=detail)
+
+
+def _clip(escaped: str, limit: int = 60) -> str:
+    """A window of `escaped` around its first escaped character."""
+    if len(escaped) <= limit:
+        return escaped
+    at = max(0, escaped.find("\\") - 20)
+    return (("..." if at else "") + escaped[at:at + limit]
+            + ("..." if at + limit < len(escaped) else ""))
 
 
 def _sortable(v: Any) -> str:

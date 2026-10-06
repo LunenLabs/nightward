@@ -29,8 +29,45 @@ const KIND_LABEL = {
   REMOVED: "removed — in the baseline but missing this run (could be a skipped test)",
 };
 
+// ---- shell-safe commands ----------------------------------------------------
+// Behavior names come from test code (possibly agent-written) and these commands
+// are pasted into the approver's own shell, so a name is NEVER concatenated raw.
+// The generator quotes every name per shell (nightward/shellquote.py, tested
+// against real shells) into data.quoted; a name without a safe form there
+// (e.g. "100%" in cmd.exe) yields no command at all.
+const SHELL_LABEL = { posix: "bash / zsh / sh", powershell: "PowerShell", cmd: "cmd.exe" };
+let QUOTED = {};
+let SHELL = (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent || ""))
+  ? "powershell" : "posix";
+
+function setQuoting(quoted, shell) {
+  QUOTED = quoted || {};
+  if (shell && SHELL_LABEL[shell]) SHELL = shell;
+}
+
+function cliCommand(verb, names) {
+  const args = [];
+  for (const n of names) {
+    const q = Object.prototype.hasOwnProperty.call(QUOTED, n) ? QUOTED[n][SHELL] : null;
+    if (typeof q !== "string") return null;
+    args.push(q);
+  }
+  // a leading "-" would be read as an option; quoting can't prevent that
+  const sep = names.some(function (n) { return n.charAt(0) === "-"; }) ? ["--"] : [];
+  return ["nightward", verb].concat(sep, args).join(" ");
+}
+
 // ---- clipboard copy chip --------------------------------------------------
 function copyChip(label, command) {
+  if (command == null) {
+    const none = el("span", { cls: "copy-pair copy-none" });
+    none.appendChild(el("span", {
+      cls: "copy-cmd",
+      text: label + ": a name here can't be pasted safely into " + SHELL_LABEL[SHELL] +
+        " - switch the shell above, or type the name yourself",
+    }));
+    return none;
+  }
   const btn = el("button", { cls: "copy-chip", text: label, attrs: { type: "button" } });
   const cmd = el("code", { cls: "copy-cmd", text: command });
   btn.addEventListener("click", function () {
@@ -68,6 +105,8 @@ function renderDiff(container, diffText) {
     else if (line.startsWith("@@")) { cls = "diff-hunk"; }
     else if (line.startsWith("+")) { cls = "diff-add"; }
     else if (line.startsWith("-")) { cls = "diff-del"; }
+    // names characters that print the same on both sides (escaped as \uXXXX above it)
+    else if (line.startsWith("? ")) { cls = "diff-hint"; }
     pre.appendChild(el("div", { cls: "diff-line " + cls, text: text }));
   }
   container.appendChild(pre);
@@ -222,6 +261,19 @@ function renderControls(report) {
   });
   box.appendChild(kindWrap);
 
+  // which shell the copy-paste commands are quoted for
+  const sWrap = el("div", { cls: "control-row" });
+  sWrap.appendChild(el("span", { cls: "control-label", text: "commands for:" }));
+  const shellSel = el("select", { cls: "shell-select", attrs: { "aria-label": "shell for copied commands" } });
+  Object.keys(SHELL_LABEL).forEach(function (s) {
+    const opt = el("option", { text: SHELL_LABEL[s], attrs: { value: s } });
+    opt.selected = s === SHELL;
+    shellSel.appendChild(opt);
+  });
+  shellSel.addEventListener("change", function () { SHELL = shellSel.value; renderGroups(report); });
+  sWrap.appendChild(shellSel);
+  box.appendChild(sWrap);
+
   // group select
   const groups = Object.keys(report.blast_radius || {});
   if (groups.length > 1) {
@@ -267,10 +319,17 @@ function renderCard(it) {
   renderDiff(card, it.diff);
 
   const actions = el("div", { cls: "card-actions" });
-  actions.appendChild(copyChip("approve (intended change)", "nightward approve " + it.name));
-  actions.appendChild(copyChip("reject (regression)", "nightward reject " + it.name));
+  actions.appendChild(copyChip("approve (intended change)", cliCommand("approve", [it.name])));
+  actions.appendChild(copyChip("reject (regression)", cliCommand("reject", [it.name])));
   card.appendChild(actions);
   return card;
+}
+
+// A REMOVED item may be a test that merely didn't run; dropping it from the
+// baseline is a per-card decision, never part of a group approval (R2-WEB-03).
+function groupApproveNames(items) {
+  return items.filter(function (i) { return i.kind !== "REMOVED"; })
+    .map(function (i) { return i.name; });
 }
 
 function renderGroups(report) {
@@ -290,7 +349,12 @@ function renderGroups(report) {
     const summary = el("summary", { cls: "group-head" });
     summary.appendChild(el("span", { cls: "group-name", text: group }));
     summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
-    summary.appendChild(copyChip("approve this group", "nightward approve " + items.map(function (i) { return i.name; }).join(" ")));
+    const names = groupApproveNames(items);
+    if (names.length) {
+      const label = names.length === items.length ? "approve this group"
+        : "approve " + names.length + " NEW/CHANGED (removals: approve each on its card)";
+      summary.appendChild(copyChip(label, cliCommand("approve", names)));
+    }
     details.appendChild(summary);
 
     for (const it of items) details.appendChild(renderCard(it));
@@ -348,6 +412,7 @@ function renderJudgedSame(report) {
 
 // ---- entry ----------------------------------------------------------------
 function render(data) {
+  setQuoting(data.quoted);
   renderMeta(data.meta);
   const report = data.report;
 

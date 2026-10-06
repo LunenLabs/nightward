@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from . import shellquote
 from .config import project_judge
 from .core.baseline import Store
 from .core.diff import REMOVED, UNCHANGED, compare
@@ -343,7 +344,8 @@ def _print_diff(it: dict, max_lines: int) -> None:
         return
     console.print(escape("\n".join(lines[:max_lines])))
     console.print(f"[dim]... {len(lines) - max_lines:,} more diff line(s) - see all with "
-                  f"`nightward review {escape(it['name'])} --max-lines 0`[/dim]",
+                  f"`{escape(shellquote.command('review', [it['name']]) or '')} "
+                  f"--max-lines 0`[/dim]",
                   soft_wrap=True)
 
 
@@ -448,9 +450,14 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
     raise NightwardError(f"nothing to approve for {name!r}")
 
 
+APPROVE_NAMES_ARG = typer.Argument(
+    None, help="Behavior(s) to approve. One name always applies; several are approved "
+               "like --all --include-removed limited to them", show_default=False)
+
+
 @app.command()
 @handle_errors
-def approve(name: str | None = typer.Argument(None),
+def approve(names: list[str] | None = APPROVE_NAMES_ARG,
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
@@ -458,8 +465,8 @@ def approve(name: str | None = typer.Argument(None),
                      "this run without capturing them (drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
-    if all_ and name:
-        raise NightwardError("give a behavior name or --all, not both")
+    if all_ and names:
+        raise NightwardError("give behavior names or --all, not both")
     store = _existing_store(dir)
     baseline = store.load_baseline()
     pending = store.load_pending()
@@ -490,8 +497,24 @@ def approve(name: str | None = typer.Argument(None),
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
         targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
-    elif name:
-        targets = [name]
+    elif names and len(names) == 1:
+        targets = names
+    elif names:
+        # Several names (e.g. the dashboard's group chip) are a bulk approval
+        # limited to them: unproven removals and standing rejections stay, as
+        # with --all --include-removed; one explicit name overrides (R2-WEB-03).
+        names = list(dict.fromkeys(names))
+        unknown = [n for n in names if n not in pending and n not in baseline]
+        if unknown:
+            raise NightwardError(f"no pending or baseline behavior named "
+                                 f"{', '.join(map(repr, unknown))}; nothing was approved")
+        meta = store.load_run_meta()
+        doubts = {n: why for n in names
+                  if n not in pending and (why := _removal_doubt(baseline[n], meta))}
+        held = list(doubts)
+        rejected = _standing_rejections(store, baseline, pending)
+        kept_rejected = [n for n in names if n in rejected and n not in held]
+        targets = [n for n in names if n not in held and n not in rejected]
     else:
         raise NightwardError("specify a behavior name or --all")
     if not targets and not held and not kept_rejected:
@@ -501,7 +524,7 @@ def approve(name: str | None = typer.Argument(None),
     for n in targets:
         verb = _approve_one(store, n, baseline, pending)
         console.print(f"[green]{verb}[/green] {escape(n)}")
-        if name and store.clear_rejection(n):
+        if names and len(names) == 1 and store.clear_rejection(n):
             console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
     if kept_rejected:
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
