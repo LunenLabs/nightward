@@ -79,7 +79,7 @@ class Recorder:
             self.masked[name] = masked
         self.behaviors.append(
             Behavior(name=name, payload=payload, group=group, semantic=semantic,
-                     source=source)
+                     source=source, scrub=scrub)
         )
 
 

@@ -192,20 +192,25 @@ every `register`/`register_field` rule that matched nothing in that run
 silently does nothing can't pass for handled noise.
 
 `nightward doctor` sees one before/after pair, which is no evidence that a value is
-noise, so it only calls a value volatile when the value itself shows it, and then
-suggests the narrowest rule that hides exactly that:
+noise. It calls a value volatile only when the value itself shows it. A date or an
+order can be the product (a deadline, an event sequence), so those look like a real
+change first:
 
-| doctor sees | it suggests |
-|---|---|
-| a date-time or HTTP date | a `scrub.register(...)` pattern for that date shape |
-| a random token behind a stable prefix (`chatcmpl-…`, `call_…`, a CSRF value in HTML) | a `scrub.register(...)` pattern anchored on that prefix, never the whole field or body |
-| a Unix epoch under a time-like key (`created`, `updated_at`) | `scrub.register_field(key)`, only if that key is not stable in any other behavior |
-| a float that moved only in its last digits | round it before capturing (`round(x, 10)`), no mask |
-| a list with the same elements in a new order | sort it before capturing, no mask |
-| a changed content hash, a type change, a new key, anything else | "looks like a real change": review, then approve or fix |
+| doctor sees | it says | it suggests |
+|---|---|---|
+| a random token behind a stable prefix (`chatcmpl-…`, `call_…`, `req_…`, a CSRF value in HTML) | `~` volatile | a `scrub.register(...)` pattern anchored on that prefix, with a base62 class and open length (`[0-9A-Za-z]{8,}`), never the whole field or body |
+| a date-time, HTTP date or Unix timestamp (also as a string, e.g. `X-RateLimit-Reset`) | `*` looks like a real change | only *if it is not part of the contract*: `scrub.register_field(key)` for that key, or a pattern anchored on the text before it; for a date in a list, "mask it at capture time" (no global date pattern) |
+| several dates that all moved by the same amount | `*` looks like a real change ("all 2 values moved by -1 day") | nothing |
+| a list with the same elements in a new order | `*` looks like a real change | only *if it is not part of the contract* (e.g. a set): sort it before capturing |
+| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing (`float(f"{x:.12g}")`, or `.6g` for float32), no mask. Integral floats and deltas of 1 or more are never noise |
+| `0.0` -> `-0.0` | `~` sign of zero | `x + 0.0` before capturing |
+| a changed content hash, a type change, a new key, anything else | `*` / `!` looks like a real change | nothing: review, then approve or fix |
 
-If a value marked as a real change changes again on a re-run with no code edits, it
-is volatile: mask it at capture time in that test.
+Every suggested rule is checked to make both samples equal. It is withheld when it
+would also match a stable value anywhere else in the capture, and for behaviors
+captured with `scrub=False`. If a value marked as a real change changes again on a
+re-run with no code edits, it is volatile: apply the conditional suggestion, or mask
+it at capture time in that test.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 

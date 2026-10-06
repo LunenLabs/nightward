@@ -536,7 +536,8 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
 
 
 # doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.
-_DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "~",
+# Dates and reorders look real first: they can be the contract (D15).
+_DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "*", "date": "*",
                  "content-hash": "*", "changed": "*", "structural": "!"}
 _DOCTOR_LINES = 20  # per behavior; the rest is summarized
 
@@ -572,18 +573,26 @@ def doctor(names: list[str] | None = NAMES_ARG,
                           f"{escape(detail)}[/dim]", soft_wrap=True)
         if len(found) > _DOCTOR_LINES:
             console.print(f"  [dim]... {len(found) - _DOCTOR_LINES} more path(s)[/dim]")
-    if diag["suggestions"]:
-        console.print("\n[bold]volatile by evidence[/bold] - if this is noise, tame it in "
-                      "conftest.py:")
+    sure = [s for s in diag["suggestions"] if not s["conditional"]]
+    maybe = [s for s in diag["suggestions"] if s["conditional"]]
+    for title, rules in (
+            ("volatile by evidence - if this is noise, tame it in conftest.py:", sure),
+            ("only if these dates are not part of the contract - re-run with no code "
+             "edits first; if they change again, tame them in conftest.py:", maybe)):
+        if not rules:
+            continue
+        console.print(f"\n[bold]{escape(title)}[/bold]", soft_wrap=True)
         console.print("  [cyan]from nightward import scrub[/cyan]")
-        for s in diag["suggestions"]:
+        for s in rules:
             console.print(f"  [cyan]{escape(s['rule'])}[/cyan]  [dim]# {escape(s['reason'])}"
                           f"[/dim]", soft_wrap=True)
-        console.print("then re-run [cyan]nightward run[/cyan] and review what is left.")
+    if diag["suggestions"]:
+        console.print("then re-run [cyan]nightward run[/cyan] and review what is left. "
+                      "Every rule above is scoped to the field or text that drifted and "
+                      "matches no stable value elsewhere in this capture.", soft_wrap=True)
         if any("register_field" in s["rule"] for s in diag["suggestions"]):
             console.print("[yellow]caution:[/yellow] register_field masks that key in "
-                          "[bold]every[/bold] behavior - doctor offers it only for keys "
-                          "that are not stable anywhere else in this capture.")
+                          "[bold]every[/bold] behavior, including ones you add later.")
     if looks_real:
         console.print("\n[bold]*[/bold] / [bold]![/bold] look like real changes: "
                       "`nightward review`, then approve or fix - never scrub a regression. "
