@@ -285,6 +285,7 @@ code { font-family: var(--mono); }
 .diff-hunk { color: var(--faint); }
 .diff-add { color: var(--add); background: var(--add-bg); }
 .diff-del { color: var(--del); background: var(--del-bg); }
+.diff-hint { color: var(--muted); font-style: italic; }
 .diff-ctx { color: var(--muted); }
 .diff-empty { color: var(--faint); }
 

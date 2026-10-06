@@ -166,6 +166,16 @@ fingerprints, and a diff is capped at 2,000 lines (huge payloads end with a
 "diff truncated" marker; very large scattered changes are compared by line
 position), so `run`/`approve` stay fast on big captures.
 
+Some changes print the same on both sides: NO-BREAK SPACE vs NARROW NO-BREAK SPACE
+after a CLDR upgrade, a zero-width space or bidi mark, doubled or trailing
+whitespace, a Cyrillic `а` in place of a Latin `a`, or `−` (minus) in place of `-`.
+For such a -/+ pair, `review` and the dashboard escape only the characters that
+differ (`"1 234"` -> `"1 234"`) and add a `? invisible or look-alike
+change: U+00A0 NO-BREAK SPACE -> U+202F NARROW NO-BREAK SPACE` line, and `doctor`
+names them in its note. This is display only and never affects the fingerprint.
+The committed baseline file stores the raw characters, so its git diff still
+looks unchanged; use `nightward review` to read it.
+
 Add your own rules for project-specific noise (prefer `register_field` - it
 replaces a JSON value and can't corrupt the payload):
 

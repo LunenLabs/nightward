@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .behavior import Behavior, canonical_json
+from .visible import reveal
 
 NEW = "NEW"
 CHANGED = "CHANGED"
@@ -116,6 +117,20 @@ def _positional_opcodes(a: list[str], b: list[str]) -> list[tuple[str, int, int,
     return codes
 
 
+def _replaced(old: list[str], new: list[str]) -> list[str]:
+    """-/+ lines for a replaced block. Line pairs that differ only in invisible or
+    look-alike characters get those characters escaped, plus a "? " line naming
+    them, so the reviewer can see the change (R2-FIN-04)."""
+    old, new, hints = list(old), list(new), []
+    if len(old) == len(new):
+        for k in range(min(len(old), MAX_DIFF_LINES)):
+            shown = reveal(old[k], new[k])
+            if shown:
+                old[k], new[k], note = shown
+                hints.append(f"? invisible or look-alike change: {note}")
+    return ["-" + ln for ln in old] + ["+" + ln for ln in new] + list(dict.fromkeys(hints))
+
+
 def _line_diff(a: list[str], b: list[str], n: int = _CONTEXT) -> list[str]:
     """Unified diff of two line lists, bounded in time and output size."""
     if a == b:
@@ -148,8 +163,7 @@ def _line_diff(a: list[str], b: list[str], n: int = _CONTEXT) -> list[str]:
             if tag == "equal":
                 out.extend(" " + ln for ln in a_win[i1:i2])
                 continue
-            out.extend("-" + ln for ln in a_win[i1:i2])
-            out.extend("+" + ln for ln in b_win[j1:j2])
+            out.extend(_replaced(a_win[i1:i2], b_win[j1:j2]))
         if len(out) > MAX_DIFF_LINES:
             break
     if len(out) > MAX_DIFF_LINES:

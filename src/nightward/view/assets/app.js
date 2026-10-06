@@ -105,6 +105,8 @@ function renderDiff(container, diffText) {
     else if (line.startsWith("@@")) { cls = "diff-hunk"; }
     else if (line.startsWith("+")) { cls = "diff-add"; }
     else if (line.startsWith("-")) { cls = "diff-del"; }
+    // names characters that print the same on both sides (escaped as \uXXXX above it)
+    else if (line.startsWith("? ")) { cls = "diff-hint"; }
     pre.appendChild(el("div", { cls: "diff-line " + cls, text: text }));
   }
   container.appendChild(pre);

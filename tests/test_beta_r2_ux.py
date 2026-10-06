@@ -232,3 +232,75 @@ def test_group_chip_leaves_removed_items_out():
     items = [{"name": "gql.a", "kind": "CHANGED"}, {"name": "gql.old", "kind": "REMOVED"},
              {"name": "gql.n", "kind": "NEW"}]
     assert node_eval(f"groupApproveNames({json.dumps(items)})") == ["gql.a", "gql.n"]
+
+
+# ---- R2-FIN-04: look-alike changes are made visible, never the verdict --------
+
+NBSP, NNBSP, ZWSP = " ", " ", "​"
+
+
+def diff_of(old, new):
+    from nightward.core.diff import compare
+    (change,) = compare({"p": Behavior(name="p", payload=old)},
+                        {"p": Behavior(name="p", payload=new)})
+    assert change.kind == "CHANGED"
+    return change.diff_text
+
+
+def test_nbsp_to_narrow_nbsp_is_escaped_and_named():
+    d = diff_of({"pro": f"1{NBSP}234,56{NBSP}€"}, {"pro": f"1{NNBSP}234,56{NBSP}€"})
+    lines = d.splitlines()
+    minus = next(ln for ln in lines if ln.startswith("-  "))
+    plus = next(ln for ln in lines if ln.startswith("+  "))
+    assert r"1\u00a0234" in minus and r"1\u202f234" in plus
+    assert f"56{NBSP}€" in plus          # only the differing character is escaped
+    assert any(ln.startswith("? ") and "NARROW NO-BREAK SPACE" in ln for ln in lines), d
+
+
+@pytest.mark.parametrize("old, new, word", [
+    ("total", f"to{ZWSP}tal", "ZERO WIDTH SPACE"),
+    ("paypal", "pаypal", "CYRILLIC SMALL LETTER A"),
+    ("a b", "a  b", "SPACE"),
+    ("a‎b", "ab", "LEFT-TO-RIGHT MARK"),
+    ("line1\nline2", "line1 \nline2", "SPACE"),           # trailing space in a block
+])
+def test_invisible_and_confusable_changes_are_named(old, new, word):
+    d = diff_of({"v": old}, {"v": new})
+    assert any(ln.startswith("? ") and word in ln for ln in d.splitlines()), d
+
+
+@pytest.mark.parametrize("old, new", [
+    ({"v": "abc"}, {"v": "abd"}),
+    ({"v": "가격"}, {"v": "나격"}),       # a visible Hangul change
+    ({"a": {"b": 1}}, {"a": 1}),                           # structure / indentation
+])
+def test_visible_changes_are_not_annotated(old, new):
+    d = diff_of(old, new)
+    assert not any(ln.startswith("? ") for ln in d.splitlines()), d
+    assert r"\u" not in d
+
+
+def test_doctor_detail_shows_the_invisible_change():
+    from nightward.core.doctor import diagnose
+    diag = diagnose({"p": Behavior(name="p", payload={"pro": f"1{NBSP}234"})},
+                    {"p": Behavior(name="p", payload={"pro": f"1{NNBSP}234"})})
+    (f,) = diag["behaviors"]["p"]
+    assert r"\u00a0" in f["detail"] and r"\u202f" in f["detail"], f
+    assert "NARROW NO-BREAK SPACE" in f["note"], f
+
+
+def test_review_shows_the_invisible_change(tmp_path):
+    store = Store(tmp_path / ".tw")
+    store.ensure()
+    store.write_pending(Behavior(name="price.fr_FR", payload={"pro": f"1{NBSP}234"}))
+    store.approve("price.fr_FR")
+    store.write_pending(Behavior(name="price.fr_FR", payload={"pro": f"1{NNBSP}234"}))
+    recompute(store)
+    r = cli("review", "--dir", str(store.root), cwd=tmp_path)
+    out = " ".join(r.stdout.split())   # rich wraps long lines at the console width
+    assert r"\u202f" in out and "NARROW NO-BREAK SPACE" in out, r.stdout
+
+
+def test_dashboard_styles_hint_lines():
+    js = APP_JS.read_text(encoding="utf-8")
+    assert 'line.startsWith("? ")' in js and "diff-hint" in js
