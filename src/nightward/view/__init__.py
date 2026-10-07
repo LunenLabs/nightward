@@ -34,8 +34,9 @@ def collect_data(nightward_dir: Path | str) -> dict:
     run_meta = store.load_run_meta()
     baseline = store.load_baseline()    # {} if absent
     pending = store.load_pending()
-    names = {it["name"] for items in (report or {}).get("blast_radius", {}).values()
-             for it in items}
+    blast = (report or {}).get("blast_radius", {})
+    # Group names too: the group chip is `approve --group G` (R3-DATA-06).
+    names = {it["name"] for items in blast.values() for it in items} | set(blast)
     return {
         "report": report,
         # Copy-paste commands use these per-shell forms, never the raw name: a

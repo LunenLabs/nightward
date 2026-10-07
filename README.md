@@ -62,7 +62,9 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
                   `approve A B C` works like --all --include-removed limited to those
-                  names, while one name always applies, even a removal or a rejection).
+                  names, while one name always applies, even a removal or a rejection;
+                  `approve --group G` works like --all limited to group G, for groups
+                  too big to list on one command line).
                   It promotes only the capture a human last saw through `run`,
                   `review` or `view`; if anything captured again since (e.g. an
                   agent's nightward_run), it refuses until you review again
@@ -415,7 +417,8 @@ The copy-paste commands quote every behavior name for the shell picked in
 "commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
 Windows). A name such as `x;touch${IFS}pwned` therefore arrives as one literal
 argument and never runs as code. When a name has no safe form in the selected shell
-(`%` or `!` in cmd.exe), the dashboard says so and offers no command.
+(`%` or `!` in cmd.exe), the dashboard says so and offers no command. A group's
+"approve this group" command is `nightward approve --group G`, short at any group size.
 
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data

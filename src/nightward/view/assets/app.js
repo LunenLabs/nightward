@@ -57,6 +57,14 @@ function cliCommand(verb, names) {
   return ["nightward", verb].concat(sep, args).join(" ");
 }
 
+// One short command for a group of any size: 1,440 quoted names would exceed
+// the Windows command-line limit (R3-DATA-06). The CLI reads the value after
+// --group as the group even when it starts with "-".
+function groupApproveCommand(group) {
+  const q = Object.prototype.hasOwnProperty.call(QUOTED, group) ? QUOTED[group][SHELL] : null;
+  return typeof q === "string" ? "nightward approve --group " + q : null;
+}
+
 // ---- clipboard copy chip --------------------------------------------------
 function copyChip(label, command) {
   if (command == null) {
@@ -326,7 +334,8 @@ function renderCard(it) {
 }
 
 // A REMOVED item may be a test that merely didn't run; dropping it from the
-// baseline is a per-card decision, never part of a group approval (R2-WEB-03).
+// baseline is a per-card decision, never part of a group approval (R2-WEB-03):
+// `approve --group` leaves removals out, as `--all` does.
 function groupApproveNames(items) {
   return items.filter(function (i) { return i.kind !== "REMOVED"; })
     .map(function (i) { return i.name; });
@@ -349,11 +358,12 @@ function renderGroups(report) {
     const summary = el("summary", { cls: "group-head" });
     summary.appendChild(el("span", { cls: "group-name", text: group }));
     summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
-    const names = groupApproveNames(items);
+    // The chip covers the whole group, whatever the filters show.
+    const names = groupApproveNames(br[group]);
     if (names.length) {
-      const label = names.length === items.length ? "approve this group"
-        : "approve " + names.length + " NEW/CHANGED (removals: approve each on its card)";
-      summary.appendChild(copyChip(label, cliCommand("approve", names)));
+      const label = names.length === br[group].length ? "approve this group"
+        : "approve this group's " + names.length + " NEW/CHANGED (removals: approve each on its card)";
+      summary.appendChild(copyChip(label, groupApproveCommand(group)));
     }
     details.appendChild(summary);
 

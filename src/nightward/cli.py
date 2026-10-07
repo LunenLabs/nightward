@@ -581,28 +581,53 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
 APPROVE_NAMES_ARG = typer.Argument(
     None, help="Behavior(s) to approve. One name always applies; several are approved "
                "like --all --include-removed limited to them", show_default=False)
+APPROVE_GROUP_OPT = typer.Option(
+    None, "--group", help="Approve the NEW/CHANGED behaviors of this group (repeatable): "
+                          "--all limited to the group, rejections kept",
+    show_default=False)
 
 
 @app.command()
 @handle_errors
 def approve(names: list[str] | None = APPROVE_NAMES_ARG,
+            group: list[str] | None = APPROVE_GROUP_OPT,
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
-                help="With --all, also accept REMOVED behaviors that a whole-suite run "
+                help="With --all or --group, also accept REMOVED behaviors that a whole-suite run "
                      "proves gone: their test ran to completion without capturing them "
                      "(drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
-    if all_ and names:
-        raise NightwardError("give behavior names or --all, not both")
+    if sum(map(bool, (all_, names, group))) > 1:
+        raise NightwardError("pick one: behavior names, --group or --all (not both)")
     store = _existing_store(dir)
     with store_lock(store.root, "nightward approve"):
-        _approve(store, dir, names, all_, include_removed)
+        _approve(store, dir, names, all_, include_removed, groups=group)
+
+
+def _group_names(baseline, pending, judge, groups: list[str],
+                 include_removed: bool) -> tuple[list[str], list[str]]:
+    """(names to approve, REMOVED names left out) for `approve --group`.
+
+    The group's unapproved behaviors, as `review --group` scopes them, minus
+    removals unless --include-removed (as with --all). The command line stays
+    short however big the group is (R3-DATA-06): 1,440 names don't fit in
+    Windows' 32K command line, and neither does the dashboard's group chip.
+    """
+    known = {b.group or "(ungrouped)" for b in (*baseline.values(), *pending.values())}
+    unknown = [g for g in groups if g not in known]
+    if unknown:
+        raise NightwardError(f"no behavior in group {', '.join(map(repr, unknown))}; "
+                             f"nothing was approved")
+    changes = [c for c in compare(baseline, pending, judge=judge, with_diff=False)
+               if c.kind != UNCHANGED and (c.group or "(ungrouped)") in groups]
+    left_out = [] if include_removed else [c.name for c in changes if c.kind == REMOVED]
+    return [c.name for c in changes if c.name not in left_out], left_out
 
 
 def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
-             include_removed: bool) -> None:
+             include_removed: bool, groups: list[str] | None = None) -> None:
     baseline = store.load_baseline()
     pending = store.load_pending()
     if not baseline and not pending:
@@ -614,6 +639,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     # back to CHANGED the moment something else is approved. Approving a
     # judged-SAME rewording explicitly by name still re-anchors it.
     judge = judge_from_meta(store)
+    left_out: list[str] = []
+    if groups:
+        names, left_out = _group_names(baseline, pending, judge, groups, include_removed)
+    # One explicit name is a human override; a group is a bulk approval at any size.
+    single = bool(names) and len(names) == 1 and not groups
 
     held: list[str] = []
     doubts: dict[str, str] = {}
@@ -636,11 +666,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
         targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
-    elif names and len(names) == 1:
+    elif single:
         targets = names
-    elif names:
-        # Several names (e.g. the dashboard's group chip) are a bulk approval
-        # limited to them: unproven removals and standing rejections stay, as
+    elif names or groups:
+        # Several names (or --group, the dashboard's group chip) are a bulk
+        # approval limited to them: unproven removals and standing rejections stay, as
         # with --all --include-removed; one explicit name overrides (R2-WEB-03).
         names = list(dict.fromkeys(names))
         unknown = [n for n in names if n not in pending and n not in baseline]
@@ -656,15 +686,17 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [n for n in names if n in rejected and n not in held]
         targets = [n for n in names if n not in held and n not in rejected]
+        held += left_out
     else:
-        raise NightwardError("specify a behavior name or --all")
+        raise NightwardError("specify a behavior name, --group or --all")
     if all_:
         refreshed = _backfill_sources(store, baseline, pending)
         if refreshed:
             console.print(f"[dim]refreshed the recorded test of {refreshed} unchanged "
                           f"behavior(s) (removal evidence only)[/dim]")
     if not targets and not held and not kept_rejected:
-        console.print("nothing to approve - boundary already intact")
+        console.print("nothing to approve in that group" if groups
+                      else "nothing to approve - boundary already intact")
         return
 
     for n in targets:
@@ -672,7 +704,7 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         # The short fingerprint ties the approval to the reviewed content.
         what = f" ({pending[n].fingerprint()[:8]})" if n in pending else ""
         console.print(f"[green]{verb}[/green] {escape(n)}{what}")
-        if names and len(names) == 1 and store.clear_rejection(n):
+        if single and store.clear_rejection(n):
             console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
     if kept_rejected:
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
@@ -688,7 +720,8 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
                       f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
                       f"a partial path. Accept them with `nightward approve <name>` or "
-                      f"`--all --include-removed`.", soft_wrap=True)
+                      f"`{'--group ... ' if groups else '--all '}--include-removed`.",
+                      soft_wrap=True)
     _print_summary(recompute(store, judge=judge))
 
 

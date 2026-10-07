@@ -40,6 +40,7 @@ pytest -k timestamp
 # dogfooding
 nightward run example            # README quickstart fixture
 nightward approve --all          # NEW/CHANGED only; REMOVED needs a name or --include-removed
+nightward approve --group G      # --all limited to group G (any size; the dashboard's group chip)
 cd examples/petshop && nightward run .   # cascade demo (baseline committed)
 cd examples/newsroom && NEWSROOM_REWRITE=1 nightward run . --judge persona:lenient  # semantic judge demo (key-free)
 
