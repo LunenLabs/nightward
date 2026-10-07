@@ -105,6 +105,10 @@ def classify(store: Store, baseline, pending, judge=None, *, with_diff: bool = T
     return changes
 
 
+NO_JUDGE = ("no judge configured - set [tool.nightward] judge in the project's "
+            "pyproject.toml (`nightward run --judge` applies to one CLI run only)")
+
+
 def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     """Compare pending against baseline, aggregate, persist, and return the report.
 
@@ -115,7 +119,8 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     """
     baseline = store.load_baseline() if baseline is None else baseline
     pending = store.load_pending() if pending is None else pending
-    report = aggregate(classify(store, baseline, pending, judge=judge))
+    changes = classify(store, baseline, pending, judge=judge)
+    report = aggregate(changes)
     meta = store.load_run_meta()
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
@@ -126,6 +131,13 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     report["pending_digest"] = digest(pending)
     if judge is not None:
         report["judge"] = judge.summary()
+    elif unjudged := [c.name for c in changes if c.kind == CHANGED
+                      and baseline[c.name].semantic and pending[c.name].semantic
+                      and baseline[c.name].fingerprint() != pending[c.name].fingerprint()]:
+        # Approved as semantic, but nothing could judge them: say why they
+        # breach on a rewording, as an unavailable judge does (R3-FIN-08).
+        report["judge"] = {"spec": None, "unavailable": NO_JUDGE,
+                           "compared_exactly": unjudged}
     store.write_report(report)
     return report
 

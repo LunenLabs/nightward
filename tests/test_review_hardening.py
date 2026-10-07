@@ -211,7 +211,7 @@ def test_r8_captured_abort_message_carries_pytest_output(tmp_path):
 def test_r9_corrupt_ledger_fails_loudly_and_is_preserved(tmp_path):
     ledger = tmp_path / "judge_verdicts.json"
     write(ledger, "<<<<<<< HEAD\n")
-    with pytest.raises(NightwardError, match="corrupt judge verdict ledger"):
+    with pytest.raises(NightwardError, match="merge conflict markers"):
         Judge("persona:lenient", cache_path=ledger)
     assert ledger.read_text(encoding="utf-8") == "<<<<<<< HEAD\n"
 
@@ -240,7 +240,7 @@ def test_r10_approve_all_matches_the_report(tmp_path):
     cli("run", ".", "--judge", "persona:lenient", cwd=tmp_path)
     r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "count" in r.stdout and "summary" not in r.stdout
+    assert "approved count" in r.stdout and "approved summary" not in r.stdout
     approved = json.loads((tmp_path / ".nightward" / "baseline" / "summary.approved.json")
                           .read_text(encoding="utf-8"))
     assert approved["payload"] == "market went up"  # original anchor kept

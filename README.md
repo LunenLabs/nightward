@@ -65,7 +65,9 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
                   `approve A B C` works like --all --include-removed limited to those
-                  names, while one name always applies, even a removal or a rejection).
+                  names, while one name always applies, even a removal or a rejection;
+                  `approve --group G` works like --all limited to group G, for groups
+                  too big to list on one command line).
                   It promotes only changes a human was shown, exactly as shown,
                   through `run`, `review` or `view`: a scoped `review --group G`
                   covers only G, and a change captured again since (e.g. by an
@@ -80,7 +82,9 @@ nightward reject  confirm a change you reviewed as a real regression. It takes o
                   `approve <name>` overrides and clears the rejection. Commit
                   .nightward/rejected/ like the baseline, so a rejection protects
                   every clone and CI, not just your machine
-nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
+nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, stale or
+                  incomplete; 2 no store, no report (no run yet, or the last run
+                  aborted) or another error. Only 0 is a pass
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
                   "done"; "breached", "incomplete" (capture tests failed/errored),
@@ -88,6 +92,7 @@ nightward status  boundary summary with the change list (--json: the machine
                   re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
 nightward mcp     stdio MCP server for AI agents: run + status, never approve
+nightward --version  the installed version (put it in bug reports and CI logs)
 ```
 
 Every command uses the store at `./.nightward` (or `--dir`), so run them from the
@@ -112,6 +117,11 @@ differently leave git conflict markers in `baseline/<name>.approved.json`. Every
 command then stops with `... has unresolved merge conflict markers`. Keep one side
 (`git checkout --ours -- <file>` or `--theirs`), run `nightward run`, and
 `nightward approve <name>` if the current behavior should be the new baseline.
+Judge rulings are stored one file per ruling (`.nightward/judge/`), so two branches
+that each record a ruling merge cleanly. A conflict there means both branches ruled
+on the same pair differently: read both sides and keep one. The single-file
+`judge_verdicts.json` that older versions wrote is still read; if it conflicts, keep
+both sides' entries (each entry is an independent ruling).
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
@@ -170,7 +180,7 @@ normalization erases, because a change there never trips the gate:
   ```python
   behavior("sla_deadlines", deadlines, scrub=False)   # this behavior: no scrubbing at all
 
-  # conftest.py - every behavior: built-in timestamp/uuid scrubbers off,
+  # the root conftest.py - every behavior: built-in timestamp/uuid scrubbers off,
   # your own register/register_field rules still apply
   from nightward import scrub
   scrub.disable_defaults()
@@ -204,7 +214,8 @@ Common conversions:
 | numpy scalar (`np.int64`, `np.float32`, `np.bool_`) | `x.item()` |
 | `np.ndarray`, `pd.Series` | `x.tolist()` |
 | `pd.DataFrame` | `df.to_dict("records")` (or `df.to_csv(index=False).splitlines()`) |
-| `datetime`, `date`, `pd.Timestamp` | `x.isoformat()` |
+| `date` | `x.isoformat()` |
+| `datetime`, `pd.Timestamp` | `x.isoformat()`, but an ISO date-time is masked as `"<TIMESTAMP>"` by the default scrubber: if it is your output (a due date, an event time), also pass `scrub=False` (or call `scrub.disable_defaults()`) |
 | `Decimal` | `str(x)` (keeps the exact digits) |
 | `set` | `sorted(x)` |
 | `bytes` | `x.decode()` or `x.hex()` |
@@ -238,6 +249,16 @@ scrub.register_field("request_id")                 # mask this key at any depth
 scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
 ```
 
+**Scope follows the conftest.py, like its fixtures.** A rule registered in a
+`conftest.py` (also through a helper that conftest calls) applies only to behaviors
+captured by tests under that conftest's directory. Rules in the root `conftest.py`
+cover the whole suite; `scrub.register_field("token")` in `services/orders/conftest.py`
+masks orders' tokens but never a `token` field in `services/billing`. The scope also
+doesn't depend on which directories a run collected, so `nightward run services/billing`
+captures exactly what the whole-suite run does. `scrub.disable_defaults()` is scoped
+the same way. Rules registered anywhere else (a test module, a plugin) are global.
+`nightward doctor` names the conftest.py each suggested rule belongs in.
+
 `register()` patterns run over the payload's **canonical JSON text**, not over the
 decoded strings: pretty-printed (`"key": "value"`, keys sorted), and inside a string
 value every `"` is written `\"` and every newline `\n`. A pattern copied from what
@@ -267,14 +288,19 @@ change first:
 | a date-time, HTTP date or Unix timestamp (also as a string, e.g. `X-RateLimit-Reset`) | `*` looks like a real change | only *if it is not part of the contract*: `scrub.register_field(key)` for that key, or a pattern anchored on the text before it; for a date in a list, "mask it at capture time" (no global date pattern) |
 | several dates that all moved by the same amount | `*` looks like a real change ("all 2 values moved by -1 day") | nothing |
 | a list with the same elements in a new order | `*` looks like a real change | only *if it is not part of the contract* (e.g. a set): sort it before capturing |
-| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing (`float(f"{x:.12g}")`, or `.6g` for float32), no mask. Integral floats and deltas of 1 or more are never noise |
+| the same rows in a new order with float noise in some values (an unordered `GROUP BY` on a parallel engine) | `*` looks like a real change, naming the columns with noise (`$[*][2]`) | only *if order is not part of the contract*: sort (`ORDER BY` a key) and round to the number of digits it names, checked to make both samples equal |
+| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing, to the most significant digits (at most 12, or 6 for float32) that make every drifted value in that path equal, e.g. `float(f"{x:.4g}")`; no mask. Rounding lowers the odds of a flip but can't rule it out: a value near a rounding boundary can still flip on another machine. For vectors, capture what the product uses (top-k ids, a ranking). Integral floats and deltas of 1 or more are never noise |
+| rounded floats (5+ significant digits, 4+ decimals) that differ by 1 in the last digit | `*` looks like a real change | *if the capture rounds float noise*, these are rounding-boundary flips: fewer digits (checked on these values), or capture what the product uses |
+| a string holding JSON (a tool call's `arguments`) whose parsed value is unchanged | `~` formatting only | capture `json.loads(...)` of it; when the parsed value did change, doctor names the inner path (`arguments<json>.invoice_id`) |
+| the same text in another Unicode normalization form (NFC -> NFD) | `*` looks like a real change, named as such | only *if the form is not part of the contract*: `unicodedata.normalize("NFC", s)` before capturing |
 | `0.0` -> `-0.0` | `~` sign of zero | `x + 0.0` before capturing |
 | a changed content hash, a type change, a new key, anything else | `*` / `!` looks like a real change | nothing: review, then approve or fix |
 
 Every suggested rule is checked to make both samples equal. It is withheld when it
 would also match a stable value anywhere else in the capture, and for behaviors
 captured with `scrub=False`. If a value marked as a real change changes again on a
-re-run with no code edits, it is volatile: apply the conditional suggestion, or mask
+re-run with no code edits, it is volatile: apply the conditional suggestion (sort,
+round, normalize), or mask
 it at capture time in that test.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
@@ -302,8 +328,16 @@ judge = "anthropic:claude-haiku-4-5"   # real LLM (pip install "nightward[judge]
 # judge = "persona:editor"             # deterministic, key-free (see below)
 ```
 
-nightward reads the nearest `pyproject.toml` at or above the path you run, the same
-way pytest finds its rootdir. To try another judge for **one run**, override it.
+The judge belongs to the project that owns the store: nightward reads the
+`pyproject.toml` nearest the store directory (`.nightward`, or `--dir`), not the
+path you run. `nightward run services/chat` and an agent's
+`nightward_run(path="services/chat")` use the same judge as `nightward run .`, even
+when `services/chat` has its own `pyproject.toml`. `nightward run` prints the file
+it read (`judge: persona:editor (pyproject.toml)`). When approved `semantic=True`
+behaviors changed and no judge is configured, `run` says so (`note: 1 approved
+semantic behavior(s) compared exactly: no judge configured ...`), and the report,
+`status --json` and MCP carry `"judge": {"spec": null, "unavailable": ...,
+"compared_exactly": [...]}`. To try another judge for **one run**, override it.
 The override is never remembered: the next plain `nightward run` and every MCP run
 go back to the committed judge.
 
@@ -314,8 +348,12 @@ NIGHTWARD_JUDGE=persona:strict nightward run .                # same, via env (C
 
 The `persona:*` judges are deterministic and need no key. Both judging personas
 **fail closed**: a change to any digit or number, sign, currency or unit symbol,
-operator (`+ - < > = !=` ...), emoji, negation word, JSON key, or value type
-(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT.
+operator (`+ - < > = !=` ...), emoji, negation, JSON key, or value type
+(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT. Negation means English
+negation words, and Korean, Japanese and Chinese words that carry a negation marker
+(`않`, `없`, `못`, `불가`, `ない`, `ません`, `不`, `没`, `未` ...), since those languages
+negate inside the verb. A word that merely contains such a marker (`少ない`) also
+counts, which only makes lenient stricter.
 
 Only natural-language **prose** is compared loosely. Everything else is compared
 exactly:
@@ -330,24 +368,45 @@ exactly:
 
 Inside prose, line breaks count, and identifier-like words keep their case:
 mixed case (`iPhone`), ALL CAPS (`USD`), or words joined by `_ . / - @ :`.
+"Letter case" means a word's lower- and upper-case forms both match. Unicode case
+folding is not used, so `Maßen`/`Massen` ("in moderation"/"in masses"), `ﬁ`/`fi` and
+the KELVIN SIGN/`K` stay different. Japanese and Chinese are written without spaces,
+so text with kana or Han characters counts as prose even without whitespace. Its
+`。、，．；：！` marks count as sentence punctuation and full-width spaces as spaces;
+every other character must match. A change in Unicode normalization only (NFC vs NFD,
+e.g. Hangul from a macOS file name) is DIFFERENT. `review` and `doctor` name it
+("same text in another Unicode normalization form (NFC -> NFD)") and suggest
+`unicodedata.normalize("NFC", s)` before capturing.
 In structured payloads only string values are compared loosely, and only when
 they are prose.
 
 | persona | rules prose SAME when... | use it for |
 |---|---|---|
-| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end; `。、，．；：！` anywhere) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
 | `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
 | `persona:strict` | never | forcing every mismatch to stay breached |
 
 Any provider:model can plug in as a backend. Each ruling is recorded once per
-fingerprint pair in `.nightward/judge_verdicts.json` — a **committed ledger**, so
-the judge's own nondeterminism can't wobble the gate, fresh clones and CI replay
-verdicts deterministically without a key, and every ruling lands in the PR diff
-for human review: each entry records the behavior, model, verdict, reason, and
-the old and new wording it ruled on (up to 1,000 chars each).
+fingerprint pair in `.nightward/judge/` (one JSON file per ruling) — a **committed
+ledger**. Each entry records the behavior, model, verdict, reason, and the old and
+new wording it ruled on (up to 1,000 chars each), so every ruling lands in the PR
+diff. **Review ledger diffs like baseline diffs**: a ledger entry can turn a breach
+green.
+
+- A model judge (`anthropic:*`) rules once per pair. Its ruling is replayed from
+  the ledger after that, so the model's own nondeterminism can't wobble the gate and
+  fresh clones and CI replay verdicts without a key. A replayed ruling is marked
+  `(replayed from the committed ledger, not ruled this run)` in `review`, and
+  `"judge_replayed": true` in `status --json` and MCP: whoever last edited the
+  ledger made that ruling.
+- A persona is deterministic and free, so it rules again on every run and its
+  ledger entries are a record only. A hand-edited persona entry (`DIFFERENT` ->
+  `SAME`) never changes the verdict: `run` warns that the ledger entry did not match
+  the persona's ruling and rewrites it, which shows up in `git diff`.
 
 Rulings are visible wherever the verdict is:
 
+- `nightward run` and `nightward status` count and name the behaviors ruled SAME.
 - `nightward review` lists every behavior the judge ruled SAME, with its diff,
   even when the boundary is intact. A wrong SAME is a hole in the gate, so audit them,
   and overrule one with `nightward reject <name>`: a human rejection beats the judge,
@@ -375,9 +434,13 @@ claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in 
 ```
 
 Other hosts take the usual JSON entry. Start the server in the project root: it
-resolves `path` and `dir` against its own working directory. Started in a
-subdirectory, both tools refuse with "no nightward store at ..., but found ..."
-instead of creating a second, empty store there.
+resolves `path` against its own working directory and gates the store `.nightward`
+there (or `nightward mcp --dir PATH`). Started in a subdirectory, both tools refuse
+with "no nightward store at ..., but found ..." instead of creating a second, empty
+store there. The store is the human's choice, like the judge: a tool call's `dir` may
+only name that same store, and any other is refused. Otherwise an agent could copy
+the store into an ignored folder, forge its baseline, and get "intact" with nothing
+in `git status`.
 
 ```json
 {"mcpServers": {"nightward": {"command": "nightward", "args": ["mcp"], "cwd": "/path/to/project"}}}
@@ -385,15 +448,17 @@ instead of creating a second, empty store there.
 
 | tool | arguments | what it does |
 |---|---|---|
-| `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated) | runs the tests, captures behaviors, recomputes the boundary |
-| `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
+| `nightward_run` | `path="."` (what pytest runs), `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated); `dir` is optional and may only name the server's store | runs the tests, captures behaviors, recomputes the boundary |
+| `nightward_status` | `dir` (optional, as above) | reads the last run's verdict without running anything |
 
 Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
 `kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
-`rejected`, `rejected_by` when the payload is a standing rejection), `not_run`
-(`{name, group}` of approved behaviors whose test was deselected) and `narrowed`,
-`judged_same`, `stale`, `incomplete` (`{"failed": n, "errors": m}` or null),
-`generated_at`, and `judge`. `boundary` is one of:
+`judge_replayed` when that ruling came from the ledger; `rejected`, `rejected_by` when
+the payload is a standing rejection), `not_run` (`{name, group}` of approved behaviors
+whose test was deselected) and `narrowed`, `judged_same`, `stale`, `incomplete`
+(`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, and `store` (the
+absolute path of the store the verdict comes from). `nightward_run` also returns
+`path` (what pytest ran), so a loop driver can check both. `boundary` is one of:
 
 | `boundary` | meaning | what the agent should do |
 |---|---|---|
@@ -432,13 +497,17 @@ Rules for the loop:
 status, counts, and grouped diffs with copy-paste `approve`/`reject` commands. It is
 **read-only** (decisions stay in the CLI) and **static** (no backend), so it also
 deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered with
-`textContent` only — captured output never touches an HTML parser.
+`textContent` only — captured output never touches an HTML parser. The page is a
+snapshot of the store when it was built: after a new `run` or `approve`, rebuild it
+with `nightward view` (refreshing the browser shows the old build). The header shows
+the verdict's own time ("verdict as of", UTC) next to the build time.
 
 The copy-paste commands quote every behavior name for the shell picked in
 "commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
 Windows). A name such as `x;touch${IFS}pwned` therefore arrives as one literal
 argument and never runs as code. When a name has no safe form in the selected shell
-(`%` or `!` in cmd.exe), the dashboard says so and offers no command.
+(`%` or `!` in cmd.exe), the dashboard says so and offers no command. A group's
+"approve this group" command is `nightward approve --group G`, short at any group size.
 
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data
@@ -459,17 +528,22 @@ changed** — nothing more. Read these four limits before trusting the green lig
    calls, or add scrub rules that mask a change. nightward does not try to
    police the filesystem — instead, every one of those bypasses leaves a
    visible trace in git. The enforcement point is **review**:
-   - `baseline/*.approved.json`, `judge_verdicts.json`, scrub rules, and test
+   - `baseline/*.approved.json`, the judge ledger (`judge/`), scrub rules, and test
      files are code — review their diffs in every PR;
    - protect your main branch (required human review) and let CI re-run
      `nightward run && nightward gate` from source, so a locally forged
-     "intact" can't merge itself;
+     "intact" can't merge itself (a hand-edited `report.json` or a forged copy
+     of the store leaves no trace in git; MCP refuses any store but the one the
+     server was started with, and names it as `store` in every result);
    - never wire `approve` into the agent loop or CI (the MCP server
      deliberately doesn't expose it — keep your own glue to the same rule).
 3. **A semantic judge can be wrong.** A false-SAME verdict is a hole in the
    gate. That's why judging is opt-in per behavior, the prompt is conservative
    (unsure → DIFFERENT), failures fall back to exact comparison, and every
-   ruling is recorded in the committed `judge_verdicts.json` for human review.
+   ruling is recorded in the committed judge ledger (`.nightward/judge/`) for
+   human review. Persona rulings are recomputed every run, so editing their ledger
+   entries changes nothing; a model's ruling is replayed from the ledger and marked
+   as replayed.
    If a behavior must never be judged leniently, don't mark it `semantic=True`.
    Captured output is untrusted input to an LLM judge (it may quote retrieved
    documents or user text). The prompt inserts each output once, verbatim, in a

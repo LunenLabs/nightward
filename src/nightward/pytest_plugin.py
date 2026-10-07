@@ -82,7 +82,7 @@ class Recorder:
 
     def add(self, name: str, value, group: str | None = None,
             semantic: bool = False, source: str | None = None,
-            scrub: bool = True) -> None:
+            scrub: bool = True, path: Path | None = None) -> None:
         validate_name(name)
         if self.store_root is not None:
             _check_path_length(self.store_root, name)
@@ -102,7 +102,8 @@ class Recorder:
         # scrub() -> canonical_json may raise NightwardError on bad payloads;
         # let it surface (naming the behavior) so the offending test fails loudly.
         try:
-            payload, masked = scrub_counted(value, enabled=scrub)
+            # path: the capturing test's file - scopes conftest rules (D20)
+            payload, masked = scrub_counted(value, enabled=scrub, path=path)
         except NightwardError as exc:
             raise NightwardError(f"behavior {name!r}: {exc}") from exc
         if masked:
@@ -182,7 +183,7 @@ def behavior(request):
     def capture(name: str, value, *, group: str | None = None,
                 semantic: bool = False, scrub: bool = True) -> None:
         rec.add(name, value, group=group, semantic=semantic, source=request.node.nodeid,
-                scrub=scrub)
+                scrub=scrub, path=request.node.path)
 
     return capture
 

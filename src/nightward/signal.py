@@ -31,8 +31,11 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
         boundary = "stale"
     elif incomplete and boundary == "intact":
         boundary = "incomplete"   # a failing capture test is never "done"
+    # judge_replayed only when true: the ruling came from the committed ledger,
+    # the judge did not rule again this run (D22).
     judged_same = [
         {k: it.get(k) for k in ("name", "group", "judge_model", "judge_reason")}
+        | ({"judge_replayed": True} if it.get("judge_replayed") else {})
         for it in report.get("judged_same", [])
     ]
     return {

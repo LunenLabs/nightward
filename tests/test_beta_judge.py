@@ -138,7 +138,7 @@ def test_mcp_never_inherits_a_cli_override_or_env(tmp_path, monkeypatch):
     assert execute_run(path, dir_, judge_spec="persona:lenient")["report"]["boundary"] == "intact"
     monkeypatch.setenv("NIGHTWARD_JUDGE", "persona:lenient")
     out = mcp_server.run_tool(path, dir_)
-    assert out["boundary"] == "breached" and out["judge"] is None
+    assert out["boundary"] == "breached" and out["judge"]["spec"] is None   # no judge
 
 
 def test_mcp_server_judge_is_set_by_the_human(tmp_path, monkeypatch):
@@ -213,9 +213,8 @@ def test_review_shows_judged_same_wording_even_when_intact(tmp_path, monkeypatch
 
 def test_ledger_entry_keeps_the_wording_it_ruled_on(tmp_path, monkeypatch):
     _judged_same_project(tmp_path, monkeypatch)
-    ledger = json.loads((tmp_path / ".nightward" / "judge_verdicts.json")
-                        .read_text(encoding="utf-8"))
-    [entry] = ledger.values()
+    [f] = (tmp_path / ".nightward" / "judge").glob("*.json")
+    entry = json.loads(f.read_text(encoding="utf-8"))
     assert entry["old"] == "Your refund of $50 has been approved."
     assert entry["new"] == REWORDED
 

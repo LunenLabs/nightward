@@ -29,6 +29,7 @@ class Change:
     judged: bool = False      # an LLM judge ruled on this fingerprint mismatch
     judge_model: str = ""     # provider:model spec that ruled
     judge_reason: str = ""
+    judge_replayed: bool = False  # verdict read from the ledger, not ruled this run
     rejected: bool = False    # the current state is a standing rejection (rejected/)
     rejected_by: str = ""
     token: str = ""           # identity of this change (see baseline.change_token)
@@ -38,6 +39,8 @@ class Change:
         if self.judged:
             d |= {"judged": True, "judge_model": self.judge_model,
                   "judge_reason": self.judge_reason}
+            if self.judge_replayed:
+                d["judge_replayed"] = True
         if self.rejected:
             d |= {"rejected": True, "rejected_by": self.rejected_by}
         if self.token:
@@ -238,6 +241,7 @@ def compare(baseline: dict[str, Behavior], pending: dict[str, Behavior],
                     change.judged = True
                     change.judge_model = verdict.model
                     change.judge_reason = verdict.reason
+                    change.judge_replayed = verdict.cached
                     if verdict.verdict == SAME:
                         change.kind = UNCHANGED
             changes.append(change)

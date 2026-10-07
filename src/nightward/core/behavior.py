@@ -52,6 +52,13 @@ def _type_name(value: Any) -> str:
     return t.__qualname__ if t.__module__ == "builtins" else f"{t.__module__}.{t.__qualname__}"
 
 
+# .isoformat() of a date-time is exactly what the default scrubber masks: say so
+# where the hint is given, or the user's own date-time output vanishes (R3-DATA-01).
+_ISO_DATETIME = ("use .isoformat() - note: ISO date-times are masked as \"<TIMESTAMP>\" by "
+                 "the default scrubber; if this date-time is your output, capture with "
+                 "scrub=False (or call nightward.scrub.disable_defaults() in conftest.py)")
+
+
 def _conversion_hint(value: Any) -> str:
     """How to turn a common non-JSON value (numpy, pandas, stdlib) into JSON."""
     t = type(value)
@@ -64,8 +71,10 @@ def _conversion_hint(value: Any) -> str:
     if lib == "pandas":
         return {"DataFrame": 'use df.to_dict("records")',
                 "Series": "use .tolist() (or .to_dict())",
-                "Timestamp": "use .isoformat()"}.get(
+                "Timestamp": _ISO_DATETIME}.get(
                     name, "convert it to plain Python first (e.g. .tolist(), str())")
+    if isinstance(value, datetime.datetime):
+        return _ISO_DATETIME
     if isinstance(value, (datetime.date, datetime.time)):
         return "use .isoformat()"
     if isinstance(value, decimal.Decimal):

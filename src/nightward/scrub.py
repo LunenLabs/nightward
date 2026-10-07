@@ -12,15 +12,24 @@ tool dies of false positives. Two mechanisms, applied in order:
    gets scrubbed - so a business datetime (deadline, as-of date) is masked too.
 
 Opt out per behavior with `behavior(..., scrub=False)` (no scrubbing at all) or
-globally with `disable_defaults()` in conftest.py (built-ins off, custom rules
-kept). The plugin counts default masks and `nightward run` reports them, so the
-masking is never silent.
+with `disable_defaults()` in conftest.py (built-ins off, custom rules kept). The
+plugin counts default masks and `nightward run` reports them, so the masking is
+never silent.
+
+Scope (D20): a rule (or `disable_defaults()`) called from a conftest.py - also
+through a helper it calls - applies only to behaviors captured by tests under
+that conftest's directory, like the conftest's own fixtures. So a rule in the
+root conftest.py covers the whole suite, while one in `services/orders/conftest.py`
+can't mask a field of `services/billing`, and a capture never depends on which
+directories a run collected. Rules registered anywhere else are global.
 """
 from __future__ import annotations
 
 import json
 import re
+import sys
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from .core.behavior import canonical_json
@@ -31,12 +40,33 @@ _DEFAULT_SCRUBBERS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "<UUID>"),  # noqa: E501
 ]
 
-_custom: list[tuple[re.Pattern, str]] = []
-_custom_fields: dict[str, Any] = {}
-_defaults_enabled = True
+# Each rule carries its scope: the conftest.py that registered it, or None (global).
+_custom: list[tuple[re.Pattern, str, Path | None]] = []
+_custom_fields: list[tuple[str, Any, Path | None]] = []
+_defaults_off: list[Path | None] = []   # where disable_defaults() was called
 # Matches per custom rule in this process, so a rule that never fires is
 # reported instead of silently leaving the noise in place (R1-WEB-03).
 _hits: Counter = Counter()
+
+
+def _caller_conftest() -> Path | None:
+    """The conftest.py on the call stack nearest the caller, or None."""
+    frame = sys._getframe(2)
+    while frame is not None:
+        path = Path(frame.f_code.co_filename)
+        if path.name == "conftest.py":
+            path = path.resolve()
+            _shown(path)   # name it relative to where it was registered
+            return path
+        frame = frame.f_back
+    return None
+
+
+def _applies(scope: Path | None, path: Path | None) -> bool:
+    """Whether a rule registered from `scope` covers the test file `path`."""
+    if scope is None:
+        return True
+    return path is not None and Path(path).resolve().is_relative_to(scope.parent)
 
 
 def register(pattern: str, replacement: str) -> None:
@@ -51,9 +81,10 @@ def register(pattern: str, replacement: str) -> None:
     quoted string values, and quote your placeholder tokens. Prefer
     `register_field` when the volatile value lives under a stable key, or mask
     the value in the test before capturing it. `nightward run` reports a rule
-    that matched nothing.
+    that matched nothing. Called from a conftest.py, the rule covers only tests
+    under that conftest's directory.
     """
-    _custom.append((re.compile(pattern), replacement))
+    _custom.append((re.compile(pattern), replacement, _caller_conftest()))
 
 
 def register_field(field: str, replacement: Any = "<SCRUBBED>") -> None:
@@ -61,9 +92,14 @@ def register_field(field: str, replacement: Any = "<SCRUBBED>") -> None:
 
     e.g. register_field("created_at") or register_field("attempts", 0).
     The replacement is a JSON value, not regex text — it cannot corrupt the
-    payload and never touches look-alike literals in other fields.
+    payload and never touches look-alike literals in other fields. Called from
+    a conftest.py, the rule covers only tests under that conftest's directory.
     """
-    _custom_fields[field] = replacement
+    _register_field_scoped(field, replacement, _caller_conftest())
+
+
+def _register_field_scoped(field: str, replacement: Any, scope: Path | None) -> None:
+    _custom_fields.append((field, replacement, scope))
 
 
 def disable_defaults() -> None:
@@ -71,46 +107,60 @@ def disable_defaults() -> None:
 
     Call it in conftest.py when datetimes/uuids are your *output* (deadlines,
     event times, deterministic ids). Custom `register`/`register_field` rules
-    still apply. For a single behavior use `behavior(..., scrub=False)`.
+    still apply. For a single behavior use `behavior(..., scrub=False)`. Called
+    from a conftest.py, it covers only tests under that conftest's directory.
     """
-    global _defaults_enabled
-    _defaults_enabled = False
+    _defaults_off.append(_caller_conftest())
 
 
 def _reset() -> None:
     """Drop all custom scrubbers and re-enable the defaults (test isolation)."""
-    global _defaults_enabled
     _custom.clear()
     _custom_fields.clear()
     _hits.clear()
-    _defaults_enabled = True
+    _defaults_off.clear()
 
 
-def _rule_text(rule: re.Pattern | str) -> str:
-    if isinstance(rule, str):
-        return f"register_field({rule!r})"
-    return f"register(r'{rule.pattern}')"
+def _rule_text(rule: re.Pattern | str, scope: Path | None) -> str:
+    text = (f"register_field({rule!r})" if isinstance(rule, str)
+            else f"register(r'{rule.pattern}')")
+    return text if scope is None else f"{text} in {_shown(scope)}"
+
+
+_SHOWN: dict[Path, str] = {}
+
+
+def _shown(path: Path) -> str:
+    # Fixed on first use, so a test that changes directory can't split the hit
+    # count of one rule across two names.
+    if path not in _SHOWN:
+        try:
+            _SHOWN[path] = path.relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            _SHOWN[path] = str(path)
+    return _SHOWN[path]
 
 
 def unmatched_rules() -> list[str]:
     """Custom rules that have matched nothing so far in this process."""
-    rules = [*(pat for pat, _ in _custom), *_custom_fields]
-    return [_rule_text(r) for r in rules if not _hits[_rule_text(r)]]
+    rules = [*((pat, scope) for pat, _, scope in _custom),
+             *((field, scope) for field, _, scope in _custom_fields)]
+    return [text for text in (_rule_text(*r) for r in rules) if not _hits[text]]
 
 
-def _mask_field(key: str) -> Any:
-    _hits[_rule_text(key)] += 1
-    return _custom_fields[key]
-
-
-def _mask_fields(value: Any) -> Any:
+def _mask_fields(value: Any, fields: dict[str, tuple[Any, str]]) -> Any:
+    # fields: key -> (replacement, rule text for the hit count)
     if isinstance(value, dict):
-        return {
-            k: _mask_field(k) if k in _custom_fields else _mask_fields(v)
-            for k, v in value.items()
-        }
+        out = {}
+        for k, v in value.items():
+            if k in fields:
+                _hits[fields[k][1]] += 1
+                out[k] = fields[k][0]
+            else:
+                out[k] = _mask_fields(v, fields)
+        return out
     if isinstance(value, list):
-        return [_mask_fields(v) for v in value]
+        return [_mask_fields(v, fields) for v in value]
     return value
 
 
@@ -128,29 +178,35 @@ def _unique_keys(pairs: list[tuple[str, Any]]) -> dict:
     return out
 
 
-def scrub(payload: Any) -> Any:
-    return scrub_counted(payload)[0]
+def scrub(payload: Any, path: Path | None = None) -> Any:
+    return scrub_counted(payload, path=path)[0]
 
 
-def scrub_counted(payload: Any, *, enabled: bool = True) -> tuple[Any, int]:
+def scrub_counted(payload: Any, *, enabled: bool = True,
+                  path: Path | None = None) -> tuple[Any, int]:
     """Scrub `payload`; also return how many values the built-in scrubbers masked.
 
-    enabled=False skips every scrubber but still validates and normalizes the
-    payload through JSON (tuples become lists, keys become strings).
+    path is the capturing test's file: rules registered from a conftest.py
+    apply only when it lies under that conftest's directory (None: only global
+    rules apply). enabled=False skips every scrubber but still validates and
+    normalizes the payload through JSON (tuples become lists, keys become strings).
     """
     if not enabled:
         return json.loads(canonical_json(payload)), 0
-    if _custom_fields:
-        payload = _mask_fields(payload)
+    fields = {field: (repl, _rule_text(field, scope))
+              for field, repl, scope in _custom_fields if _applies(scope, path)}
+    if fields:
+        payload = _mask_fields(payload, fields)
     text = canonical_json(payload)
     masked = 0
-    if _defaults_enabled:
+    if not any(_applies(scope, path) for scope in _defaults_off):
         for pat, repl in _DEFAULT_SCRUBBERS:
             text, n = pat.subn(repl, text)
             masked += n
-    for pat, repl in _custom:
-        text, n = pat.subn(repl, text)
-        _hits[_rule_text(pat)] += n
+    for pat, repl, scope in _custom:
+        if _applies(scope, path):
+            text, n = pat.subn(repl, text)
+            _hits[_rule_text(pat, scope)] += n
     try:
         return json.loads(text, object_pairs_hook=_unique_keys), masked
     except json.JSONDecodeError as exc:

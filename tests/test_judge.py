@@ -65,6 +65,8 @@ def test_persona_editor_normalized_equality(tmp_path):
 
 
 def test_cache_prevents_rejudging_and_persists(tmp_path, monkeypatch):
+    # A model's ruling is replayed (nondeterministic, may need a key); personas
+    # rule again every run instead (D22, tests/test_beta_r3_ai.py).
     calls = []
 
     def counting_backend(model, old, new):
@@ -72,42 +74,47 @@ def test_cache_prevents_rejudging_and_persists(tmp_path, monkeypatch):
         return SAME, "counted"
 
     import nightward.judge as judge_mod
-    monkeypatch.setitem(judge_mod._BACKENDS, "persona", counting_backend)
+    monkeypatch.setitem(judge_mod._BACKENDS, "anthropic", counting_backend)
+    spec = "anthropic:claude-haiku-4-5"
 
     ledger = tmp_path / "judge_verdicts.json"
-    j1 = Judge("persona:editor", cache_path=ledger)
+    j1 = Judge(spec, cache_path=ledger)
     v1 = j1.equivalent("a", "b", "fp-old", "fp-new", name="daily_brief")
     v2 = j1.equivalent("a", "b", "fp-old", "fp-new", name="daily_brief")
     assert (v1.cached, v2.cached) == (False, True)
 
-    # a fresh Judge instance (e.g. a later `approve` recompute) reuses the file
-    j2 = Judge("persona:editor", cache_path=ledger)
+    # a fresh Judge instance (e.g. a later `approve` recompute) reuses the ledger
+    j2 = Judge(spec, cache_path=ledger)
     assert j2.equivalent("a", "b", "fp-old", "fp-new").cached is True
     assert len(calls) == 1
-    entry = json.loads(ledger.read_text(encoding="utf-8"))["fp-old:fp-new:persona:editor"]
+    [f] = (tmp_path / "judge").glob("*.json")
+    entry = json.loads(f.read_text(encoding="utf-8"))
     # the ledger is committed and human-reviewed: entries must be self-describing
+    assert entry["key"] == f"fp-old:fp-new:{spec}"
     assert entry["behavior"] == "daily_brief"
-    assert entry["model"] == "persona:editor"
+    assert entry["model"] == spec
 
 
 def test_ledger_replays_verdicts_without_any_backend(tmp_path, monkeypatch):
     """The committed ledger must keep a judged-SAME boundary intact on a fresh
-    clone / CI runner where the backend is unavailable (no key, no network)."""
+    clone / CI runner where the model judge is unavailable (no key, no network)."""
     import nightward.judge as judge_mod
 
+    spec = "anthropic:claude-haiku-4-5"
+    monkeypatch.setitem(judge_mod._BACKENDS, "anthropic", lambda m, o, n: (SAME, "rephrased"))
     ledger = tmp_path / "judge_verdicts.json"
     baseline, pending = _pair("old wording", "new wording")
     assert compare(baseline, pending,
-                   judge=Judge("persona:lenient", cache_path=ledger))[0].kind == UNCHANGED
+                   judge=Judge(spec, cache_path=ledger))[0].kind == UNCHANGED
 
     def down(model, old, new):
         raise JudgeUnavailable("fresh CI runner: no key")
 
-    monkeypatch.setitem(judge_mod._BACKENDS, "persona", down)
-    replayed = Judge("persona:lenient", cache_path=ledger)  # fresh process, ledger only
+    monkeypatch.setitem(judge_mod._BACKENDS, "anthropic", down)
+    replayed = Judge(spec, cache_path=ledger)  # fresh process, ledger only
     [change] = compare(baseline, pending, judge=replayed)
     assert change.kind == UNCHANGED  # deterministic without re-judging
-    assert change.judged is True
+    assert change.judged is True and change.judge_replayed is True
 
 
 def test_unavailable_backend_returns_none(tmp_path, monkeypatch):
@@ -233,7 +240,7 @@ def test_cli_run_with_persona_judge_keeps_boundary_intact(tmp_path):
     assert "ruled semantically same" in r1.stdout.lower()
     report = json.loads((tmp_path / ".nightward" / "report.json").read_text(encoding="utf-8"))
     assert report["counts"]["judged_same"] == 1
-    assert (tmp_path / ".nightward" / "judge_verdicts.json").exists()
+    assert list((tmp_path / ".nightward" / "judge").glob("*.json"))   # the ledger
 
 
 # --- D8: key-free personas fail closed on meaning-bearing characters ------------

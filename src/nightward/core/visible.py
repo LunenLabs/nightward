@@ -55,6 +55,21 @@ def _names(chars: str) -> str:
     return " + ".join(shown) + (" ..." if len(chars) > 3 else "")
 
 
+def _form(text: str) -> str:
+    for form in ("NFC", "NFD"):
+        if unicodedata.is_normalized(form, text):
+            return form
+    return "mixed"
+
+
+def form_change(old: str, new: str) -> str | None:
+    """'NFC -> NFD' when the two texts differ only in Unicode normalization
+    (macOS file names, some IMEs and clipboards decompose Hangul), else None."""
+    if old == new or unicodedata.normalize("NFC", old) != unicodedata.normalize("NFC", new):
+        return None
+    return f"{_form(old)} -> {_form(new)}"
+
+
 def reveal(old: str, new: str) -> tuple[str, str, str] | None:
     """(old, new, note) with the differing characters escaped, when the two texts
     differ but look the same; None when the difference is plainly visible.
@@ -64,6 +79,11 @@ def reveal(old: str, new: str) -> tuple[str, str, str] | None:
     """
     if old == new or _indent(old) != _indent(new) or _fold(old) != _fold(new):
         return None
+    form = form_change(old, new)
+    if form:
+        # Escaping every decomposed syllable is a wall of \uXXXX: say what it is.
+        return old, new, (f"same text in another Unicode normalization form ({form}) - "
+                          f'normalize before capturing: unicodedata.normalize("NFC", s)')
     if len(old) > _MAX_CHARS or len(new) > _MAX_CHARS:
         return old, new, "differs only in invisible or look-alike characters"
     a: list[str] = []
