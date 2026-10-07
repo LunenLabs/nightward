@@ -108,14 +108,15 @@ A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
 so they read as REMOVED. That is why `approve --all` leaves removals alone. Each
 behavior records the test that captured it (`source`, never compared), and
-`--include-removed` only drops a removal that a **whole-suite** run proves: the run
-was not narrowed (no `-k`/`-m`, deselection or test-id argument, and every test file
-any baseline points at was collected) and every test known to capture the behavior
-ran to completion without capturing it. The rest are kept and listed with the reason
-(a deleted test counts as "did not run" - approve such removals by name). Baselines
-from before sources existed need a clean whole-suite run (nothing skipped, failed,
-errored, deselected or xfailed); `approve --all` backfills `source` into unchanged
-baselines whose capturing test moved. Capture runs in a single process: `nightward run` forces `-n 0` if
+`--include-removed` only drops a removal after a **clean whole-suite run**: the
+default path (the rootdir or your configured `testpaths`), no extra pytest arguments
+(nothing after `--`, no `PYTEST_ADDOPTS`, no `--ignore`/`--collect-only`), pytest exit 0
+with every collected test passing and nothing skipped, xfailed, deselected or errored,
+and the behavior's recorded test ran under that exact id. Anything else keeps every
+removal and says why; a removal you intend is one explicit `nightward approve <name>`.
+Baselines from before sources existed follow the same rule; `approve --all` backfills
+`source` into unchanged baselines whose capturing test moved.
+Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 One writer per store: `run` (and MCP `nightward_run`), `approve` and `reject` hold
 `.nightward/.lock`, so a second concurrent writer (`tox -p`, an agent next to a
@@ -135,8 +136,8 @@ nightward gate
 `nightward report` trusts the capture only if `run_meta.json` proves `pending/` is
 exactly what a complete pytest session flushed; a failed/errored session exits 1 like
 `run`. Or let nightward drive pytest and pass the arguments through:
-`nightward run tests -- -m "not gpu" -p no:randomly`. Either way a narrowed run
-(`-k`, `-m`, deselection, a test id) never proves a removal.
+`nightward run tests -- -m "not gpu" -p no:randomly`. Either way a run with extra
+pytest arguments never proves a removal.
 
 ## What nightward normalizes (what counts as "the same payload")
 

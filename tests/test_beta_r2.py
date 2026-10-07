@@ -233,7 +233,7 @@ def test_moved_capture_is_not_proven_removed_by_its_old_test(tmp_path):
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "render.dev.approved.json").exists()
-    assert "test_a.py::test_dev" in r.stdout
+    assert "1 skipped" in r.stdout     # D18: the run was not clean
 
 
 def test_approve_all_backfills_sources_of_unchanged_behaviors(tmp_path):

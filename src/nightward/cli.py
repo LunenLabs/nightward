@@ -327,7 +327,7 @@ def run(ctx: typer.Context,
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
-    (a -k/-m/deselecting run never proves a removal).
+    (a run with extra pytest arguments never proves a removal).
     """
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
@@ -509,50 +509,25 @@ def _standing_rejections(store: Store, baseline, pending) -> set[str]:
     return held
 
 
-# Outcomes that leave a test's behaviors uncaptured (a false REMOVED).
-_NOT_RUN = ("skipped", "failed", "errors", "deselected", "xfailed")
-
-
-def _sources(name: str, b, meta: dict) -> set[str]:
-    """Every test known to capture `name`: the approved record and the latest run's."""
-    latest = (meta.get("sources") or {}).get(name)
-    return {s for s in (b.source, latest) if isinstance(s, str)}
-
-
-def _run_doubt(baseline, meta: dict) -> str | None:
-    """Why the last run can't prove any removal, or None (D13 (a))."""
-    if meta.get("narrowed", True):
-        return ("the last run was narrowed (-k/-m, deselected tests or a test id) - "
-                "only a whole-suite run proves removals")
-    collected = set(meta.get("collected_files") or ())
-    files = {s.split("::", 1)[0] for n, b in baseline.items() for s in _sources(n, b, meta)}
-    missing = sorted(files - collected)
-    if missing:
-        shown = ", ".join(missing[:3]) + (" ..." if len(missing) > 3 else "")
-        return (f"the last run did not collect {shown} - only a whole-suite run "
-                f"proves removals")
-    return None
-
-
 def _removal_doubt(name: str, b, meta: dict) -> str | None:
-    """Why a REMOVED behavior may be false, or None when the run proves it gone.
+    """Why the last run can't prove a REMOVED behavior gone, or None (D18).
 
-    Proof (D13): every test known to capture it ran to completion this run and
-    did not capture it. Without any recorded test (legacy baselines), only a
-    clean whole-suite run proves it.
+    Inferring proof from partial runs kept leaking (shifted parametrize ids,
+    captures moved into skipped tests, --collect-only, --ignore), so only a
+    clean whole-suite run proves a removal (see pytest_plugin._scope), and
+    then only if the behavior's recorded test ran and passed under that exact
+    id. Baselines without a recorded test follow the same run rule.
     """
-    sources = _sources(name, b, meta)
-    if sources:
-        not_done = sorted(sources - set(meta.get("completed", ())))
-        if not not_done:
-            return None
-        return (f"its test {not_done[0]} did not run to completion this run (skipped, "
-                f"failed, deselected, xfailed, deleted, or outside the run path)")
-    counts = [f"{meta[k]} {k}" for k in _NOT_RUN if meta.get(k)]
-    if not meta.get("whole_suite") or counts:
-        detail = f" ({', '.join(counts)})" if counts else ""
-        return (f"no recorded source test - only a clean whole-suite run proves its "
-                f"removal{detail}")
+    if "clean" not in meta:
+        return ("the last run recorded no removal evidence (an older nightward, or no "
+                "capture yet) - re-run `nightward run`")
+    if not meta["clean"]:
+        return (f"the last run was not a clean whole-suite run ({meta.get('clean_doubt')}) "
+                f"- only `nightward run` of the whole suite with no extra pytest arguments, "
+                f"and every test passing, proves a removal")
+    if b.source and b.source not in set(meta.get("completed") or ()):
+        return (f"its recorded test {b.source} did not run under that id (renamed, "
+                f"re-parametrized or deleted?)")
     return None
 
 
@@ -589,8 +564,9 @@ def approve(names: list[str] | None = APPROVE_NAMES_ARG,
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
-                help="With --all, also accept REMOVED behaviors that a whole-suite run "
-                     "proves gone: their test ran to completion without capturing them "
+                help="With --all, also accept REMOVED behaviors, but only after a clean "
+                     "whole-suite run (no extra pytest arguments, nothing skipped, "
+                     "deselected, xfailed or failing) in which their test passed "
                      "(drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
@@ -626,9 +602,8 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
             # A test that didn't run captures nothing and looks REMOVED; approving
             # that would silently shrink the boundary. Only proven removals go.
             meta = store.load_run_meta()
-            run_doubt = _run_doubt(baseline, meta)
             doubts = {n: why for n in removed
-                      if (why := run_doubt or _removal_doubt(n, baseline[n], meta))}
+                      if (why := _removal_doubt(n, baseline[n], meta))}
             held = list(doubts)
         else:
             held = removed
@@ -648,10 +623,8 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
             raise NightwardError(f"no pending or baseline behavior named "
                                  f"{', '.join(map(repr, unknown))}; nothing was approved")
         meta = store.load_run_meta()
-        run_doubt = _run_doubt(baseline, meta)
         doubts = {n: why for n in names
-                  if n not in pending
-                  and (why := run_doubt or _removal_doubt(n, baseline[n], meta))}
+                  if n not in pending and (why := _removal_doubt(n, baseline[n], meta))}
         held = list(doubts)
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [n for n in names if n in rejected and n not in held]
@@ -681,8 +654,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     if doubts:
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline "
                       f"that this run can't prove gone:")
+        by_reason: dict[str, list[str]] = {}
         for n, why in doubts.items():
-            console.print(f"  - {escape(n)}: {escape(why)}", soft_wrap=True)
+            by_reason.setdefault(why, []).append(n)
+        for why, which in by_reason.items():
+            console.print(f"  - {escape(', '.join(which))}: {escape(why)}", soft_wrap=True)
         console.print("  if a removal is intended, accept it with `nightward approve <name>`.")
     elif held:
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "

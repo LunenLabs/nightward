@@ -61,7 +61,7 @@ def test_include_removed_approves_removals(approved_pair):
     # test_b still runs to completion but no longer captures "b": a proven removal.
     write(tmp_path / "test_s.py", 'def test_a(behavior):\n    behavior("a", {"v": 1})\n'
                                   'def test_b(behavior):\n    pass\n')
-    cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)   # D18: a clean whole-suite run
 
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
@@ -90,11 +90,11 @@ def test_include_removed_holds_removal_after_skip(approved_pair):
           'def test_a(behavior):\n    behavior("a", {"v": 1})\n'
           '@pytest.mark.skip(reason="off")\n'
           'def test_b(behavior):\n    behavior("b", {"v": 2})\n')
-    cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
 
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "test_s.py::test_b did not run to completion" in r.stdout
+    assert "1 skipped" in r.stdout and "clean whole-suite run" in r.stdout
     assert (tw / "baseline" / "b.approved.json").exists()
 
 

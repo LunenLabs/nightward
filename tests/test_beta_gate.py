@@ -263,7 +263,8 @@ def test_rejection_only_holds_the_rejected_payload(rejected_floor, tmp_path):
 
 def test_rejected_removal_is_kept_by_include_removed(rejected_floor):
     tmp_path, tw = rejected_floor
-    cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"DROP": "1"})
+    # D18: only a clean whole-suite run (the default path) may drop a removal
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"DROP": "1"})
     assert cli("reject", "probe", "--dir", str(tw), cwd=tmp_path).returncode == 0
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr

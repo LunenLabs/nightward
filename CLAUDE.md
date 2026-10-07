@@ -136,12 +136,12 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **`approve --all` never approves REMOVED.** Skips and partial paths
   (`run tests/x.py`) produce fake REMOVED; bulk-approving them silently shrinks
   the baseline. Removals need `approve <name>` or `--all --include-removed`,
-  which only drops a removal a whole-suite run proves (D13): run_meta `narrowed`
-  is false (no -k/-m/deselection/test id), every file in any known source was in
-  `collected_files`, and every known source of the behavior (baseline `source`
-  plus run_meta `sources`, the last capturing test carried across runs) is in
-  `completed`. Source-less legacy baselines need `whole_suite` and zero
-  skipped/failed/errors/deselected/xfailed. `approve --all` backfills `source`
+  which only drops a removal after a clean whole-suite run (D18 - inference
+  from partial runs kept leaking): run_meta `clean` is true (the plugin's `_scope`:
+  rootdir/testpaths only, no passthrough args or PYTEST_ADDOPTS, exit 0, every
+  collected test passed, zero skipped/xfailed/deselected/errors; `clean_doubt` says
+  why not) and the baseline `source` is in `completed`. Legacy source-less baselines
+  follow the same rule. `approve --all` backfills `source`
   into unchanged baselines (`Store.refresh_source`; never fingerprinted).
 - **Rejections are binding for bulk approval.** `approve --all` skips any
   behavior whose current pending (or, for a removal, baseline) state matches its

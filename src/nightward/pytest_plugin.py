@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -181,31 +182,78 @@ def pytest_sessionfinish(session, exitstatus):
     owned = run_id and (read_lock(store.root) or {}).get("token") == run_id
     with contextlib.nullcontext() if owned else store_lock(store.root,
                                                            "pytest --nightward-record"):
-        _flush(session, rec, store, run_id)
+        _flush(session, exitstatus, rec, store, run_id)
 
 
-def _scope(session, deselected: int) -> dict:
-    """How much of the suite this run covered - removal evidence (D13).
+# Options `nightward run` adds itself; anything else on the command line is
+# the user's (passthrough) and makes the run unfit as removal proof (D18).
+_OWN_FLAGS = ("--nightward-record",)
+_OWN_VALUED = ("--nightward-dir", "--nightward-run-id")
+_VERBOSITY = re.compile(r"-[qv]+|--quiet|--verbose")
 
-    narrowed: -k/-m, deselection (incl. --lf) or a test-id argument; such a run
-    never proves a removal. whole_suite: not narrowed, and every path argument
-    is the rootdir (or above it) or a configured testpath.
+
+def _extra_args(config) -> list[str]:
+    """Command-line arguments beyond the test paths and nightward's own options."""
+    args = [str(a) for a in config.invocation_params.args]
+    paths = {str(a) for a in config.args}
+    extra, i = [], 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a in _OWN_FLAGS or a in paths or _VERBOSITY.fullmatch(a):
+            continue
+        if a in _OWN_VALUED or (a == "-n" and i < len(args) and args[i] == "0"):
+            i += 1     # and its value
+            continue
+        if a.split("=", 1)[0] in _OWN_VALUED or a in ("-n0", "--numprocesses=0"):
+            continue
+        extra.append(a)
+    return extra
+
+
+def _scope(session, exitstatus, counts: dict, completed: list[str]) -> dict:
+    """How much of the suite this run covered - removal evidence (D18).
+
+    narrowed: -k/-m, deselection (incl. --lf) or a test-id argument.
+    clean: a removal can be proven only by a clean whole-suite run: the
+    rootdir or the configured testpaths, no extra pytest arguments (nor
+    PYTEST_ADDOPTS), exit 0, every collected test passed, nothing skipped,
+    xfailed, deselected or errored. clean_doubt says why not.
     """
     config = session.config
     args = [str(a) for a in config.args]
-    narrowed = bool(deselected or config.option.keyword or config.option.markexpr
+    narrowed = bool(counts["deselected"] or config.option.keyword or config.option.markexpr
                     or any("::" in a for a in args))
     root = Path(config.rootpath).resolve()
     allowed = {root, *((root / t).resolve() for t in config.getini("testpaths"))}
     here = Path(config.invocation_params.dir)
-    targets = [(here / a).resolve() for a in args]
-    whole = not narrowed and all(t in allowed or t in root.parents for t in targets)
-    return {"narrowed": narrowed, "whole_suite": whole,
-            "collected_files": sorted({item.nodeid.split("::", 1)[0]
-                                       for item in session.items})}
+    doubts = []
+    partial = [a for a in args if (here / a).resolve() not in allowed
+               and (here / a).resolve() not in root.parents]
+    if partial or narrowed:
+        doubts.append(f"it ran {' '.join(partial) or 'a narrowed selection'}, not the "
+                      f"whole suite")
+    extra = _extra_args(config)
+    if extra:
+        doubts.append(f"extra pytest arguments {' '.join(extra)}")
+    if os.environ.get("PYTEST_ADDOPTS", "").strip():
+        doubts.append("PYTEST_ADDOPTS was set")
+    if config.option.collectonly or config.option.setuponly or config.option.setupplan:
+        doubts.append("no test ran (--collect-only/--setup-only/--setup-plan)")
+    not_run = [f"{counts[k]} {k}" for k in ("failed", "errors", "skipped", "xfailed",
+                                             "deselected") if counts.get(k)]
+    if not_run:
+        doubts.append(", ".join(not_run))
+    elif exitstatus != pytest.ExitCode.OK:
+        doubts.append(f"pytest exited with {int(exitstatus)}")
+    if len(completed) != len(session.items):
+        doubts.append(f"only {len(completed)} of {len(session.items)} collected test(s) "
+                      f"ran and passed")
+    return {"narrowed": narrowed, "clean": not doubts,
+            "clean_doubt": "; ".join(dict.fromkeys(doubts)) or None}
 
 
-def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
+def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None) -> None:
     config = session.config
     try:
         store.ensure()
@@ -227,13 +275,8 @@ def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
     # Ties run_meta to exactly this flush: `nightward report` trusts pending/
     # only when it still matches (R2-DATA-04).
     meta["pending_digest"] = digest({b.name: b for b in rec.behaviors})
-    meta |= _scope(session, meta["deselected"])
-    # The test that LAST captured each behavior, carried across runs: a capture
-    # moved to another test must not leave its old test as removal proof.
+    meta |= _scope(session, exitstatus, meta, meta["completed"])
     last = store.load_run_meta()
-    previous = last.get("sources")
-    meta["sources"] = {**(previous if isinstance(previous, dict) else {}),
-                       **{b.name: b.source for b in rec.behaviors if b.source}}
     # Which behaviors the default scrubbers touched; "changed" lets `run` show
     # its note when that set moves instead of on every run.
     names = sorted(rec.masked)
