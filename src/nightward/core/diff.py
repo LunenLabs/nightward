@@ -26,12 +26,15 @@ class Change:
     judged: bool = False      # an LLM judge ruled on this fingerprint mismatch
     judge_model: str = ""     # provider:model spec that ruled
     judge_reason: str = ""
+    judge_replayed: bool = False  # verdict read from the ledger, not ruled this run
 
     def to_dict(self) -> dict:
         d = {"name": self.name, "kind": self.kind, "group": self.group}
         if self.judged:
             d |= {"judged": True, "judge_model": self.judge_model,
                   "judge_reason": self.judge_reason}
+            if self.judge_replayed:
+                d["judge_replayed"] = True
         return d
 
 
@@ -228,6 +231,7 @@ def compare(baseline: dict[str, Behavior], pending: dict[str, Behavior],
                     change.judged = True
                     change.judge_model = verdict.model
                     change.judge_reason = verdict.reason
+                    change.judge_replayed = verdict.cached
                     if verdict.verdict == SAME:
                         change.kind = UNCHANGED
             changes.append(change)

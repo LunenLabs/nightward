@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .core.baseline import Store, digest
 from .core.blast import aggregate
-from .core.diff import compare
+from .core.diff import CHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
 
@@ -38,6 +38,10 @@ def judge_from_meta(store: Store):
     return make_judge(store.load_run_meta().get("judge"), store)
 
 
+NO_JUDGE = ("no judge configured - set [tool.nightward] judge in the project's "
+            "pyproject.toml (`nightward run --judge` applies to one CLI run only)")
+
+
 def recompute(store: Store, judge=None) -> dict:
     """Compare pending against baseline, aggregate, persist, and return the report.
 
@@ -47,7 +51,8 @@ def recompute(store: Store, judge=None) -> dict:
     """
     baseline = store.load_baseline()
     pending = store.load_pending()
-    report = aggregate(compare(baseline, pending, judge=judge))
+    changes = compare(baseline, pending, judge=judge)
+    report = aggregate(changes)
     meta = store.load_run_meta()
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
@@ -57,6 +62,12 @@ def recompute(store: Store, judge=None) -> dict:
     report["pending_digest"] = digest(pending)
     if judge is not None:
         report["judge"] = judge.summary()
+    elif unjudged := [c.name for c in changes if c.kind == CHANGED
+                      and baseline[c.name].semantic and pending[c.name].semantic]:
+        # Approved as semantic, but nothing could judge them: say why they
+        # breach on a rewording, as an unavailable judge does (R3-FIN-08).
+        report["judge"] = {"spec": None, "unavailable": NO_JUDGE,
+                           "compared_exactly": unjudged}
     store.write_report(report)
     return report
 

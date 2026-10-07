@@ -46,9 +46,10 @@ judge = "anthropic:claude-haiku-4-5"
 - Every ruling is audited: the CLI prints `judged DIFFERENT by <model>` /
   `ruled semantically SAME`, the dashboard shows an `AI-judged` badge with the
   verdict reason, and `report.json` carries `judged` fields.
-- Verdicts land in `.nightward/judge_verdicts.json` — a **committed** ledger,
+- Verdicts land in `.nightward/judge/` (one file per ruling) — a **committed** ledger,
   so re-runs, `approve` recomputes, fresh clones, and CI never re-ask the model,
-  and every ruling shows up in the PR diff for human review.
+  and every ruling shows up in the PR diff for human review (a `persona:*` judge is
+  deterministic and free, so it rules again on every run instead of replaying).
 - The judge rules **equivalence only**. Promoting a change into the baseline
   is still a human `nightward approve` — a judge cannot let an agent
   self-approve its own changes.

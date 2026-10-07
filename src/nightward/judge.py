@@ -9,12 +9,14 @@ Backend spec is "provider:model", so different LLMs are swappable per run:
     anthropic:claude-haiku-4-5     real API (optional extra: pip install nightward[judge])
     persona:editor                 deterministic, key-free stand-ins (tests / dev / CI)
 
-Verdicts are recorded per (old_fp, new_fp, spec) in the store's
-``judge_verdicts.json`` — a **committed** ledger, not a transient cache. That
-makes a judged-SAME boundary deterministic on a fresh clone or CI runner (no
-re-judging, no key needed to *replay* a ruling), bounds token spend to one call
-per new fingerprint pair, and puts every ruling in the PR diff where a human
-can review it, exactly like a baseline change.
+Verdicts are recorded per (old_fp, new_fp, spec) in the store's ``judge/``
+directory, one file per ruling — a **committed** ledger, not a transient cache.
+For a model judge that makes a judged-SAME boundary deterministic on a fresh
+clone or CI runner (no re-judging, no key needed to *replay* a ruling) and
+bounds token spend to one call per new fingerprint pair. Personas are
+deterministic, so they rule again every run and their entries are a record
+only (D22). Either way every ruling lands in the PR diff where a human can
+review it, exactly like a baseline change.
 
 Failure policy is conservative: if a backend can't judge (no SDK, no key, API
 error, bad response), `equivalent` returns None and the caller keeps the
@@ -24,6 +26,7 @@ rather than opening silently.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -102,8 +105,9 @@ class JudgeUnavailable(Exception):
 #   lenient  also lets ordinary words change ("went up" -> "rose"), so it can
 #            pass "approved" -> "denied". Tests and demos only, never real gating.
 #   strict   rules every difference DIFFERENT.
-# Bump _PERSONA_RULES when these rules change: ledger rulings recorded under
-# older rules are re-judged instead of replayed.
+# Persona rulings are never replayed from the ledger (D22); _PERSONA_RULES is
+# recorded with each entry so the ledger says which rules ruled. Bump it when
+# these rules change.
 
 _PERSONA_RULES = 3
 
@@ -313,62 +317,101 @@ def _excerpt(payload: Any) -> str:
     return text if len(text) <= _EXCERPT else text[:_EXCERPT] + " ...[truncated]"
 
 
+# A ledger file with git's conflict markers at the start of a line.
+_CONFLICT = re.compile(r"^(<{7}|>{7})( |$)", re.M)
+
+
+def _ruling_file(ledger_dir: Path, key: str) -> Path:
+    # One file per ruling (R3-FIN-04): two branches that each record a ruling
+    # add two files, which git merges without a conflict. The key holds two
+    # sha256s, too long for a Windows path, so the file is named by its hash.
+    return ledger_dir / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()[:32]}.json"
+
+
+def _read_ledger_file(path: Path, conflict_hint: str) -> Any:
+    try:
+        text = path.read_text(encoding="utf-8")
+        return json.loads(text)
+    except UnicodeDecodeError as exc:
+        raise NightwardError(f"corrupt judge verdict ledger {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        if _CONFLICT.search(text):
+            raise NightwardError(
+                f"judge verdict ledger {path} has unresolved merge conflict markers - "
+                f"{conflict_hint}") from exc
+        raise NightwardError(f"corrupt judge verdict ledger {path}: {exc} (restore it "
+                             f"from git)") from exc
+
+
 class Judge:
-    """One configured provider:model + a persistent verdict cache."""
+    """One configured provider:model + the committed verdict ledger.
+
+    The ledger is one JSON file per ruling in `<store>/judge/` (cache_path's
+    sibling dir; cache_path itself is the single-file ledger older versions
+    wrote, still read, never rewritten).
+    """
 
     def __init__(self, spec: str, cache_path: Path | None = None):
         self.provider, self.model = parse_spec(spec)
         self.spec = spec
         self.cache_path = Path(cache_path) if cache_path else None
+        self.ledger_dir = self.cache_path.with_name("judge") if self.cache_path else None
         self._cache: dict[str, dict] = self._load_cache()
         # Why the backend could not rule this run, and which behaviors fell back
         # to the exact comparison because of it - surfaced, never swallowed.
         self.unavailable: str | None = None
         self.compared_exactly: list[str] = []
+        # Persona rulings whose ledger entry said otherwise (hand-edited, or
+        # recorded under older rules): re-judged and rewritten, and reported.
+        self.ledger_mismatch: list[str] = []
 
     def _load_cache(self) -> dict[str, dict]:
         # The ledger is committed, so it can be corrupted by e.g. a merge
-        # conflict. Fail loudly: silently starting empty would overwrite the
-        # recorded rulings on the next save.
-        if not (self.cache_path and self.cache_path.exists()):
-            return {}
-        try:
-            ledger = json.loads(self.cache_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise NightwardError(
-                f"corrupt judge verdict ledger {self.cache_path}: {exc} "
-                f"(resolve it by hand, or delete it to re-judge from scratch)"
-            ) from exc
-        if not isinstance(ledger, dict):
-            raise NightwardError(
-                f"corrupt judge verdict ledger {self.cache_path}: expected a JSON object"
-            )
+        # conflict. Fail loudly: silently starting empty would drop the
+        # recorded rulings.
+        ledger: dict[str, dict] = {}
+        if self.cache_path and self.cache_path.exists():
+            legacy = _read_ledger_file(
+                self.cache_path,
+                "keep both sides' entries (each entry is an independent ruling), then "
+                "re-run. Newer rulings are stored one file per ruling in "
+                f"{self.ledger_dir}, which merges without conflicts")
+            if not isinstance(legacy, dict):
+                raise NightwardError(
+                    f"corrupt judge verdict ledger {self.cache_path}: expected a JSON object")
+            ledger.update(legacy)
+        if self.ledger_dir and self.ledger_dir.is_dir():
+            for f in sorted(self.ledger_dir.glob("*.json")):
+                entry = _read_ledger_file(
+                    f, "both branches ruled on the same pair differently; keep one side "
+                    f"(`git checkout --ours -- {f}` or `--theirs`) after reading both")
+                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
+                    ledger[entry["key"]] = entry
         return ledger
 
-    def _save_cache(self) -> None:
-        if self.cache_path:
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self.cache_path.write_text(
-                json.dumps(self._cache, ensure_ascii=False, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
+    def _save(self, key: str) -> None:
+        if self.ledger_dir:
+            from .core.baseline import _atomic_write
+            self.ledger_dir.mkdir(parents=True, exist_ok=True)
+            _atomic_write(_ruling_file(self.ledger_dir, key),
+                          json.dumps(self._cache[key], ensure_ascii=False, indent=2,
+                                     sort_keys=True) + "\n")
 
     def equivalent(self, old_payload: Any, new_payload: Any,
                    old_fp: str, new_fp: str, name: str = "") -> Verdict | None:
         """Judge a fingerprint mismatch. None = unavailable -> keep CHANGED.
 
-        Each new ruling is appended to the verdict ledger and saved. The ledger
-        is meant to be COMMITTED (it is the durable record that keeps a
-        judged-SAME boundary intact on a fresh clone / CI runner) and reviewed
-        in PRs like any baseline change — `name` is recorded so the diff is
-        readable by a human.
+        A model's ruling is recorded in the ledger once and replayed after that
+        (cached=True): the model is nondeterministic and may need a key. A
+        persona is deterministic and free, so it rules again every time and
+        its ledger entry is only a record (D22): a hand-edited entry can't flip
+        a verdict. Each entry names the behavior and the wording ruled on, so
+        the ledger diff can be reviewed in a PR like a baseline change.
         """
         key = f"{old_fp}:{new_fp}:{self.spec}"
         hit = self._cache.get(key)
-        if (self.provider == "persona" and isinstance(hit, dict)
-                and hit.get("rules") != _PERSONA_RULES):
-            hit = None  # ruled under older persona rules: re-judge (free, deterministic)
-        if isinstance(hit, dict) and hit.get("verdict") in (SAME, DIFFERENT):
+        if (self.provider != "persona" and isinstance(hit, dict)
+                and hit.get("verdict") in (SAME, DIFFERENT)):
             return Verdict(hit["verdict"], str(hit.get("reason", "")), self.spec, cached=True)
         try:
             verdict, reason = _BACKENDS[self.provider](self.model, old_payload, new_payload)
@@ -376,17 +419,25 @@ class Judge:
             self.unavailable = self.unavailable or str(exc)
             self.compared_exactly.append(name)
             return None
+        if isinstance(hit, dict) and hit.get("verdict") == verdict and (
+                self.provider != "persona" or hit.get("rules") == _PERSONA_RULES):
+            return Verdict(verdict, reason, self.spec)   # already on record
+        if isinstance(hit, dict) and hit.get("verdict") != verdict:
+            self.ledger_mismatch.append(name)
         # The wording ruled on is kept too: pending/ is not committed, so a PR
         # reviewer would otherwise see only two hashes (R1-LLM-04).
-        self._cache[key] = {"verdict": verdict, "reason": reason,
+        self._cache[key] = {"key": key, "verdict": verdict, "reason": reason,
                             "behavior": name, "model": self.spec,
                             "old": _excerpt(old_payload), "new": _excerpt(new_payload)}
         if self.provider == "persona":
             self._cache[key]["rules"] = _PERSONA_RULES
-        self._save_cache()
+        self._save(key)
         return Verdict(verdict, reason, self.spec)
 
     def summary(self) -> dict:
         """What the report records about this judge (see runner.recompute)."""
-        return {"spec": self.spec, "unavailable": self.unavailable,
-                "compared_exactly": sorted(self.compared_exactly)}
+        out = {"spec": self.spec, "unavailable": self.unavailable,
+               "compared_exactly": sorted(self.compared_exactly)}
+        if self.ledger_mismatch:
+            out["ledger_mismatch"] = sorted(self.ledger_mismatch)
+        return out

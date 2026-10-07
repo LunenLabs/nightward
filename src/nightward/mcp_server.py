@@ -29,11 +29,12 @@ def configure(judge: str | None = None) -> None:
     _server_judge = judge
 
 
-def _judge_spec(path: str) -> str | None:
-    # The server option, else the committed [tool.nightward] judge (D14). Never
+def _judge_spec(dir: str) -> str | None:
+    # The server option, else the committed [tool.nightward] judge of the
+    # project that owns the store (D14, D22) - never of the agent's `path`. Never
     # $NIGHTWARD_JUDGE or the last run's judge: a human's one-off
     # `nightward run --judge persona:lenient` must not become the agent's gate.
-    return _server_judge or project_judge(path.split("::", 1)[0])
+    return _server_judge or project_judge(dir)
 
 
 def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> dict:
@@ -62,7 +63,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     approve changes: a human does that with the nightward CLI.
     """
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
-                         judge_spec=_judge_spec(path), command="nightward_run (MCP)")
+                         judge_spec=_judge_spec(dir), command="nightward_run (MCP)")
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],

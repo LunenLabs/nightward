@@ -7,6 +7,10 @@ judge the same way, and changing it shows up in a PR diff. `nightward run
 
     [tool.nightward]
     judge = "persona:editor"
+
+The setting belongs to the project that owns the store, so it is read from the
+pyproject.toml nearest the store directory - never from the test path, where a
+subpackage's own pyproject could drop or swap the judge (R3-LLM-03, D22).
 """
 from __future__ import annotations
 
@@ -21,8 +25,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 (pytest ships toml
 
 
 def find_pyproject(start: str | Path = ".") -> Path | None:
-    """The nearest pyproject.toml at or above `start` (a dir, or a file's dir),
-    found the way pytest finds its rootdir."""
+    """The nearest pyproject.toml at or above `start` (a dir, or a file's dir;
+    a path that doesn't exist yet, such as a new store, counts as a file)."""
     here = Path(start).resolve()
     if not here.is_dir():
         here = here.parent
@@ -47,12 +51,13 @@ def _settings(start: str | Path) -> tuple[dict, Path | None]:
     return table, path
 
 
-def project_judge(start: str | Path = ".") -> str | None:
-    """The committed judge spec (`[tool.nightward] judge`), validated, or None."""
-    table, path = _settings(start)
+def judge_setting(store_dir: str | Path = ".nightward") -> tuple[str | None, Path | None]:
+    """The committed judge spec (`[tool.nightward] judge`), validated, and the
+    pyproject.toml it came from - the one nearest the store `store_dir`."""
+    table, path = _settings(store_dir)
     spec = table.get("judge")
     if spec is None:
-        return None
+        return None, path
     if not isinstance(spec, str) or not spec:
         raise NightwardError(
             f'{path}: [tool.nightward] judge must be a "provider:model" string, '
@@ -62,4 +67,9 @@ def project_judge(start: str | Path = ".") -> str | None:
         parse_spec(spec)
     except NightwardError as exc:
         raise NightwardError(f"{path}: [tool.nightward] judge: {exc}") from None
-    return spec
+    return spec, path
+
+
+def project_judge(store_dir: str | Path = ".nightward") -> str | None:
+    """The committed judge spec for the store at `store_dir`, or None."""
+    return judge_setting(store_dir)[0]

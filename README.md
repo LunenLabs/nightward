@@ -103,6 +103,11 @@ differently leave git conflict markers in `baseline/<name>.approved.json`. Every
 command then stops with `... has unresolved merge conflict markers`. Keep one side
 (`git checkout --ours -- <file>` or `--theirs`), run `nightward run`, and
 `nightward approve <name>` if the current behavior should be the new baseline.
+Judge rulings are stored one file per ruling (`.nightward/judge/`), so two branches
+that each record a ruling merge cleanly. A conflict there means both branches ruled
+on the same pair differently: read both sides and keep one. The single-file
+`judge_verdicts.json` that older versions wrote is still read; if it conflicts, keep
+both sides' entries (each entry is an independent ruling).
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
@@ -285,8 +290,16 @@ judge = "anthropic:claude-haiku-4-5"   # real LLM (pip install "nightward[judge]
 # judge = "persona:editor"             # deterministic, key-free (see below)
 ```
 
-nightward reads the nearest `pyproject.toml` at or above the path you run, the same
-way pytest finds its rootdir. To try another judge for **one run**, override it.
+The judge belongs to the project that owns the store: nightward reads the
+`pyproject.toml` nearest the store directory (`.nightward`, or `--dir`), not the
+path you run. `nightward run services/chat` and an agent's
+`nightward_run(path="services/chat")` use the same judge as `nightward run .`, even
+when `services/chat` has its own `pyproject.toml`. `nightward run` prints the file
+it read (`judge: persona:editor (pyproject.toml)`). When approved `semantic=True`
+behaviors changed and no judge is configured, `run` says so (`note: 1 approved
+semantic behavior(s) compared exactly: no judge configured ...`), and the report,
+`status --json` and MCP carry `"judge": {"spec": null, "unavailable": ...,
+"compared_exactly": [...]}`. To try another judge for **one run**, override it.
 The override is never remembered: the next plain `nightward run` and every MCP run
 go back to the committed judge.
 
@@ -323,14 +336,26 @@ they are prose.
 | `persona:strict` | never | forcing every mismatch to stay breached |
 
 Any provider:model can plug in as a backend. Each ruling is recorded once per
-fingerprint pair in `.nightward/judge_verdicts.json` — a **committed ledger**, so
-the judge's own nondeterminism can't wobble the gate, fresh clones and CI replay
-verdicts deterministically without a key, and every ruling lands in the PR diff
-for human review: each entry records the behavior, model, verdict, reason, and
-the old and new wording it ruled on (up to 1,000 chars each).
+fingerprint pair in `.nightward/judge/` (one JSON file per ruling) — a **committed
+ledger**. Each entry records the behavior, model, verdict, reason, and the old and
+new wording it ruled on (up to 1,000 chars each), so every ruling lands in the PR
+diff. **Review ledger diffs like baseline diffs**: a ledger entry can turn a breach
+green.
+
+- A model judge (`anthropic:*`) rules once per pair. Its ruling is replayed from
+  the ledger after that, so the model's own nondeterminism can't wobble the gate and
+  fresh clones and CI replay verdicts without a key. A replayed ruling is marked
+  `(replayed from the committed ledger, not ruled this run)` in `review`, and
+  `"judge_replayed": true` in `status --json` and MCP: whoever last edited the
+  ledger made that ruling.
+- A persona is deterministic and free, so it rules again on every run and its
+  ledger entries are a record only. A hand-edited persona entry (`DIFFERENT` ->
+  `SAME`) never changes the verdict: `run` warns that the ledger entry did not match
+  the persona's ruling and rewrites it, which shows up in `git diff`.
 
 Rulings are visible wherever the verdict is:
 
+- `nightward run` and `nightward status` count and name the behaviors ruled SAME.
 - `nightward review` lists every behavior the judge ruled SAME, with its diff,
   even when the boundary is intact. A wrong SAME is a hole in the gate, so audit them.
 - `status --json` (and MCP) carry `judged`, `judge_model` and `judge_reason` on each
@@ -436,7 +461,7 @@ changed** — nothing more. Read these four limits before trusting the green lig
    calls, or add scrub rules that mask a change. nightward does not try to
    police the filesystem — instead, every one of those bypasses leaves a
    visible trace in git. The enforcement point is **review**:
-   - `baseline/*.approved.json`, `judge_verdicts.json`, scrub rules, and test
+   - `baseline/*.approved.json`, the judge ledger (`judge/`), scrub rules, and test
      files are code — review their diffs in every PR;
    - protect your main branch (required human review) and let CI re-run
      `nightward run && nightward gate` from source, so a locally forged
@@ -446,7 +471,10 @@ changed** — nothing more. Read these four limits before trusting the green lig
 3. **A semantic judge can be wrong.** A false-SAME verdict is a hole in the
    gate. That's why judging is opt-in per behavior, the prompt is conservative
    (unsure → DIFFERENT), failures fall back to exact comparison, and every
-   ruling is recorded in the committed `judge_verdicts.json` for human review.
+   ruling is recorded in the committed judge ledger (`.nightward/judge/`) for
+   human review. Persona rulings are recomputed every run, so editing their ledger
+   entries changes nothing; a model's ruling is replayed from the ledger and marked
+   as replayed.
    If a behavior must never be judged leniently, don't mark it `semantic=True`.
    Captured output is untrusted input to an LLM judge (it may quote retrieved
    documents or user text). The prompt inserts each output once, verbatim, in a

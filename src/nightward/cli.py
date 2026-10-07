@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from . import shellquote
-from .config import project_judge
+from .config import judge_setting
 from .core.baseline import Store, digest
 from .core.diff import REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
@@ -246,6 +246,18 @@ def _warn_unless_ignored(path: Path, what: str) -> None:
                           soft_wrap=True)
 
 
+def _shown_path(path: Path) -> str:
+    try:
+        return os.path.relpath(path)
+    except ValueError:   # another drive on Windows
+        return str(path)
+
+
+def _names_text(names: list[str], limit: int = 5) -> str:
+    return ", ".join(names[:limit]) + (f" and {len(names) - limit} more"
+                                       if len(names) > limit else "")
+
+
 def _print_summary(report: dict) -> None:
     c = report["counts"]
     # Same word as status --json and the dashboard: a run with failing capture
@@ -262,10 +274,24 @@ def _print_summary(report: dict) -> None:
     console.print(f"unchanged={c['unchanged']} changed={c['changed']} "
                   f"new={c['new']} removed={c['removed']}")
     if c.get("judged_same"):
+        # Listed, not just counted: a wrong SAME is a hole in the gate (D22).
+        same = [it["name"] for it in report.get("judged_same") or []]
         console.print(f"[dim]{c['judged_same']} fingerprint mismatch(es) ruled "
-                      f"semantically SAME by the judge[/dim]")
+                      f"semantically SAME by the judge: {escape(_names_text(same))} - "
+                      f"audit with `nightward review`[/dim]", soft_wrap=True)
     judge = report.get("judge") or {}
-    if judge.get("unavailable"):
+    if judge.get("ledger_mismatch"):
+        err_console.print(
+            f"[yellow]warning:[/yellow] the judge ledger's entry for "
+            f"{escape(_names_text(judge['ledger_mismatch']))} did not match what "
+            f"{escape(judge['spec'])} rules now (edited by hand, or recorded under older "
+            f"rules); it was ruled again and rewritten - review the ledger diff",
+            soft_wrap=True)
+    if judge.get("unavailable") and not judge.get("spec"):
+        err_console.print(
+            f"[yellow]note:[/yellow] {len(judge['compared_exactly'])} approved semantic "
+            f"behavior(s) compared exactly: {escape(judge['unavailable'])}", soft_wrap=True)
+    elif judge.get("unavailable"):
         err_console.print(
             f"[yellow]warning:[/yellow] judge {escape(judge['spec'])} unavailable "
             f"({escape(judge['unavailable'])}); {len(judge['compared_exactly'])} semantic "
@@ -323,7 +349,7 @@ def run(ctx: typer.Context,
             None, help="Semantic judge for semantic=True behaviors, as provider:model "
                        "(e.g. anthropic:claude-haiku-4-5, persona:editor), for this run "
                        "only. Default: $NIGHTWARD_JUDGE, else [tool.nightward] judge "
-                       "in pyproject.toml")):
+                       "in the pyproject.toml nearest the store")):
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
@@ -343,7 +369,9 @@ def run(ctx: typer.Context,
     elif os.environ.get("NIGHTWARD_JUDGE"):
         judge, source = os.environ["NIGHTWARD_JUDGE"], "$NIGHTWARD_JUDGE, this run only"
     else:
-        judge, source = project_judge(path.split("::", 1)[0]), "pyproject.toml"
+        # The project that owns the store decides, whichever tests run (D22).
+        judge, where = judge_setting(dir)
+        source = _shown_path(where) if where else "pyproject.toml"
     if judge:
         console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
     extra = [a for a in ctx.args if a != "--"]
@@ -479,7 +507,8 @@ def review(names: list[str] | None = NAMES_ARG,
         for it in items:
             console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]")
             if it.get("judged"):
-                console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}: "
+                console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}"
+                              f"{_REPLAYED if it.get('judge_replayed') else ''}: "
                               f"{escape(it.get('judge_reason', ''))}[/dim]")
             _print_diff(it, max_lines)
     if judged_same:
@@ -489,9 +518,15 @@ def review(names: list[str] | None = NAMES_ARG,
                       f"({len(judged_same)}) - not in the boundary; audit the wording:")
         for it in judged_same:
             console.print(f"\n[bold][[cyan]SAME[/cyan]] {escape(it['name'])}[/bold] "
-                          f"[dim]{escape(it.get('judge_model', ''))}: "
+                          f"[dim]{escape(it.get('judge_model', ''))}"
+                          f"{_REPLAYED if it.get('judge_replayed') else ''}: "
                           f"{escape(it.get('judge_reason', ''))}[/dim]")
             _print_diff(it, max_lines)
+
+
+# A model's ruling replayed from the committed ledger was not made this run:
+# whoever last edited the ledger made it (D22).
+_REPLAYED = " (replayed from the committed ledger, not ruled this run)"
 
 
 def _standing_rejections(store: Store, baseline, pending) -> set[str]:
@@ -871,8 +906,10 @@ def _print_status(payload: dict) -> None:
         console.print(f"  - [[cyan]{ch['kind']}[/cyan]] {escape(ch['name'])} "
                       f"[dim]({escape(ch.get('group') or '(ungrouped)')})[/dim]")
     if payload.get("judged_same"):
-        console.print(f"[dim]{len(payload['judged_same'])} change(s) ruled semantically "
-                      f"SAME by the judge - audit with `nightward review`[/dim]")
+        same = [it["name"] for it in payload["judged_same"]]
+        console.print(f"[dim]{len(same)} change(s) ruled semantically SAME by the judge: "
+                      f"{escape(_names_text(same))} - audit with `nightward review`[/dim]",
+                      soft_wrap=True)
     console.print(f"[dim]{escape(_as_of(payload.get('generated_at')))}[/dim]")
 
 

@@ -84,7 +84,7 @@ adapters.from_file/from_pdf/from_docx/from_xlsx/from_text  adapters.py — file 
 | **Two execution contexts** | The plugin runs *inside* pytest. CLI `run` and MCP `nightward_run` share `runner.execute_run`, which spawns pytest *as a subprocess* (`python -m pytest … --nightward-record`) then recomputes. `approve/reject/gate/status/view` and MCP `nightward_status` never run pytest — they only touch the store. | `runner.py`, `cli.py:run`, `mcp_server.py` |
 | **fingerprint = equivalence oracle** | `sha256(canonical_json(payload))`. `canonical_json` uses `sort_keys` + `allow_nan=False` — guarantees fingerprint consistency AND human-readable git diffs at once. Capture, store, and scrub all use this one function (the stability linchpin). | `core/behavior.py` |
 | **scrub = false-positive defense** | Volatile values (timestamps, uuids) are normalized **before** fingerprinting, or every run shows "changed" and the tool dies. Two stages: ① field-aware `scrub.register_field(name[, repl])` — masks by key name at any depth, JSON-value replacement can't corrupt the payload (**preferred**) ② text regex `scrub.register(pat, repl)` — fallback when no stable key exists (tradeoff: literals that merely *look* like timestamps get replaced too). | `scrub.py` |
-| **store = git-native golden set** | `baseline/*.approved.json` and the judge **verdict ledger** (`judge_verdicts.json`) are **committed** (= the boundary + ruling record — deterministic replay on fresh clones/CI, reviewable in PR diffs). `rejected/` is committed too (D17: a rejection protects every clone). `pending/`, `report.json`, `run_meta.json`, `reviewed.json`, `.lock` are gitignored (transient). `approve` = copy pending→baseline; `approve_removal` = delete from baseline; `reject` = copy to `rejected/` (boundary stays breached; `approve --all` skips a behavior while its pending state matches the record). | `core/baseline.py` |
+| **store = git-native golden set** | `baseline/*.approved.json` and the judge **verdict ledger** (`judge/<hash>.json`, one file per ruling so branches merge cleanly; legacy `judge_verdicts.json` is still read) are **committed** (= the boundary + ruling record — model rulings replay deterministically on fresh clones/CI; persona rulings are recomputed every run and their entries are a record only, D22). `rejected/` is committed too (D17: a rejection protects every clone). `pending/`, `report.json`, `run_meta.json`, `reviewed.json`, `.lock` are gitignored (transient). `approve` = copy pending→baseline; `approve_removal` = delete from baseline; `reject` = copy to `rejected/` (boundary stays breached; `approve --all` skips a behavior while its pending state matches the record). | `core/baseline.py` |
 
 ---
 
@@ -203,7 +203,9 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **Scrub must not merge keys.** If text scrubbing collapses two dict keys into
   one (`<TIMESTAMP>`), `scrub` raises instead of silently dropping a value.
 - **The verdict ledger is never silently reset.** A corrupt
-  `judge_verdicts.json` (e.g. merge-conflict markers) is a `NightwardError`.
+  ledger file (e.g. merge-conflict markers) is a `NightwardError` naming the
+  conflict. A persona entry that disagrees with a fresh ruling is rewritten and
+  reported (`judge.ledger_mismatch`); it never decides a verdict (D22).
 - User-causable errors must be **`NightwardError` + clear message**, never a
   traceback (CLI converts to exit 2).
 
@@ -245,7 +247,7 @@ protocol channel (diagnostics to stderr only). `mcp` is an optional extra;
 tool functions don't depend on the SDK, so they're testable without it.
 **The judge is a committed project decision (D14)**: `nightward_run` takes no
 judge argument (an agent could pick `persona:lenient`); it uses `nightward mcp
---judge`, else `[tool.nightward] judge` in the nearest pyproject.toml
+--judge`, else `[tool.nightward] judge` in the pyproject.toml nearest the STORE dir
 (`config.project_judge`). Never `$NIGHTWARD_JUDGE` or run_meta: a CLI `--judge` is a
 one-run override and must not leak into the agent's gate
 (`tests/test_beta_judge.py::test_mcp_*`). run_meta's judge exists only so `approve`
