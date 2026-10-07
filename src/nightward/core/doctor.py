@@ -20,6 +20,7 @@ import datetime
 import email.utils
 import json
 import math
+import posixpath
 import re
 import struct
 from collections import Counter
@@ -418,6 +419,19 @@ def _withhold(raw: dict[str, list[dict]], pending: dict[str, Behavior]) -> None:
                                   f"{shown} - mask it at capture time in this test instead")
 
 
+def _conftest_for(names: list[str], pending: dict[str, Behavior]) -> str:
+    """The conftest.py whose rules cover exactly these behaviors' tests: rules
+    registered there apply only under its directory (D20)."""
+    dirs = []
+    for name in names:
+        source = pending[name].source
+        if not source:
+            return "conftest.py"   # unknown test: only the root conftest covers it
+        dirs.append(posixpath.dirname(source.split("::", 1)[0]))
+    common = posixpath.commonpath(dirs) if dirs else ""
+    return posixpath.join(common, "conftest.py") if common else "conftest.py"
+
+
 def diagnose(baseline: dict[str, Behavior], pending: dict[str, Behavior],
              only: set[str] | None = None) -> dict:
     """Per-behavior classified drift + scrub suggestions backed by evidence.
@@ -445,6 +459,8 @@ def diagnose(baseline: dict[str, Behavior], pending: dict[str, Behavior],
                                 "conditional": f["conditional"], "behaviors": []})
                 if name not in s["behaviors"]:
                     s["behaviors"].append(name)
+    for s in suggestions.values():
+        s["conftest"] = _conftest_for(s["behaviors"], pending)
     return {"changed": changed,
             "behaviors": {name: _collapse(found) for name, found in raw.items()},
             "suggestions": list(suggestions.values())}

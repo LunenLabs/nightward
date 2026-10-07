@@ -158,7 +158,7 @@ normalization erases, because a change there never trips the gate:
   ```python
   behavior("sla_deadlines", deadlines, scrub=False)   # this behavior: no scrubbing at all
 
-  # conftest.py - every behavior: built-in timestamp/uuid scrubbers off,
+  # the root conftest.py - every behavior: built-in timestamp/uuid scrubbers off,
   # your own register/register_field rules still apply
   from nightward import scrub
   scrub.disable_defaults()
@@ -225,6 +225,16 @@ from nightward import scrub
 scrub.register_field("request_id")                 # mask this key at any depth
 scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
 ```
+
+**Scope follows the conftest.py, like its fixtures.** A rule registered in a
+`conftest.py` (also through a helper that conftest calls) applies only to behaviors
+captured by tests under that conftest's directory. Rules in the root `conftest.py`
+cover the whole suite; `scrub.register_field("token")` in `services/orders/conftest.py`
+masks orders' tokens but never a `token` field in `services/billing`. The scope also
+doesn't depend on which directories a run collected, so `nightward run services/billing`
+captures exactly what the whole-suite run does. `scrub.disable_defaults()` is scoped
+the same way. Rules registered anywhere else (a test module, a plugin) are global.
+`nightward doctor` names the conftest.py each suggested rule belongs in.
 
 `register()` patterns run over the payload's **canonical JSON text**, not over the
 decoded strings: pretty-printed (`"key": "value"`, keys sorted), and inside a string
