@@ -49,8 +49,11 @@ nightward view              # builds a static site + serves it on localhost
 ## Workflow
 
 ```
-nightward init    create the store and add .gitignore rules (once per repo; `run`
-                  warns while its per-run files are not git-ignored)
+nightward init    create the store and add .gitignore rules (once per repo; re-run it
+                  after upgrading to migrate the rules it owns). `init` and `run` name
+                  any rule that ignores what must be committed (baseline/, rejected/,
+                  the judge ledger - e.g. a blanket `.nightward/`) and per-run files
+                  that are not ignored
 nightward run     re-run tests → capture → compute blast radius
 nightward report  verdict from an existing `pytest --nightward-record` capture
                   (no pytest run) - see "Using the plugin directly" below

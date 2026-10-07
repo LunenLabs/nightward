@@ -477,3 +477,55 @@ def test_direct_record_on_a_busy_store_fails_before_the_suite(tmp_path):
     assert r.returncode == 4, out
     assert "another nightward process" in out and "Traceback" not in out
     assert not (tmp_path / "ran.txt").exists()
+
+
+# ---- R3-FIN-06, R3-OPS-04: outdated or overbroad ignore rules are named ---------
+
+OLD_GITIGNORE = ("# nightward: approved baseline IS committed; transient state is not\n"
+                 ".nightward/pending/\n.nightward/rejected/\n.nightward/report.json\n"
+                 ".nightward/run_meta.json\n.nightward/pending.tmp/\n.nightward/**/*.tmp\n")
+
+
+def _git_project(tmp_path, gitignore):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    write(tmp_path / ".gitignore", gitignore)
+    write(tmp_path / "test_fee.py", 'import os\ndef test_fee(behavior):\n'
+                                    '    behavior("fee", os.environ.get("FEE", "2.9"))\n')
+    Path_ = __import__("pathlib").Path
+    Path_(tmp_path / ".nightward").mkdir()
+
+
+def test_run_names_an_outdated_gitignore(tmp_path):
+    _git_project(tmp_path, OLD_GITIGNORE)
+    r = cli("run", ".", cwd=tmp_path)
+    assert "rejections (.nightward/rejected/) are git-ignored" in r.stderr, r.stderr
+    assert "reviewed.json" in r.stderr and ".lock" in r.stderr
+    cli("approve", "--all", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    r = cli("reject", "fee", cwd=tmp_path)
+    assert r.returncode == 0 and "rejections" in r.stderr and "commit" not in r.stdout
+    # init migrates the lines it owns; then run is quiet
+    assert cli("init", cwd=tmp_path).returncode == 0
+    r = cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    assert "warning" not in r.stderr, r.stderr
+
+
+def test_init_names_a_rule_that_ignores_the_baseline(tmp_path):
+    _git_project(tmp_path, ".nightward/\n")
+    r = cli("init", cwd=tmp_path)
+    assert r.returncode == 0
+    assert "store exists" in r.stdout
+    assert "approved baseline" in r.stderr and ".gitignore:1:.nightward/" in r.stderr, r.stderr
+    r = cli("run", ".", cwd=tmp_path)
+    assert "approved baseline" in r.stderr
+
+
+def test_busy_lock_from_another_host_says_it_was_committed(tmp_path):
+    tw = tmp_path / ".nightward"
+    tw.mkdir()
+    write(tw / ".lock", json.dumps({"pid": 1, "host": "dev-laptop-anna",
+                                    "command": "nightward run", "since": "then"}))
+    write(tmp_path / "test_a.py", 'def test_a(behavior):\n    behavior("a", 1)\n')
+    r = cli("run", ".", cwd=tmp_path)
+    assert r.returncode == 2 and "dev-laptop-anna" in r.stderr
+    assert "git rm --cached" in r.stderr

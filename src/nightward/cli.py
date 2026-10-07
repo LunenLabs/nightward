@@ -324,6 +324,75 @@ def _git_ignored(path: Path) -> bool | None:
     return {0: True, 1: False}.get(r.returncode)
 
 
+# What git must commit (the boundary and the decisions on it) and what it must
+# not (per-run state), as probe paths under the store (R3-FIN-06, R3-OPS-04).
+_COMMITTED_PROBES = (
+    ("baseline/nightward-probe.approved.json",
+     "the approved baseline ({store}/baseline/) is git-ignored by `{rule}`: it can't be "
+     "committed, so CI and teammates see every behavior as NEW - remove that rule "
+     "(nightward's own rules ignore only the per-run files)"),
+    ("rejected/nightward-probe.rejected.json",
+     "rejections ({store}/rejected/) are git-ignored by `{rule}`: they won't reach other "
+     "clones - {fix}"),
+    ("judge_verdicts.json",
+     "the judge verdict ledger is git-ignored by `{rule}`: fresh clones and CI can't "
+     "replay its rulings - remove that rule"),
+)
+_TRANSIENT_PROBES = ("report.json", "run_meta.json", "reviewed.json", ".lock",
+                     "pending/nightward-probe.received.json")
+
+
+def _ignore_rules(paths: list[str]) -> dict[str, str] | None:
+    """{path: "source:line:pattern"} for each of `paths` git ignores (None: no git)."""
+    try:
+        r = subprocess.run(["git", "check-ignore", "-v", "--no-index", "--", *paths],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode not in (0, 1):     # not a repository, or the store is outside it
+        return None
+    rules = {}
+    for line in r.stdout.splitlines():
+        meta, _, path = line.partition("\t")
+        if meta.rsplit(":", 1)[-1].startswith("!"):
+            continue                   # a negation: matched, but not ignored
+        rules[path] = meta
+    return rules
+
+
+def _ignore_problems(dir_: str) -> list[str]:
+    """What the .gitignore rules get wrong for this store: committed entries that
+    are ignored (an old or overbroad rule), or per-run files that are not."""
+    root = Path(dir_)
+    committed = {(root / p).as_posix(): msg for p, msg in _COMMITTED_PROBES}
+    transient = {(root / p).as_posix(): p.split("/")[0] + ("/" if "/" in p else "")
+                 for p in _TRANSIENT_PROBES}
+    rules = _ignore_rules([*committed, *transient])
+    if rules is None:
+        return []
+    problems, named = [], set()
+    for p, msg in committed.items():
+        rule = rules.get(p)
+        if rule is None or rule in named:   # one overbroad rule: say it once
+            continue
+        named.add(rule)
+        # Only the rejected/ line older `init`s wrote is init's to remove.
+        fix = ("re-run `nightward init` to update .gitignore"
+               if rule.endswith(f"{root.as_posix()}/rejected/") else "remove that rule")
+        problems.append(msg.format(store=root.as_posix(), rule=rule, fix=fix))
+    loose = [name for p, name in transient.items() if p not in rules]
+    if loose:
+        problems.append(f"per-run files are not git-ignored ({', '.join(loose)}) and must not "
+                        f"be committed - re-run `nightward init` to add the .gitignore rules")
+    return problems
+
+
+def _warn_ignore_problems(dir_: str) -> None:
+    for problem in _ignore_problems(dir_):
+        err_console.print(f"[yellow]warning:[/yellow] {escape(problem)}", soft_wrap=True)
+
+
 def _warn_unless_ignored(path: Path, what: str) -> None:
     # Only a nudge: a rule in a parent .gitignore or info/exclude counts too.
     if _git_ignored(path) is False:
@@ -380,8 +449,10 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
     """Create the nightward store and add ignore rules to .gitignore."""
     _check_dir(dir)
     store = _store(dir)
+    existed = store.root.is_dir()
     store.ensure()
-    console.print(f"[green]created[/green] {escape(str(store.root))}/ (baseline, pending)")
+    console.print(f"[green]{'store exists' if existed else 'created'}[/green] "
+                  f"{escape(store.root.as_posix())}/ (baseline, pending)")
 
     lines = _gitignore_lines(dir)
     if lines is None:
@@ -406,6 +477,11 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                 fh.write("\n")
             fh.write("\n".join(missing) + "\n")
         console.print(f"[green]updated[/green] .gitignore (+{len(missing)} lines)")
+    # A rule init doesn't own (e.g. a blanket `.nightward/`) can still hide the
+    # baseline from git; say which rule (R3-OPS-04).
+    for problem in _ignore_problems(dir):
+        if not problem.startswith("per-run files"):
+            err_console.print(f"[yellow]warning:[/yellow] {escape(problem)}", soft_wrap=True)
     console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
                   "then `nightward run <path>` and `nightward approve --all`.")
 
@@ -472,9 +548,9 @@ def run(ctx: typer.Context,
     _print_summary(result["report"])
     _mark_reviewed(_store(dir), result["report"], "run", _blast_names(result["report"]))
     # A committed report.json lets a CI `gate` without `run` pass on an old verdict.
-    _warn_unless_ignored(Path(dir) / "report.json",
-                         "per-run state (pending/, report.json, run_meta.json) must not be "
-                         "committed")
+    # A committed report.json lets a CI `gate` pass on an old verdict; an
+    # ignored baseline or rejected/ never reaches CI or teammates.
+    _warn_ignore_problems(dir)
     _exit_if_incomplete(result["report"], result["pytest_returncode"])
 
 
@@ -810,8 +886,13 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
     console.print(f"[red]rejected[/red] {escape(name)} - the boundary is "
                   f"{escape(report['boundary'])} ({report['unapproved']} unapproved) until the "
                   f"code changes. Fix it and re-run `nightward run`.", soft_wrap=True)
-    console.print(f"[dim]commit {escape(store.rejected_dir.as_posix())}/ with your change: "
-                  f"a rejection protects every clone that has it[/dim]", soft_wrap=True)
+    ignored = [p for p in _ignore_problems(dir) if p.startswith("rejections")]
+    if ignored:
+        err_console.print(f"[yellow]warning:[/yellow] {escape(ignored[0])}", soft_wrap=True)
+    else:
+        console.print(f"[dim]commit {escape(store.rejected_dir.as_posix())}/ with your "
+                      f"change: a rejection protects every clone that has it[/dim]",
+                      soft_wrap=True)
 
 
 # doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.
