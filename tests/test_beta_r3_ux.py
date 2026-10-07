@@ -232,3 +232,16 @@ def test_dashboard_counts_judged_same_inside_unchanged():
                                          ("anthropic:claude-haiku-4-5", "AI-judged")])
 def test_dashboard_does_not_call_a_persona_an_ai(model, word):
     assert node_eval(f"judgeBadge({json.dumps(model)})") == word
+
+
+# ---- R3-WEB-05: the --no-serve hint keeps the loopback-only guarantee ----------
+
+def test_no_serve_hint_binds_loopback(tmp_path):
+    Store(tmp_path / ".nightward").ensure()
+    r = cli("view", "--no-serve", "--out", "my site", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    out = r.stdout.replace("\n", " ")
+    assert "http.server" in out and "--bind 127.0.0.1" in out, out
+    # a path with a space arrives as one argument
+    assert "'my site'" in out or '"my site"' in out, out
+    assert "nightward view --out" in out

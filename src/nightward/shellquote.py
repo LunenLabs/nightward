@@ -37,13 +37,18 @@ def quote(arg: str, shell: str) -> str | None:
     raise ValueError(f"unknown shell {shell!r}")
 
 
+def default_shell() -> str:
+    """The shell a user of this OS most likely pastes into."""
+    return "powershell" if os.name == "nt" else "posix"
+
+
 def quote_all(arg: str) -> dict[str, str | None]:
     return {shell: quote(arg, shell) for shell in SHELLS}
 
 
 def command(verb: str, names: list[str], shell: str | None = None) -> str | None:
     """`nightward <verb> <names...>` safe to paste into `shell` (default: this OS's)."""
-    shell = shell or ("powershell" if os.name == "nt" else "posix")
+    shell = shell or default_shell()
     args = [quote(n, shell) for n in names]
     if any(a is None for a in args):
         return None

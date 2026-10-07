@@ -852,9 +852,17 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
         from .view.serve import serve as _serve
         _serve(out_path, port=port, open_browser=open_browser)
     else:
-        console.print(f"open it with:  [cyan]python -m http.server -d "
-                      f"{escape(str(out_path))} {port}[/cyan]  "
-                      "(fetch needs http, not file://)")
+        # Loopback only, like --serve: data.json holds captured behaviors, and
+        # http.server alone listens on every interface (R3-WEB-05).
+        shell = shellquote.default_shell()
+        site = shellquote.quote(str(out_path), shell) or str(out_path)
+        store_arg = ("" if dir == DEFAULT_DIR
+                     else f" --dir {shellquote.quote(dir, shell) or dir}")
+        console.print(f"open it with:  [cyan]nightward view{escape(store_arg)} --out "
+                      f"{escape(site)} --port {port}"
+                      f"[/cyan]\n  or:  [cyan]python -m http.server --bind 127.0.0.1 -d "
+                      f"{escape(site)} {port}[/cyan]  (fetch needs http, not file://)",
+                      soft_wrap=True)
 
 
 @app.command()
