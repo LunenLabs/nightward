@@ -85,7 +85,20 @@ class _Stdout:
 
 _stdout = _Stdout()
 
-app = typer.Typer(
+class _App(typer.Typer):
+    """Typer app that takes arguments literally on Windows too.
+
+    Click expands $VAR, %VAR%, ~ and globs in sys.argv on Windows (cmd.exe
+    doesn't), after the shell's quoting: a quoted 'price.$region' would reach
+    approve as another behavior's name (R3-WEB-02). Names are never paths.
+    """
+
+    def __call__(self, *args, **kwargs):
+        kwargs.setdefault("windows_expand_args", False)
+        return super().__call__(*args, **kwargs)
+
+
+app = _App(
     help="nightward - regression firewall for AI-driven changes",
     no_args_is_help=True,
     add_completion=False,

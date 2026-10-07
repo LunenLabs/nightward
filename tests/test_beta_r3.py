@@ -396,6 +396,24 @@ def test_skipped_capture_stays_removed(ml):
     assert [c["name"] for c in status["changes"] if c["kind"] == "REMOVED"] == ["eval_metrics"]
 
 
+# ---- R3-WEB-02: names arrive literally (no Click expansion on Windows) ----------
+
+def test_quoted_names_are_never_expanded(tmp_path):
+    write(tmp_path / "test_p.py",
+          'def test_prices(behavior):\n'
+          '    behavior("price.$region", {"total": 30}, group="billing")\n'
+          '    behavior("price.eu", {"total": 99}, group="billing")\n'
+          '    behavior("p.%OS%", 1, group="billing")\n'
+          '    behavior("~home", 2, group="billing")\n')
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    env = {"region": "eu", "OS": "Windows_NT", "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    for name in ("price.$region", "p.%OS%", "~home"):
+        r = cli("approve", name, cwd=tmp_path, env=env)
+        assert r.returncode == 0 and f"approved {name} (" in r.stdout, (name, r.stdout, r.stderr)
+    assert baseline_names(tmp_path / ".nightward") == ["p.%OS%", "price.$region", "~home"]
+
+
 # ---- R3-OPS-01: releasing the lock survives a reader holding the file -----------
 
 def test_lock_release_survives_a_reader_holding_the_file(tmp_path):
