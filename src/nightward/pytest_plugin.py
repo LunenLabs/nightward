@@ -6,7 +6,6 @@ it. Behaviors are flushed to .nightward/pending only when --nightward-record is 
 """
 from __future__ import annotations
 
-import contextlib
 import os
 import re
 from pathlib import Path
@@ -15,7 +14,7 @@ import pytest
 
 from .core.baseline import Store, digest
 from .core.behavior import Behavior, validate_name
-from .core.lock import read_lock, store_lock
+from .core.lock import acquire, read_lock, release
 from .errors import NightwardError
 from .scrub import scrub_counted, unmatched_rules
 
@@ -133,9 +132,37 @@ def pytest_configure(config):
             "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
         )
     recording = config.getoption("--nightward-record")
+    config._nightward_lock = None
+    if recording:
+        _lock_for_session(config)
     config._nightward_recorder = Recorder(
         Path(config.getoption("--nightward-dir")) if recording else None)
     config.pluginmanager.register(config._nightward_recorder, "nightward-recorder")
+
+
+def _lock_for_session(config) -> None:
+    """One writer per store (D11), checked before the suite runs (R3-FIN-05).
+
+    Under `nightward run` the runner already holds the lock for this run id.
+    A bare `pytest --nightward-record` takes it for the whole session, so a
+    busy store is a clean usage error in a second, not a traceback after the
+    suite, and no other writer can start between collection and the flush.
+    """
+    root = Path(config.getoption("--nightward-dir"))
+    run_id = config.getoption("--nightward-run-id")
+    if run_id and (read_lock(root) or {}).get("token") == run_id:
+        return
+    try:
+        config._nightward_lock = acquire(root, "pytest --nightward-record")
+    except NightwardError as exc:
+        raise pytest.UsageError(f"nightward: {exc}") from None
+
+
+def pytest_unconfigure(config):
+    held = getattr(config, "_nightward_lock", None)
+    if held:
+        release(Path(config.getoption("--nightward-dir")), held)
+        config._nightward_lock = None
 
 
 @pytest.fixture
@@ -180,14 +207,9 @@ def pytest_sessionfinish(session, exitstatus):
     if rec is None:
         return
     store = Store(Path(config.getoption("--nightward-dir")))
-    run_id = config.getoption("--nightward-run-id")
-    # One writer per store (D11). Under `nightward run` the runner already
-    # holds the lock for this run id; a bare `pytest --nightward-record` takes
-    # it for the flush, and fails fast if another writer is busy.
-    owned = run_id and (read_lock(store.root) or {}).get("token") == run_id
-    with contextlib.nullcontext() if owned else store_lock(store.root,
-                                                           "pytest --nightward-record"):
-        _flush(session, exitstatus, rec, store, run_id)
+    # The store lock is already held: by the runner, or by this session since
+    # pytest_configure (see _lock_for_session).
+    _flush(session, exitstatus, rec, store, config.getoption("--nightward-run-id"))
 
 
 # Options `nightward run` adds itself; anything else on the command line is

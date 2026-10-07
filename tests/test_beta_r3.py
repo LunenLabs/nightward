@@ -394,3 +394,51 @@ def test_skipped_capture_stays_removed(ml):
     assert cli("gate", cwd=tmp_path).returncode == 1
     status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
     assert [c["name"] for c in status["changes"] if c["kind"] == "REMOVED"] == ["eval_metrics"]
+
+
+# ---- R3-OPS-01: releasing the lock survives a reader holding the file -----------
+
+def test_lock_release_survives_a_reader_holding_the_file(tmp_path):
+    from nightward.core.lock import read_lock, store_lock
+    with store_lock(tmp_path, "nightward approve"):        # release must not raise
+        reader = open(tmp_path / ".lock", encoding="utf-8")   # a contender reading it
+        reader.seek(0)
+    try:
+        # Windows can't delete it yet: whatever is left must not name a live holder
+        left = read_lock(tmp_path)
+        assert left is None or left.get("released") is True
+    finally:
+        reader.close()
+    with store_lock(tmp_path, "nightward run"):           # the next writer takes it
+        pass
+    assert not (tmp_path / ".lock").exists()
+
+
+def test_lock_release_retries_a_brief_sharing_violation(tmp_path):
+    import threading
+
+    from nightward.core.lock import store_lock
+    with store_lock(tmp_path, "nightward reject"):
+        reader = open(tmp_path / ".lock", encoding="utf-8")
+        threading.Timer(0.1, reader.close).start()
+    assert not (tmp_path / ".lock").exists()
+
+
+# ---- R3-FIN-05: a bare `pytest --nightward-record` checks the lock up front -----
+
+def test_direct_record_on_a_busy_store_fails_before_the_suite(tmp_path):
+    from nightward.core.lock import store_lock
+    write(tmp_path / "test_slow.py",
+          'from pathlib import Path\n'
+          'def test_slow(behavior):\n'
+          '    Path("ran.txt").write_text("x")\n'
+          '    behavior("ledger.balance", 1)\n')
+    tw = tmp_path / ".nightward"
+    with store_lock(tw, "nightward run"):
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "--nightward-record",
+                            "-p", "no:cacheprovider"], cwd=tmp_path, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace")
+    out = r.stdout + r.stderr
+    assert r.returncode == 4, out
+    assert "another nightward process" in out and "Traceback" not in out
+    assert not (tmp_path / "ran.txt").exists()
