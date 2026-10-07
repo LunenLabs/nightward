@@ -102,7 +102,8 @@ class JudgeUnavailable(Exception):
 # persona lets through in prose:
 #   editor   collapses case, whitespace within a line, and sentence punctuation
 #            (. , ; : ! followed by a space or the end; the CJK marks 。、，．；：！
-#            anywhere). Every word must match. Case is compared with lower() AND
+#            anywhere), but never a mark between two numbers. Every word must
+#            match. Case is compared with lower() AND
 #            upper(), never casefold(): "Maßen"/"Massen" and "ﬁ"/"fi" fold
 #            together but are different spellings (R3-LLM-04). Japanese and
 #            Chinese text has no spaces between words, so a string with kana or
@@ -117,15 +118,21 @@ class JudgeUnavailable(Exception):
 # recorded with each entry so the ledger says which rules ruled. Bump it when
 # these rules change.
 
-_PERSONA_RULES = 4
+_PERSONA_RULES = 5
 
-# One token per match: a number keeps its separators ("120.00" != "120,00"), a
-# word is letters only, sentence punctuation counts only before a space or the
-# end ("." in "a.b" and "!" in "!=" stay significant), and every other non-space
-# character (sign, currency, %, operator, quote, emoji) is a token of its own.
+# One token per match: a number keeps every separator between its digits, in any
+# script and width ("120.00" != "120,00"; full-width 1.5 != full-width 1,5
+# != ASCII 1.5; "10:30"),
+# a word is letters only, sentence punctuation counts only before a space or the
+# end ("." in "a.b" and "!" in "!=" stay significant; the CJK marks anywhere),
+# and every other non-space character (sign, currency, %, operator, quote,
+# emoji) is a token of its own. A mark right after a digit and before another
+# number ("1, 5" vs "1. 5") is never punctuation: it is part of the numbers'
+# meaning (R4-LLM-01).
 _TOKEN_RE = re.compile(
-    r"(?P<num>\d+(?:[.,]\d+)*)|(?P<word>[^\W\d_]+)"
-    r"|(?P<punct>[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])|(?P<sym>\S)"
+    r"(?P<num>\d+(?:[^\s\w]\d+)*)|(?P<word>[^\W\d_]+)"
+    r"|(?P<punct>(?:[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])"
+    r"(?!(?<=\d.)\s*\d))|(?P<sym>\S)"
 )
 _NEGATIONS = frozenset({"not", "no", "never", "none", "nobody", "nothing", "neither",
                         "nor", "nowhere", "cannot", "without", "안", "못"})

@@ -373,7 +373,9 @@ folding is not used, so `Maßen`/`Massen` ("in moderation"/"in masses"), `ﬁ`/`
 the KELVIN SIGN/`K` stay different. Japanese and Chinese are written without spaces,
 so text with kana or Han characters counts as prose even without whitespace. Its
 `。、，．；：！` marks count as sentence punctuation and full-width spaces as spaces;
-every other character must match. A change in Unicode normalization only (NFC vs NFD,
+every other character must match. A mark between digits, or between a digit and the
+next number (`1, 5` vs `1. 5`), is part of the number in any script and width:
+`１．５` vs `１，５` vs `1.5`, or `10：30` vs `10．30`, is DIFFERENT. A change in Unicode normalization only (NFC vs NFD,
 e.g. Hangul from a macOS file name) is DIFFERENT. `review` and `doctor` name it
 ("same text in another Unicode normalization form (NFC -> NFD)") and suggest
 `unicodedata.normalize("NFC", s)` before capturing.
@@ -382,7 +384,7 @@ they are prose.
 
 | persona | rules prose SAME when... | use it for |
 |---|---|---|
-| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end; `。、，．；：！` anywhere) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end; `。、，．；：！` anywhere), never between digits, differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
 | `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
 | `persona:strict` | never | forcing every mismatch to stay breached |
 
