@@ -16,10 +16,27 @@ from pathlib import Path
 
 from ..core.baseline import Store
 from ..runner import is_stale
-from ..shellquote import quote_all
+from ..shellquote import SHELLS, quote, quote_all
 
 ASSETS = Path(__file__).parent / "assets"
 STATIC_FILES = ("index.html", "app.js", "style.css")
+DEFAULT_STORE = ".nightward"
+
+
+def run_command(nightward_dir: Path | str) -> dict[str, str | None]:
+    """`nightward run` for this store, per shell (None: no safe form there).
+
+    The page's "re-run" hint must work in the user's project, not name the
+    README's quickstart fixture (R3-WEB-04).
+    """
+    src = str(nightward_dir)
+    if Path(src) == Path(DEFAULT_STORE):
+        return {shell: "nightward run ." for shell in SHELLS}
+    out: dict[str, str | None] = {}
+    for shell in SHELLS:
+        q = quote(src, shell)
+        out[shell] = None if q is None else f"nightward run . --dir {q}"
+    return out
 
 
 def collect_data(nightward_dir: Path | str) -> dict:
@@ -52,7 +69,9 @@ def collect_data(nightward_dir: Path | str) -> dict:
             # baseline or capture moved since the report: its verdict is void
             "stale": is_stale(store, report),
             "source": str(src),
-            "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+            "run_command": run_command(src),
+            # when this page was built, with its offset like report.generated_at
+            "generated": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         },
     }
 

@@ -411,7 +411,10 @@ Rules for the loop:
 status, counts, and grouped diffs with copy-paste `approve`/`reject` commands. It is
 **read-only** (decisions stay in the CLI) and **static** (no backend), so it also
 deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered with
-`textContent` only — captured output never touches an HTML parser.
+`textContent` only — captured output never touches an HTML parser. The page is a
+snapshot of the store when it was built: after a new `run` or `approve`, rebuild it
+with `nightward view` (refreshing the browser shows the old build). The header shows
+the verdict's own time ("verdict as of", UTC) next to the build time.
 
 The copy-paste commands quote every behavior name for the shell picked in
 "commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on

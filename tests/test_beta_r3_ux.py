@@ -155,3 +155,80 @@ def test_dashboard_data_quotes_group_names(tmp_path):
     quoted = collect_data(store.root)["quoted"]
     assert quoted["partitions.kr"]["posix"] == "partitions.kr"
     assert "summary" in quoted
+
+
+# ---- R3-WEB-04: the dashboard after an aborted or invalidated run --------------
+
+def aborted_store(tw):
+    """An approved baseline whose last run aborted: the report was invalidated."""
+    store = Store(tw)
+    store.ensure()
+    store.write_pending(Behavior(name="a", payload=1))
+    store.approve("a")
+    recompute(store)
+    store.invalidate_report()
+    return store
+
+
+def test_dashboard_without_a_report_shows_an_unknown_verdict(tmp_path):
+    data = collect_data(aborted_store(tmp_path / ".nightward").root)
+    assert data["report"] is None
+    got = node_eval(f"[bannerState(null, {json.dumps(data['meta'])}), "
+                    f"noReportState({json.dumps(data['meta'])})]")
+    state, empty = got
+    assert state == "unknown"
+    assert "did not produce a verdict" in empty["body"]
+    assert "nightward view" in empty["body"]
+    assert "refresh this page" not in empty["body"]
+
+
+def test_dashboard_with_nothing_captured_says_so(tmp_path):
+    store = Store(tmp_path / ".nightward")
+    store.ensure()
+    meta = collect_data(store.root)["meta"]
+    empty = node_eval(f"noReportState({json.dumps(meta)})")
+    assert empty["title"] == "No run recorded yet"
+    assert "nightward view" in empty["body"]
+
+
+def test_dashboard_run_command_is_this_stores_not_the_quickstart(tmp_path):
+    store = aborted_store(tmp_path / "custom store")
+    meta = collect_data(store.root)["meta"]
+    assert meta["run_command"]["posix"] == f"nightward run . --dir '{store.root}'"
+    assert meta["run_command"]["cmd"] == f'nightward run . --dir "{store.root}"'
+    js = APP_JS.read_text(encoding="utf-8")
+    assert "nightward run example" not in js
+    assert "refresh this page" not in js
+
+
+def test_dashboard_run_command_has_no_dir_for_the_default_store(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    aborted_store(Path(".nightward"))
+    meta = collect_data(".nightward")["meta"]
+    assert meta["run_command"] == {s: "nightward run ." for s in SHELLS}
+    assert node_eval(f"setQuoting({{}}, 'posix'); runCommand({json.dumps(meta)})") == (
+        "nightward run .")
+
+
+def test_dashboard_dates_the_verdict_with_its_offset(tmp_path):
+    store = Store(tmp_path / ".nightward")
+    store.ensure()
+    report = recompute(store)
+    meta = collect_data(store.root)["meta"]
+    # the build time carries its UTC offset, like the verdict's own time
+    assert meta["generated"][-6] in "+-" and meta["generated"][-3] == ":"
+    assert node_eval(f"metaItems({json.dumps(report)}, {json.dumps(meta)})")[0]["text"] == (
+        "verdict as of: " + report["generated_at"])
+
+
+def test_dashboard_counts_judged_same_inside_unchanged():
+    labels = node_eval("countItems({unchanged: 10, changed: 0, new: 0, removed: 0, "
+                       "judged_same: 1}).map(function (i) { return i[1]; })")
+    assert labels[-1] == "of them judged same"
+    assert not any("(AI)" in label for label in labels)
+
+
+@pytest.mark.parametrize("model, word", [("persona:editor", "rule-judged"),
+                                         ("anthropic:claude-haiku-4-5", "AI-judged")])
+def test_dashboard_does_not_call_a_persona_an_ai(model, word):
+    assert node_eval(f"judgeBadge({json.dumps(model)})") == word

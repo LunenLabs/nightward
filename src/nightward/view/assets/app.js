@@ -130,20 +130,58 @@ function showEmpty(title, body, command) {
   if (command) box.appendChild(copyChip("copy", command));
 }
 
-function renderMeta(meta) {
+// The verdict's own time comes first: the page may be built long after the run,
+// and both carry their UTC offset so a reviewer can tell how old it is (R3-WEB-04).
+function metaItems(report, meta) {
+  const items = [];
+  if (report && report.generated_at) items.push({ cls: "meta-item", text: "verdict as of: " + report.generated_at });
+  if (!meta) return items;
+  if (meta.generated) items.push({ cls: "meta-item", text: "page built: " + meta.generated });
+  if (meta.source) items.push({ cls: "meta-item", text: "source: " + meta.source });
+  if (meta.judge) items.push({ cls: "meta-item meta-judge", text: "judge: " + meta.judge });
+  return items;
+}
+
+function renderMeta(report, meta) {
   const m = $("run-meta");
   clear(m);
-  if (!meta) return;
-  if (meta.generated) m.appendChild(el("span", { cls: "meta-item", text: "generated: " + meta.generated }));
-  if (meta.source) m.appendChild(el("span", { cls: "meta-item", text: "source: " + meta.source }));
-  if (meta.judge) m.appendChild(el("span", { cls: "meta-item meta-judge", text: "judge: " + meta.judge }));
+  for (const it of metaItems(report, meta)) m.appendChild(el("span", { cls: it.cls, text: it.text }));
+}
+
+// `nightward run` for the store this page was built from (quoted per shell by
+// the generator); null when its path has no safe form in the selected shell.
+function runCommand(meta) {
+  const cmds = meta && meta.run_command;
+  if (!cmds) return "nightward run .";
+  return typeof cmds[SHELL] === "string" ? cmds[SHELL] : null;
+}
+
+// This page is a static build: it never changes until `nightward view` runs again.
+const REBUILD = "then rebuild this page with `nightward view`.";
+
+// No report: nothing was ever run, or the last run produced no verdict.
+function noReportState(meta) {
+  const captured = meta && (meta.baseline_count || meta.pending_count);
+  return captured ? {
+    title: "No current verdict",
+    body: "The last run did not produce a verdict: it aborted (for example a conftest.py import error or a collection error) or its report was invalidated - see the output of `nightward run`. Fix the error and re-run, " + REBUILD,
+    command: runCommand(meta),
+  } : {
+    title: "No run recorded yet",
+    body: "Capture behaviors with the `behavior` pytest fixture and run nightward, " + REBUILD,
+    command: runCommand(meta),
+  };
 }
 
 // Banner states that are neither a pass nor a breach: the verdict can't be trusted.
 const UNTRUSTED = {
   stale: {
     title: "Report is stale",
-    explain: "The approved baseline or the captured behavior changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius. (`nightward gate` exits 1.)",
+    explain: "The approved baseline or the captured behavior changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius, " + REBUILD + " (`nightward gate` exits 1.)",
+  },
+  unknown: {
+    title: "No verdict",
+    explain: "There is no current report, so nothing says whether the boundary holds. (`nightward gate` fails until a run produces one.)",
   },
   incomplete: {
     title: "Capture incomplete",
@@ -174,6 +212,7 @@ function renderBanner(report, state) {
 }
 
 function bannerState(report, meta) {
+  if (!report) return "unknown";
   if (meta && meta.stale) return "stale";
   if (report.boundary === "intact") return report.incomplete ? "incomplete" : "intact";
   return "breached";
@@ -202,18 +241,29 @@ function renderWarnings(report, meta) {
   }
 }
 
-function renderCounts(counts) {
-  const c = $("counts");
-  clear(c);
-  c.hidden = false;
+// Judged-SAME behaviors are already in "unchanged"; the last tile says how many
+// of them a judge (an LLM or a rule-based persona) waved through.
+function countItems(counts) {
   const items = [
     ["unchanged", "unchanged", counts.unchanged],
     ["changed", "changed", counts.changed],
     ["new", "new", counts.new],
     ["removed", "removed", counts.removed],
   ];
-  if (counts.judged_same) items.push(["judged", "judged same (AI)", counts.judged_same]);
-  for (const [key, label, n] of items) {
+  if (counts.judged_same) items.push(["judged", "of them judged same", counts.judged_same]);
+  return items;
+}
+
+// persona:* judges are deterministic rules, not an AI model.
+function judgeBadge(model) {
+  return String(model || "").indexOf("persona:") === 0 ? "rule-judged" : "AI-judged";
+}
+
+function renderCounts(counts) {
+  const c = $("counts");
+  clear(c);
+  c.hidden = false;
+  for (const [key, label, n] of countItems(counts)) {
     const cell = el("div", { cls: "count count-" + key });
     cell.appendChild(el("span", { cls: "count-n", text: n }));
     cell.appendChild(el("span", { cls: "count-label", text: label }));
@@ -310,8 +360,8 @@ function renderCard(it) {
   if (it.judged) {
     head.appendChild(el("span", {
       cls: "badge badge-judged",
-      text: "AI-judged",
-      title: "An LLM judge ruled this fingerprint mismatch semantically DIFFERENT — verdict by " + (it.judge_model || "unknown model"),
+      text: judgeBadge(it.judge_model),
+      title: "A judge ruled this fingerprint mismatch semantically DIFFERENT — verdict by " + (it.judge_model || "unknown judge"),
     }));
   }
   head.appendChild(el("span", { cls: "card-name", text: it.name }));
@@ -406,7 +456,7 @@ function renderJudgedSame(report) {
     head.appendChild(el("span", {
       cls: "badge badge-judged",
       text: "judged SAME",
-      title: "Not in the boundary: an LLM judge ruled this fingerprint mismatch semantically SAME — verdict by " + (it.judge_model || "unknown model"),
+      title: "Not in the boundary: a judge ruled this fingerprint mismatch semantically SAME — verdict by " + (it.judge_model || "unknown judge"),
     }));
     head.appendChild(el("span", { cls: "card-name", text: it.name }));
     card.appendChild(head);
@@ -423,25 +473,23 @@ function renderJudgedSame(report) {
 // ---- entry ----------------------------------------------------------------
 function render(data) {
   setQuoting(data.quoted);
-  renderMeta(data.meta);
   const report = data.report;
-
-  if (!report) {
-    showEmpty("No run recorded yet",
-      "Capture behaviors first, then refresh this page to see the blast radius.",
-      "nightward run example");
-    return;
-  }
+  renderMeta(report, data.meta);
 
   const state = bannerState(report, data.meta);
   renderBanner(report, state);
   renderWarnings(report, data.meta);
+  if (!report) {
+    const empty = noReportState(data.meta);
+    showEmpty(empty.title, empty.body, empty.command);
+    return;
+  }
   renderJudgedSame(report);
 
   if (state === "stale") {
     showEmpty("Re-run to refresh this report",
-      "The diffs in this report compare inputs that are no longer on disk, so they are not shown.",
-      "nightward run .");
+      "The diffs in this report compare inputs that are no longer on disk, so they are not shown. Re-run, " + REBUILD,
+      runCommand(data.meta));
     return;
   }
 
