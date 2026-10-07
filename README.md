@@ -410,7 +410,11 @@ claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in 
 ```
 
 Other hosts take the usual JSON entry. Start the server in the project root: it
-resolves `path` and `dir` against its own working directory.
+resolves `path` against its own working directory and gates the store `.nightward`
+there (or `nightward mcp --dir PATH`). The store is the human's choice, like the
+judge: a tool call's `dir` may only name that same store, and any other is refused.
+Otherwise an agent could copy the store into an ignored folder, forge its baseline,
+and get "intact" with nothing in `git status`.
 
 ```json
 {"mcpServers": {"nightward": {"command": "nightward", "args": ["mcp"], "cwd": "/path/to/project"}}}
@@ -418,13 +422,15 @@ resolves `path` and `dir` against its own working directory.
 
 | tool | arguments | what it does |
 |---|---|---|
-| `nightward_run` | `path="."` (what pytest runs), `dir=".nightward"`, `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated) | runs the tests, captures behaviors, recomputes the boundary |
-| `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
+| `nightward_run` | `path="."` (what pytest runs), `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated); `dir` is optional and may only name the server's store | runs the tests, captures behaviors, recomputes the boundary |
+| `nightward_status` | `dir` (optional, as above) | reads the last run's verdict without running anything |
 
 Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
-`kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled),
-`judged_same`, `stale`, `incomplete` (`{"failed": n, "errors": m}` or null),
-`generated_at`, and `judge`. `boundary` is one of:
+`kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
+`judge_replayed` when that ruling came from the ledger), `judged_same`, `stale`,
+`incomplete` (`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, and
+`store` (the absolute path of the store the verdict comes from). `nightward_run` also
+returns `path` (what pytest ran), so a loop driver can check both. `boundary` is one of:
 
 | `boundary` | meaning | what the agent should do |
 |---|---|---|
@@ -494,7 +500,9 @@ changed** — nothing more. Read these four limits before trusting the green lig
      files are code — review their diffs in every PR;
    - protect your main branch (required human review) and let CI re-run
      `nightward run && nightward gate` from source, so a locally forged
-     "intact" can't merge itself;
+     "intact" can't merge itself (a hand-edited `report.json` or a forged copy
+     of the store leaves no trace in git; MCP refuses any store but the one the
+     server was started with, and names it as `store` in every result);
    - never wire `approve` into the agent loop or CI (the MCP server
      deliberately doesn't expose it — keep your own glue to the same rule).
 3. **A semantic judge can be wrong.** A false-SAME verdict is a hole in the

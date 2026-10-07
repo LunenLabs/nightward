@@ -922,10 +922,14 @@ def _print_status(payload: dict) -> None:
 @handle_errors
 def mcp_cmd(judge: str | None = typer.Option(
         None, help="Semantic judge for nightward_run, as provider:model. The agent "
-                   "can't choose it. Default: [tool.nightward] judge in pyproject.toml")):
+                   "can't choose it. Default: [tool.nightward] judge in the pyproject.toml "
+                   "nearest the store"),
+            dir: str = typer.Option(
+        DEFAULT_DIR, help="The store the agent's tools gate. The agent can't choose "
+                          "another one")):
     """Start the MCP server (stdio) for AI agents - exposes run/status, NOT approve."""
     from .mcp_server import serve
-    serve(judge=judge)
+    serve(judge=judge, dir=dir)
 
 
 if __name__ == "__main__":

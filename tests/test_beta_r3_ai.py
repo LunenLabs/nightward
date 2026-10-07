@@ -292,3 +292,51 @@ def test_mcp_run_carries_the_no_judge_note(tmp_path, monkeypatch):
     assert out["boundary"] == "breached"
     assert "no judge configured" in out["judge"]["unavailable"]
 
+
+
+# --- R3-LLM-07: the MCP server pins its store; results name it ------------------
+
+
+def _gate_project(tmp_path):
+    _approved(tmp_path)
+    store = tmp_path / ".nightward"
+    forged = tmp_path / ".pytest_cache" / "nw"
+    import shutil
+    shutil.copytree(store, forged)
+    return store, forged
+
+
+def test_mcp_refuses_a_store_other_than_the_one_the_server_was_started_with(
+        tmp_path, monkeypatch):
+    from nightward import mcp_server
+    store, forged = _gate_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(mcp_server, "_server_judge", None)
+    monkeypatch.setattr(mcp_server, "_server_dir", None)
+    mcp_server.configure(dir=".nightward")
+    with pytest.raises(NightwardError, match="nightward mcp --dir"):
+        mcp_server.run_tool(dir=".pytest_cache/nw")
+    with pytest.raises(NightwardError, match="nightward mcp --dir"):
+        mcp_server.status_tool(dir=str(forged))
+    out = mcp_server.run_tool(dir=str(store))           # the same store, spelled otherwise
+    assert out["store"] == str(store.resolve()) and out["path"] == "."
+
+
+def test_mcp_results_name_the_store_and_path(tmp_path, monkeypatch):
+    from nightward import mcp_server
+    _approved(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(mcp_server, "_server_judge", None)
+    monkeypatch.setattr(mcp_server, "_server_dir", None)
+    mcp_server.configure()
+    out = mcp_server.run_tool()
+    assert out["store"] == str((tmp_path / ".nightward").resolve()) and out["path"] == "."
+    assert mcp_server.status_tool()["store"] == out["store"]
+
+
+def test_cli_mcp_takes_the_store_option():
+    from typer.testing import CliRunner
+
+    from nightward.cli import app
+    r = CliRunner().invoke(app, ["mcp", "--help"])
+    assert "--dir" in r.output

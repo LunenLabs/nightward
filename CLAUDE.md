@@ -241,7 +241,11 @@ If they merge, the gate approves its own changes and dies (becomes a
 changelog). `mcp_server._TOOLS` is the **single source** of the exposed
 surface, and tests freeze that approve is absent
 (`tests/test_mcp.py::test_isolation_*`). Same principle as view's
-"read-only, approve is CLI-only". **No stdio pollution**: `run_tool` uses
+"read-only, approve is CLI-only". **The store is pinned too (R3-LLM-07)**: `serve()` resolves the store once
+(`nightward mcp --dir`, default `.nightward`) into `_server_dir`; a tool call's `dir`
+may only name it (else `NightwardError`), and results carry `store` (+ `path`). Called
+as a library without `configure(dir=)`, the tools accept any store.
+**No stdio pollution**: `run_tool` uses
 `execute_run(capture_output=True)` so pytest stdout can't break the MCP
 protocol channel (diagnostics to stderr only). `mcp` is an optional extra;
 tool functions don't depend on the SDK, so they're testable without it.
