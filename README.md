@@ -192,7 +192,8 @@ Common conversions:
 | numpy scalar (`np.int64`, `np.float32`, `np.bool_`) | `x.item()` |
 | `np.ndarray`, `pd.Series` | `x.tolist()` |
 | `pd.DataFrame` | `df.to_dict("records")` (or `df.to_csv(index=False).splitlines()`) |
-| `datetime`, `date`, `pd.Timestamp` | `x.isoformat()` |
+| `date` | `x.isoformat()` |
+| `datetime`, `pd.Timestamp` | `x.isoformat()`, but an ISO date-time is masked as `"<TIMESTAMP>"` by the default scrubber: if it is your output (a due date, an event time), also pass `scrub=False` (or call `scrub.disable_defaults()`) |
 | `Decimal` | `str(x)` (keeps the exact digits) |
 | `set` | `sorted(x)` |
 | `bytes` | `x.decode()` or `x.hex()` |
@@ -265,14 +266,19 @@ change first:
 | a date-time, HTTP date or Unix timestamp (also as a string, e.g. `X-RateLimit-Reset`) | `*` looks like a real change | only *if it is not part of the contract*: `scrub.register_field(key)` for that key, or a pattern anchored on the text before it; for a date in a list, "mask it at capture time" (no global date pattern) |
 | several dates that all moved by the same amount | `*` looks like a real change ("all 2 values moved by -1 day") | nothing |
 | a list with the same elements in a new order | `*` looks like a real change | only *if it is not part of the contract* (e.g. a set): sort it before capturing |
-| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing (`float(f"{x:.12g}")`, or `.6g` for float32), no mask. Integral floats and deltas of 1 or more are never noise |
+| the same rows in a new order with float noise in some values (an unordered `GROUP BY` on a parallel engine) | `*` looks like a real change, naming the columns with noise (`$[*][2]`) | only *if order is not part of the contract*: sort (`ORDER BY` a key) and round to the number of digits it names, checked to make both samples equal |
+| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing, to the most significant digits (at most 12, or 6 for float32) that make every drifted value in that path equal, e.g. `float(f"{x:.4g}")`; no mask. Rounding lowers the odds of a flip but can't rule it out: a value near a rounding boundary can still flip on another machine. For vectors, capture what the product uses (top-k ids, a ranking). Integral floats and deltas of 1 or more are never noise |
+| rounded floats (5+ significant digits, 4+ decimals) that differ by 1 in the last digit | `*` looks like a real change | *if the capture rounds float noise*, these are rounding-boundary flips: fewer digits (checked on these values), or capture what the product uses |
+| a string holding JSON (a tool call's `arguments`) whose parsed value is unchanged | `~` formatting only | capture `json.loads(...)` of it; when the parsed value did change, doctor names the inner path (`arguments<json>.invoice_id`) |
+| the same text in another Unicode normalization form (NFC -> NFD) | `*` looks like a real change, named as such | only *if the form is not part of the contract*: `unicodedata.normalize("NFC", s)` before capturing |
 | `0.0` -> `-0.0` | `~` sign of zero | `x + 0.0` before capturing |
 | a changed content hash, a type change, a new key, anything else | `*` / `!` looks like a real change | nothing: review, then approve or fix |
 
 Every suggested rule is checked to make both samples equal. It is withheld when it
 would also match a stable value anywhere else in the capture, and for behaviors
 captured with `scrub=False`. If a value marked as a real change changes again on a
-re-run with no code edits, it is volatile: apply the conditional suggestion, or mask
+re-run with no code edits, it is volatile: apply the conditional suggestion (sort,
+round, normalize), or mask
 it at capture time in that test.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
@@ -320,8 +326,12 @@ NIGHTWARD_JUDGE=persona:strict nightward run .                # same, via env (C
 
 The `persona:*` judges are deterministic and need no key. Both judging personas
 **fail closed**: a change to any digit or number, sign, currency or unit symbol,
-operator (`+ - < > = !=` ...), emoji, negation word, JSON key, or value type
-(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT.
+operator (`+ - < > = !=` ...), emoji, negation, JSON key, or value type
+(`49.99` vs `"49.99"`, a list vs a string) is DIFFERENT. Negation means English
+negation words, and Korean, Japanese and Chinese words that carry a negation marker
+(`않`, `없`, `못`, `불가`, `ない`, `ません`, `不`, `没`, `未` ...), since those languages
+negate inside the verb. A word that merely contains such a marker (`少ない`) also
+counts, which only makes lenient stricter.
 
 Only natural-language **prose** is compared loosely. Everything else is compared
 exactly:
@@ -336,12 +346,21 @@ exactly:
 
 Inside prose, line breaks count, and identifier-like words keep their case:
 mixed case (`iPhone`), ALL CAPS (`USD`), or words joined by `_ . / - @ :`.
+"Letter case" means a word's lower- and upper-case forms both match. Unicode case
+folding is not used, so `Maßen`/`Massen` ("in moderation"/"in masses"), `ﬁ`/`fi` and
+the KELVIN SIGN/`K` stay different. Japanese and Chinese are written without spaces,
+so text with kana or Han characters counts as prose even without whitespace. Its
+`。、，．；：！` marks count as sentence punctuation and full-width spaces as spaces;
+every other character must match. A change in Unicode normalization only (NFC vs NFD,
+e.g. Hangul from a macOS file name) is DIFFERENT. `review` and `doctor` name it
+("same text in another Unicode normalization form (NFC -> NFD)") and suggest
+`unicodedata.normalize("NFC", s)` before capturing.
 In structured payloads only string values are compared loosely, and only when
 they are prose.
 
 | persona | rules prose SAME when... | use it for |
 |---|---|---|
-| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end; `。、，．；：！` anywhere) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
 | `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
 | `persona:strict` | never | forcing every mismatch to stay breached |
 

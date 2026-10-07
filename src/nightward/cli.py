@@ -747,7 +747,7 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
 # doctor's marks: ~ noise with a remedy, * looks real, ! shape changed.
 # Dates and reorders look real first: they can be the contract (D15).
 _DOCTOR_MARKS = {"volatile": "~", "float-noise": "~", "order-only": "*", "date": "*",
-                 "content-hash": "*", "changed": "*", "structural": "!"}
+                 "content-hash": "*", "changed": "*", "structural": "!", "json-format": "~"}
 _DOCTOR_LINES = 20  # per behavior; the rest is summarized
 
 
@@ -811,7 +811,8 @@ def doctor(names: list[str] | None = NAMES_ARG,
                       "`nightward review`, then approve or fix - never scrub a regression. "
                       "doctor calls a value volatile only when the value shows it. If one of "
                       "these changes again on a re-run with no code edits, it is volatile: "
-                      "mask it at capture time in that test.", soft_wrap=True)
+                      "tame it at capture time in that test as its note says (sort, round, "
+                      "normalize), or mask it.", soft_wrap=True)
 
 
 @app.command()

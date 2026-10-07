@@ -101,25 +101,41 @@ class JudgeUnavailable(Exception):
 # prose, line breaks count and identifier-like words keep their case. What each
 # persona lets through in prose:
 #   editor   collapses case, whitespace within a line, and sentence punctuation
-#            (. , ; : ! followed by a space or the end). Every word must match.
+#            (. , ; : ! followed by a space or the end; the CJK marks 。、，．；：！
+#            anywhere). Every word must match. Case is compared with lower() AND
+#            upper(), never casefold(): "Maßen"/"Massen" and "ﬁ"/"fi" fold
+#            together but are different spellings (R3-LLM-04). Japanese and
+#            Chinese text has no spaces between words, so a string with kana or
+#            Han characters is prose even without whitespace (R3-LLM-05).
 #   lenient  also lets ordinary words change ("went up" -> "rose"), so it can
 #            pass "approved" -> "denied". Tests and demos only, never real gating.
+#            Negations must match: English negation words, and Korean, Japanese
+#            and Chinese words carrying a negation marker (않/없/못, ない/ません,
+#            不/没/未 ...), which live inside the verb.
 #   strict   rules every difference DIFFERENT.
 # Persona rulings are never replayed from the ledger (D22); _PERSONA_RULES is
 # recorded with each entry so the ledger says which rules ruled. Bump it when
 # these rules change.
 
-_PERSONA_RULES = 3
+_PERSONA_RULES = 4
 
 # One token per match: a number keeps its separators ("120.00" != "120,00"), a
 # word is letters only, sentence punctuation counts only before a space or the
 # end ("." in "a.b" and "!" in "!=" stay significant), and every other non-space
 # character (sign, currency, %, operator, quote, emoji) is a token of its own.
 _TOKEN_RE = re.compile(
-    r"(?P<num>\d+(?:[.,]\d+)*)|(?P<word>[^\W\d_]+)|(?P<punct>[.,;:!](?=\s|$))|(?P<sym>\S)"
+    r"(?P<num>\d+(?:[.,]\d+)*)|(?P<word>[^\W\d_]+)"
+    r"|(?P<punct>[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])|(?P<sym>\S)"
 )
 _NEGATIONS = frozenset({"not", "no", "never", "none", "nobody", "nothing", "neither",
-                        "nor", "nowhere", "cannot", "without"})
+                        "nor", "nowhere", "cannot", "without", "안", "못"})
+# Korean, Japanese and Chinese negation lives inside a word (승인되지 않았습니다,
+# 承認されませんでした, 未批准): a word containing one of these is kept by lenient.
+# Over-matching (少ない, 必ず) only makes lenient stricter.
+_CJK_NEGATION_MARKS = ("않", "없", "못하", "아니", "불가", "ない", "なかっ", "ません", "ず",
+                       "不", "没", "沒", "未", "无", "無", "非", "别", "別", "勿")
+# Kana and Han: scripts written without spaces between words.
+_UNSPACED_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 # Characters that glue words into identifiers: acct_XyZwQ, charge.refunded,
 # help.desk@acme.io, /api/Orders.
 _JOINERS = frozenset("_./-@:#~^&+=*\\")
@@ -156,16 +172,28 @@ def _tokens(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def _editor_key(text: str) -> list[tuple[str, str]]:
+def _caseless(word: str) -> tuple[str, str]:
+    # Equal only when both the lower- and the upper-case forms match: a true
+    # case change (Maßen/MAßEN) passes, a folding alias (Maßen/Massen, ﬁ/fi,
+    # KELVIN SIGN/K) does not (R3-LLM-04).
+    return word.lower(), word.upper()
+
+
+def _editor_key(text: str) -> list[tuple[str, Any]]:
     # Case-insensitive plain words; units and identifiers keep their case.
-    return [(k, t.casefold() if k == "word" else t) for k, t in _tokens(text)]
+    return [(k, _caseless(t) if k == "word" else t) for k, t in _tokens(text)]
 
 
-def _lenient_key(text: str) -> list[tuple[str, str]]:
+def _negation(word: str) -> bool:
+    return (word.lower() in _NEGATIONS
+            or any(mark in word for mark in _CJK_NEGATION_MARKS))
+
+
+def _lenient_key(text: str) -> list[tuple[str, Any]]:
     # Ordinary words may change; numbers, symbols, units, identifiers (including
     # currency codes such as USD) and negations may not.
-    return [(k, t.casefold() if k == "word" else t) for k, t in _tokens(text)
-            if k != "word" or t.casefold() in _NEGATIONS]
+    return [(k, _caseless(t) if k == "word" else t) for k, t in _tokens(text)
+            if k != "word" or _negation(t)]
 
 
 def _json_container(text: str) -> Any:
@@ -180,9 +208,11 @@ def _json_container(text: str) -> Any:
 
 
 def _is_literal(text: str) -> bool:
-    """A single token (id, enum, code, URL) or code/markup: compare exactly."""
+    """A single token (id, enum, code, URL) or code/markup: compare exactly.
+    Japanese/Chinese prose has no spaces, so kana or Han text is not a token."""
     stripped = text.strip()
-    return not any(c.isspace() for c in stripped) or bool(_CODE_RE.search(text))
+    single = not any(c.isspace() for c in stripped) and not _UNSPACED_RE.search(stripped)
+    return single or bool(_CODE_RE.search(text))
 
 
 def _same_text(old: str, new: str, key) -> bool:

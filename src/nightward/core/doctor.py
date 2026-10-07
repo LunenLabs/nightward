@@ -17,6 +17,7 @@ exactly like approve.
 from __future__ import annotations
 
 import datetime
+import decimal
 import email.utils
 import json
 import math
@@ -28,7 +29,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from .behavior import Behavior, canonical_json
-from .visible import reveal
+from .visible import form_change, reveal
 
 ROOT = "$"
 
@@ -39,6 +40,7 @@ ORDER = "order-only"       # same elements, new order -> real first, else sort
 CONTENT = "content-hash"   # a hash of content changed -> the content changed
 REAL = "changed"           # no sign of volatility -> looks like a real change
 STRUCTURAL = "structural"  # keys / list length / value type changed
+FORMAT = "json-format"     # a JSON string re-serialized, same parsed value -> parse it
 
 _INDEX = re.compile(r"\[\d+\]")
 _TIME_SHAPES = (
@@ -60,15 +62,21 @@ _ULPS = 4          # float noise: at most this many units in the last place
 _ZERO_FLOOR = 1e-12  # ...or this close to zero (cancellation residue)
 _IF_NOT_CONTRACT = "if it is not part of the contract"
 _REAL = "looks like a real change"
+_ROUND_FLOOR = 3     # rounding advice never goes below this many significant digits
+_MATCH_BUDGET = 200_000  # element comparisons when matching reordered rows
+_NO_JSON = object()
 
 
 def _finding(path: str, kind: str, note: str, rule: str | None = None, detail: str = "",
              *, conditional: bool = False, match: tuple | None = None,
-             values: tuple | None = None) -> dict:
+             values: tuple | None = None, rounding: tuple | None = None) -> dict:
     # match: ("field", key) | ("regex", pattern) - what the rule would touch,
-    # for the collision check. values: (old, new) for the date-shift check.
+    # for the collision check. values: (old, new) for the date-shift and
+    # rounding checks. rounding: ("noise", "float32"|"float64") or ("flip",
+    # digits) - the note is written once the whole group is known (_round_advice).
     return {"path": path, "kind": kind, "note": note, "rule": rule, "detail": detail,
-            "conditional": conditional, "_match": match, "_values": values}
+            "conditional": conditional, "_match": match, "_values": values,
+            "_rounding": rounding}
 
 
 def _type(v: Any) -> str:
@@ -264,31 +272,242 @@ def _float_noise(a: float, b: float) -> str | None:
     return None
 
 
-def _classify(path: str, key: str | None, old: Any, new: Any) -> dict:
+def _rounding_flip(a: float, b: float) -> int | None:
+    """The digit count when a and b look rounded to the same number of
+    significant digits (5 or more, at least 4 decimals - never money) and
+    differ by exactly 1 in the last one: a rounded float at a rounding boundary."""
+    if a.is_integer() or b.is_integer() or abs(a - b) >= 1.0:
+        return None
+    da, db = decimal.Decimal(repr(a)), decimal.Decimal(repr(b))
+    digits = max(len(d.normalize().as_tuple().digits) for d in (da, db))
+    last = max(da.adjusted(), db.adjusted()) - digits + 1   # exponent of the last digit
+    if not 5 <= digits <= 15 or last > -4:
+        return None
+    return digits if abs(da - db) == decimal.Decimal(1).scaleb(last) else None
+
+
+def _rounded(v: Any, digits: int) -> Any:
+    if isinstance(v, float):
+        return float(f"{v:.{digits}g}")
+    if isinstance(v, dict):
+        return {k: _rounded(x, digits) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_rounded(x, digits) for x in v]
+    return v
+
+
+def _equalizing_digits(start: int, equal) -> int | None:
+    """The most significant digits (<= start, >= _ROUND_FLOOR) at which
+    `equal(digits)` holds - advice verified on the evidence, never assumed."""
+    for digits in range(start, _ROUND_FLOOR - 1, -1):
+        if equal(digits):
+            return digits
+    return None
+
+
+def _json_value(text: str) -> Any:
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "[{":
+        return _NO_JSON
+    try:
+        value = json.loads(stripped)
+    except ValueError:
+        return _NO_JSON
+    return value if isinstance(value, dict | list) else _NO_JSON
+
+
+def _json_string(path: str, old: str, new: str) -> list[dict] | None:
+    """Findings for two strings that both hold a JSON object/array (a tool
+    call's `arguments`, a partition file): formatting only, or the inner paths
+    that changed (R3-LLM-06, R3-DATA-05). None when they aren't JSON."""
+    a, b = _json_value(old), _json_value(new)
+    if a is _NO_JSON or b is _NO_JSON:
+        return None
+    if canonical_json(a) == canonical_json(b):
+        return [_finding(path, FORMAT, "a JSON string whose parsed value is unchanged - "
+                         "only key order or spacing differ; capture json.loads(...) of it "
+                         "so the gate compares the value, not its formatting",
+                         detail=_window(old, new))]
+    inner: list[dict] = []
+    _walk(a, b, f"{path}<json>", None, inner)
+    for f in inner:
+        if f["rule"]:   # a scrub rule can't see into the string's own JSON
+            f.update(rule=None, _match=None, conditional=False)
+            f["note"] += ("; it is inside a JSON string - capture json.loads(...) of it, "
+                          "then tame the field")
+    return inner
+
+
+def _window(old: str, new: str, limit: int = 40) -> str:
+    """Both strings as JSON, cut to a window around their first difference, so
+    a long value changed near its end doesn't print as two equal prefixes."""
+    a = json.dumps(old, ensure_ascii=False)
+    b = json.dumps(new, ensure_ascii=False)
+    if len(a) <= limit and len(b) <= limit:
+        return f"{a} -> {b}"
+    p = 0
+    while p < min(len(a), len(b)) and a[p] == b[p]:
+        p += 1
+    start = max(0, p - 15)
+
+    def cut(text: str) -> str:
+        return (("..." if start else "") + text[start:start + limit]
+                + ("..." if start + limit < len(text) else ""))
+    return f"{cut(a)} -> {cut(b)}"
+
+
+def _classify(path: str, key: str | None, old: Any, new: Any) -> list[dict]:
     detail = f"{_short(old)} -> {_short(new)}"
     if key is not None and _HASH_KEY.search(key):
-        return _finding(path, CONTENT, "content hash changed, so the content changed - "
-                        "review it; never scrub a hash", detail=detail)
+        return [_finding(path, CONTENT, "content hash changed, so the content changed - "
+                         "review it; never scrub a hash", detail=detail)]
     date = _date_finding(path, key, old, new, detail)
     if date:
-        return date
+        return [date]
     if isinstance(old, str):
         hit = _token_rule(old, new)
         if hit:
-            return _finding(path, VOLATILE, hit[0], hit[1], detail, match=hit[2])
+            return [_finding(path, VOLATILE, hit[0], hit[1], detail, match=hit[2])]
     elif isinstance(old, float):
         width = _float_noise(old, new)
         if width:
-            digits = 6 if width == "float32" else 12
-            return _finding(path, FLOAT, f"{width} noise in the last digits: round to "
-                            f"{digits} significant digits before capturing, e.g. "
-                            f'float(f"{{x:.{digits}g}}") - don\'t mask it', detail=detail)
-    if isinstance(old, str) and isinstance(new, str) and (shown := reveal(old, new)):
-        # Both sides print the same: show and name what differs (R2-FIN-04).
-        return _finding(path, REAL, f"{_REAL} - invisible or look-alike "
-                        f"characters: {shown[2]}",
-                        detail=f'"{_clip(shown[0])}" -> "{_clip(shown[1])}"')
-    return _finding(path, REAL, _REAL, detail=detail)
+            return [_finding(path, FLOAT, "", detail=detail, values=(old, new),
+                             rounding=("noise", width))]
+        digits = _rounding_flip(old, new)
+        if digits:
+            return [_finding(path, REAL, "", detail=detail, values=(old, new),
+                             rounding=("flip", digits))]
+    if isinstance(old, str) and isinstance(new, str):
+        inner = _json_string(path, old, new)
+        if inner:
+            return inner
+        form = form_change(old, new)
+        if form:
+            return [_finding(path, REAL, f"{_REAL} in its bytes only: the same text in "
+                             f"another Unicode normalization form ({form}); "
+                             f"{_IF_NOT_CONTRACT}, normalize it before capturing: "
+                             f'unicodedata.normalize("NFC", s)', detail=_window(old, new))]
+        shown = reveal(old, new)
+        if shown:
+            # Both sides print the same: show and name what differs (R2-FIN-04).
+            return [_finding(path, REAL, f"{_REAL} - invisible or look-alike "
+                             f"characters: {shown[2]}",
+                             detail=f'"{_clip(shown[0])}" -> "{_clip(shown[1])}"')]
+        detail = _window(old, new)
+    return [_finding(path, REAL, _REAL, detail=detail)]
+
+
+_BOUNDARY = ("a value near a rounding boundary can still flip on another run; for "
+             "vectors, capture what the product uses (top-k ids, a ranking)")
+
+
+def _round_advice(found: list[dict]) -> None:
+    """Write the rounding notes, per path group, with a digit count verified to
+    equalize every drifted value in the group (R3-LLM-01)."""
+    groups: dict[tuple, list[dict]] = {}
+    for f in found:
+        if f["_rounding"]:
+            groups.setdefault((_INDEX.sub("[*]", f["path"]), f["_rounding"][0]),
+                              []).append(f)
+    for (_, kind), group in groups.items():
+        pairs = [f["_values"] for f in group]
+        if kind == "noise":
+            f32 = any(f["_rounding"][1] == "float32" for f in group)
+            width, start = ("float32", 6) if f32 else ("float64", 12)
+        else:
+            had = min(f["_rounding"][1] for f in group)
+            start = had - 1
+
+        def equal(d: int, pairs: list = pairs) -> bool:
+            return all(_rounded(a, d) == _rounded(b, d) for a, b in pairs)
+        digits = _equalizing_digits(start, equal)
+        n = f"{len(pairs)} value(s)"
+        fix = (f'round to {digits} significant digits before capturing, e.g. '
+               f'float(f"{{x:.{digits}g}}") (equalizes these {n}; {_BOUNDARY})'
+               if digits else
+               f"rounding to {_ROUND_FLOOR} significant digits still leaves these {n} "
+               f"apart - capture what the product uses instead (top-k ids, a ranking)")
+        if kind == "noise":
+            note = f"{width} noise in the last digits: {fix} - don't mask it"
+        else:
+            note = (f"{_REAL}: differs by 1 in the last of {had} significant digits; if "
+                    f"this capture rounds float noise, it is a rounding-boundary flip "
+                    f"(rounding lowers the odds of a flip but can't rule it out): {fix} "
+                    f"- don't mask it")
+        for f in group:
+            f["note"] = note
+
+
+# ---- lists: rows in a new order, with float noise ------------------------------
+
+
+def _shape(v: Any) -> Any:
+    """v with every float blanked: rows that match up to float noise share it."""
+    if isinstance(v, float):
+        return None
+    if isinstance(v, dict):
+        return {k: _shape(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_shape(x) for x in v]
+    return v
+
+
+def _noise_equal(a: Any, b: Any) -> bool:
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, float):
+        return a == b or _float_noise(a, b) is not None
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_noise_equal(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_noise_equal(x, y) for x, y in zip(a, b, strict=True))
+    return a == b
+
+
+def _noisy_reorder(old: list, new: list, prefix: str) -> dict | None:
+    """One ORDER finding when `new` is `old` in another order with float noise
+    in some values (a parallel engine's unordered GROUP BY, R3-DATA-04)."""
+    buckets: dict[str, list[int]] = {}
+    for j, v in enumerate(new):
+        buckets.setdefault(_sortable(_shape(v)), []).append(j)
+    pairs: list[tuple[int, int]] = []
+    budget = _MATCH_BUDGET
+    for i, o in enumerate(old):
+        candidates = buckets.get(_sortable(_shape(o)))
+        if not candidates:
+            return None
+        for at, j in enumerate(candidates):
+            budget -= 1
+            if _noise_equal(o, new[j]):
+                pairs.append((i, candidates.pop(at)))
+                break
+        else:
+            return None
+        if budget < 0:
+            return None
+    if all(i == j for i, j in pairs):
+        return None        # nothing moved: the positional walk explains the noise
+    inner: list[dict] = []
+    for i, j in pairs:   # the row moved (i -> j), so its paths read "[*]"; columns stay
+        _walk(old[i], new[j], f"{prefix or ROOT}[*]", None, inner)
+    paths = sorted({f["path"] for f in inner})
+    width = ("float32" if any(f["_rounding"] == ("noise", "float32") for f in inner)
+             else "float64")
+    digits = _equalizing_digits(
+        6 if width == "float32" else 12,
+        lambda d: sorted(map(_sortable, _rounded(old, d)))
+        == sorted(map(_sortable, _rounded(new, d))))
+    fix = (f'sort it before capturing (ORDER BY a key, or sorted(rows)) and round its '
+           f'floats to {digits} significant digits, e.g. float(f"{{x:.{digits}g}}") '
+           f"(equalizes both samples here; a value near a rounding boundary can still "
+           f"flip)" if digits else
+           f"sort it before capturing (ORDER BY a key, or sorted(rows)); its floats still "
+           f"differ at {_ROUND_FLOOR} significant digits, so capture what the product uses "
+           f"(rounded totals, an aggregate)")
+    return _finding(prefix or ROOT, ORDER, f"same elements in a new order, with {width} noise in "
+                    f"{len(inner)} value(s) at {', '.join(paths)} - {_REAL} (event, ledger "
+                    f"or ranking order); {_IF_NOT_CONTRACT} (e.g. an unordered query "
+                    f"result), {fix}")
 
 
 def _clip(escaped: str, limit: int = 60) -> str:
@@ -330,6 +549,9 @@ def _walk(old: Any, new: Any, prefix: str, key: str | None, out: list[dict]) -> 
                                 f"(event, ledger or ranking order); {_IF_NOT_CONTRACT} "
                                 f"(e.g. a set), sort it before capturing"))
             return
+        if old != new and (noisy := _noisy_reorder(old, new, prefix)):
+            out.append(noisy)
+            return
         for i, (o, n) in enumerate(zip(old, new, strict=True)):
             _walk(o, n, f"{prefix}[{i}]" if prefix else f"{ROOT}[{i}]", None, out)
         return
@@ -337,7 +559,7 @@ def _walk(old: Any, new: Any, prefix: str, key: str | None, out: list[dict]) -> 
         out.append(_finding(path, STRUCTURAL, f"type {_type(old)} -> {_type(new)}",
                             detail=f"{_short(old)} -> {_short(new)}"))
     elif old != new:
-        out.append(_classify(path, key, old, new))
+        out.extend(_classify(path, key, old, new))
     elif isinstance(old, float) and math.copysign(1, old) != math.copysign(1, new):
         # 0.0 == -0.0 in Python, but the fingerprint sees "-0.0" (R2-DATA-01)
         out.append(_finding(path, FLOAT, "sign of zero changed (e.g. round(-0.0001, 2) "
@@ -349,6 +571,7 @@ def findings(old: Any, new: Any) -> list[dict]:
     """Every leaf-level difference between two payloads, classified."""
     out: list[dict] = []
     _walk(old, new, "", None, out)
+    _round_advice(out)
     return out
 
 
