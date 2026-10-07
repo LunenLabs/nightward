@@ -155,6 +155,8 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   REMOVED whose baseline `source` was deselected (-k/-m) becomes `NOT_RUN` in
   `runner.classify`: listed in report `not_run`, excluded from `unapproved`, never
   removal proof. Skips/xfails and source-less baselines stay REMOVED (fail closed).
+  Not checked is never done (D23): such a report's boundary is `partial`; `gate`
+  exits 1 on it unless `--allow-not-run` (a CI-yaml opt-in); MCP can't waive it.
 - **Decisions bind to what the human saw (D19).** Each report item carries a
   `token` (`baseline.change_token`: old state -> new state). `run`/`report`/`review`/
   `view` record the tokens they displayed in `reviewed.json` (a scoped review =

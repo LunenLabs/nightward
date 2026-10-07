@@ -97,6 +97,9 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
     boundary is one of:
       "intact"     done: no unapproved change;
       "breached"   unapproved changes: fix the code, or ask a human to approve;
+      "partial"    nothing unapproved among what ran, but approved behaviors were
+                   not checked (their test was deselected, see not_run): not done -
+                   run them (remove the -k/-m selection); you can't waive this;
       "incomplete" nothing unapproved, but capture tests failed or errored
                    (see incomplete and pytest_output_tail): fix the tests;
       "stale"      the baseline or capture moved since the report: run again;
@@ -136,6 +139,7 @@ def status_tool(dir: str | None = None) -> dict:
     It does not see code edits made since that run: after changing code, call
     nightward_run for a fresh verdict. Same shape as nightward_run, without
     warnings. boundary is "intact" (done), "breached" (unapproved changes),
+    "partial" (approved behaviors not checked: their test was deselected),
     "incomplete" (capture tests failed or errored; see incomplete), "stale"
     (the baseline or capture moved since that run, so its verdict can't be
     trusted: run again) or "unknown" (no report yet). generated_at says when

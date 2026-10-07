@@ -456,10 +456,14 @@ def _print_summary(report: dict) -> None:
     # tests is never "intact", even when nothing captured moved (R2-DATA-03).
     incomplete = report.get("incomplete")
     gap = (_incomplete_short(incomplete) if incomplete else "")
-    if report["boundary"] == "intact" and incomplete:
+    if report["boundary"] in ("intact", "partial") and incomplete:
         console.print(f"\n[bold]Boundary:[/bold] [red]incomplete[/red] ({gap})")
     elif report["boundary"] == "intact":
         console.print("\n[bold]Boundary:[/bold] [green]intact[/green]")
+    elif report["boundary"] == "partial":
+        # Nothing unapproved among what ran - but not everything ran (D23).
+        console.print(f"\n[bold]Boundary:[/bold] [yellow]partial[/yellow] "
+                      f"({len(report.get('not_run') or [])} not checked - not done)")
     else:
         console.print(f"\n[bold]Boundary:[/bold] [red]breached[/red] "
                       f"({report['unapproved']} unapproved{'; ' + gap if gap else ''})")
@@ -1084,12 +1088,18 @@ def doctor(names: list[str] | None = NAMES_ARG,
 
 @app.command()
 @handle_errors
-def gate(dir: str = typer.Option(DEFAULT_DIR)):
+def gate(dir: str = typer.Option(DEFAULT_DIR),
+         allow_not_run: bool = typer.Option(
+             False, "--allow-not-run",
+             help="Pass a partial boundary: approved behaviors whose test the run "
+                  "deselected (-k/-m) are not checked. Only for a deliberately narrowed "
+                  "CI job whose full run happens elsewhere")):
     """Exit with the verdict of the last run (for CI / agent loops).
 
-    0: boundary intact. 1: breached, stale (baseline or capture changed since
-    the report) or incomplete (capture tests failed). 2: no store, no report
-    (no run yet, or the last run aborted) or another error. Only 0 is a pass.
+    0: boundary intact (or partial, with --allow-not-run). 1: breached, partial
+    (behaviors not checked), stale (baseline or capture changed since the
+    report) or incomplete (capture tests failed). 2: no store, no report (no
+    run yet, or the last run aborted) or another error. Only 0 is a pass.
     """
     store = _existing_store(dir)
     report = _require_report(store)
@@ -1103,8 +1113,20 @@ def gate(dir: str = typer.Option(DEFAULT_DIR)):
     as_of = f" [dim]{escape(_as_of(report.get('generated_at')))}[/dim]"
     if report.get("boundary") == "intact":
         console.print(f"[green]boundary intact[/green]{as_of}")
-        _print_not_run(report)
         raise typer.Exit(0)
+    if report.get("boundary") == "partial":
+        # "Not checked" is never "done" unless the job says so (D23).
+        n = len(report.get("not_run") or [])
+        if allow_not_run:
+            console.print(f"[yellow]boundary partial[/yellow] - passed with --allow-not-run "
+                          f"({n} not checked){as_of}")
+            _print_not_run(report)
+            raise typer.Exit(0)
+        console.print(f"[red]boundary partial[/red] ({n} behavior(s) not checked){as_of}")
+        _print_not_run(report)
+        console.print("a run that deselects approved behaviors is not done - run them, or "
+                      "pass --allow-not-run in a deliberately narrowed CI job")
+        raise typer.Exit(1)
     console.print(f"[red]boundary breached[/red] ({report.get('unapproved', 0)} "
                   f"unapproved){as_of}")
     raise typer.Exit(1)
@@ -1173,6 +1195,7 @@ def _as_of(generated_at: str | None) -> str:
 
 
 _STATUS_COLORS = {"intact": "green", "breached": "red", "incomplete": "red",
+                  "partial": "yellow",
                   "stale": "red", "unknown": "yellow"}
 
 

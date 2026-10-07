@@ -368,9 +368,10 @@ def test_deselected_behaviors_are_not_checked_not_removed(ml):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "REMOVED" not in r.stdout
     assert "1 behavior(s) not checked" in r.stdout and "model_metrics" in r.stdout
-    assert cli("gate", cwd=tmp_path).returncode == 0
+    assert cli("gate", cwd=tmp_path).returncode == 1          # D23: partial, not done
+    assert cli("gate", "--allow-not-run", cwd=tmp_path).returncode == 0
     status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
-    assert status["boundary"] == "intact" and status["narrowed"] is True
+    assert status["boundary"] == "partial" and status["narrowed"] is True
     assert [n["name"] for n in status["not_run"]] == ["model_metrics"]
     # never removal proof, and nothing to approve by name
     r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
@@ -384,7 +385,7 @@ def test_run_passthrough_deselection_is_not_checked(ml):
     tmp_path, tw = ml
     r = cli("run", ".", "--", "-m", "not gpu", cwd=tmp_path)
     assert r.returncode == 0 and "not checked" in r.stdout, r.stdout + r.stderr
-    assert cli("gate", cwd=tmp_path).returncode == 0
+    assert cli("gate", "--allow-not-run", cwd=tmp_path).returncode == 0   # D23 opt-in
 
 
 def test_skipped_capture_stays_removed(ml):

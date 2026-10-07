@@ -183,6 +183,10 @@ const UNTRUSTED = {
     title: "No verdict",
     explain: "There is no current report, so nothing says whether the boundary holds. (`nightward gate` fails until a run produces one.)",
   },
+  partial: {
+    title: "Boundary partial",
+    explain: "Nothing that ran is unapproved, but some approved behaviors were not checked: their test was deselected (-k/-m). This is NOT done. (`nightward gate` exits 1 unless the CI job passes --allow-not-run.)",
+  },
   incomplete: {
     title: "Capture incomplete",
     explain: "Nothing captured is unapproved, but some capture tests failed or errored, so their behaviors are missing from this report. Fix them and re-run. (`nightward gate` exits 1.)",
@@ -214,7 +218,9 @@ function renderBanner(report, state) {
 function bannerState(report, meta) {
   if (!report) return "unknown";
   if (meta && meta.stale) return "stale";
-  if (report.boundary === "intact") return report.incomplete ? "incomplete" : "intact";
+  if (report.boundary === "intact" || report.boundary === "partial") {
+    return report.incomplete ? "incomplete" : report.boundary;
+  }
   return "breached";
 }
 
@@ -523,11 +529,13 @@ function render(data) {
     return;
   }
 
-  if (report.boundary === "intact" || !changes.length) {
+  if (report.boundary !== "breached" || !changes.length) {
     showEmpty("No behavior changed",
       state === "incomplete"
         ? "Everything captured matches the baseline, but the capture is incomplete. This is NOT a safe place to stop."
-        : "Everything matches the last approved baseline. This is a safe place to stop.", null);
+        : state === "partial"
+          ? "Everything that ran matches the baseline, but some approved behaviors were not checked. This is NOT a safe place to stop."
+          : "Everything matches the last approved baseline. This is a safe place to stop.", null);
     renderCounts(report.counts || {});
     return;
   }

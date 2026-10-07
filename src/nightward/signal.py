@@ -2,9 +2,11 @@
 
 A ralph-style loop reads `nightward status --json` and only emits its completion
 promise when {"boundary": "intact"}. Any other value means "not done":
-"breached" (unapproved changes), "incomplete" (nothing unapproved, but capture
-tests failed or errored - fix them), "stale" (the baseline or capture moved since
-the last report - re-run), or "unknown" (no report yet).
+"breached" (unapproved changes), "partial" (nothing unapproved among what ran,
+but approved behaviors were not checked: their test was deselected), "incomplete"
+(nothing unapproved, but capture tests failed or errored - fix them), "stale"
+(the baseline or capture moved since the last report - re-run), or "unknown" (no
+report yet).
 """
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
     incomplete = report.get("incomplete")
     if stale:
         boundary = "stale"
-    elif incomplete and boundary == "intact":
+    elif incomplete and boundary in ("intact", "partial"):
         boundary = "incomplete"   # a failing capture test is never "done"
     # judge_replayed only when true: the ruling came from the committed ledger,
     # the judge did not rule again this run (D22).

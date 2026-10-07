@@ -82,12 +82,14 @@ nightward reject  confirm a change you reviewed as a real regression. It takes o
                   `approve <name>` overrides and clears the rejection. Commit
                   .nightward/rejected/ like the baseline, so a rejection protects
                   every clone and CI, not just your machine
-nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, stale or
-                  incomplete; 2 no store, no report (no run yet, or the last run
-                  aborted) or another error. Only 0 is a pass
+nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, partial
+                  (behaviors not checked), stale or incomplete; 2 no store, no report
+                  (no run yet, or the last run aborted) or another error. Only 0 is a
+                  pass. `--allow-not-run` passes "partial" in a deliberately narrowed job
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
-                  "done"; "breached", "incomplete" (capture tests failed/errored),
+                  "done"; "breached", "partial" (approved behaviors not checked:
+                  their test was deselected), "incomplete" (capture tests failed/errored),
                   "stale" (baseline or capture changed since the last report -
                   re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
@@ -149,16 +151,21 @@ same run and turn it into a verdict without running the suite twice:
 ```bash
 pytest -m "not gpu" --nightward-record     # the plugin writes .nightward/pending + run_meta
 nightward report                           # verdict from that capture (no pytest run)
-nightward gate
+nightward gate --allow-not-run             # this job deliberately skips the GPU tests
 ```
 
 `nightward report` trusts the capture only if `run_meta.json` proves `pending/` is
 exactly what a complete pytest session flushed; a failed/errored session exits 1 like
 `run`. A behavior whose recorded test you deselected (`-k`/`-m`) is **not checked**,
 not REMOVED: `run`, `report`, `gate`, `status --json` (`not_run`, `narrowed: true`) and
-the dashboard list it, it doesn't count as unapproved, and the gate verdict covers the
-behaviors the run did check. So the recipe above stays green on a GPU-less PR runner
-while a full run (nightly, or `nightward run`) checks the rest. This needs the recorded
+the dashboard list it, and it doesn't count as unapproved. But "not checked" is never
+"done": the boundary is **`partial`**, and `gate` exits 1 on it unless the job passes
+`--allow-not-run`. That flag belongs in the CI yaml of a deliberately narrowed job
+(above, a GPU-less PR runner) whose full run happens elsewhere (nightly, or
+`nightward run`); then a test that the change itself deselects - an added `-k`/`-m` in
+`addopts`, a new `@pytest.mark.slow` on the broken test - shows up in that job's
+`not_run` list, and the full run still breaches. MCP has no such option: for an agent,
+`partial` means not done. This needs the recorded
 test in the baseline (`source`, written on approve): approve once from a full run.
 Baselines from before sources existed, and skipped or xfailed tests, still read as
 REMOVED (fail closed). Or let nightward drive pytest and pass the arguments through:
@@ -464,6 +471,7 @@ absolute path of the store the verdict comes from). `nightward_run` also returns
 |---|---|---|
 | `intact` | no unapproved change | done |
 | `breached` | unapproved changes | fix the code, or stop and ask a human to approve |
+| `partial` | nothing unapproved among what ran, but approved behaviors were not checked (deselected, see `not_run`) | run them: remove the `-k`/`-m` selection (it can't be waived over MCP) |
 | `incomplete` | nothing unapproved, but capture tests failed or errored | fix the failing tests (see `incomplete` and `pytest_output_tail`) |
 | `stale` | the baseline or capture moved since the report | call `nightward_run` again |
 | `unknown` | no report yet | call `nightward_run` |
