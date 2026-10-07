@@ -41,6 +41,21 @@ def _write_lf(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
+def _reuse(old: Path, new: Path, text: str) -> bool:
+    """Hard-link an unchanged file of the last capture instead of rewriting it.
+
+    Byte-identical captures are the common case, and on Windows every freshly
+    written file costs an antivirus scan at its first open (R3-DATA-07).
+    """
+    try:
+        if old.read_bytes() != text.encode("utf-8"):
+            return False
+        os.link(old, new)
+    except OSError:
+        return False
+    return True
+
+
 def digest(behaviors: dict[str, Behavior]) -> str:
     """Identity of a behavior set (baseline or pending): changes iff any behavior does."""
     h = hashlib.sha256()
@@ -135,7 +150,9 @@ class Store:
         staging.mkdir(parents=True)
         try:
             for b in behaviors:
-                _write_lf(self._file(staging, b.name, "received"), _file_text(b))
+                text, dst = _file_text(b), self._file(staging, b.name, "received")
+                if not _reuse(self._file(self.pending_dir, b.name, "received"), dst, text):
+                    _write_lf(dst, text)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise

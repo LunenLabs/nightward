@@ -154,16 +154,17 @@ def recompute_capture(store: Store) -> dict:
     """
     with store_lock(store.root, "nightward report"):
         meta = store.load_run_meta()
+        pending = store.load_pending()
         if not meta.get("pending_digest"):
             raise NightwardError(
                 f"no recorded capture session in {store.root} - capture first with "
                 f"`pytest --nightward-record` (or `nightward run`)")
-        if meta["pending_digest"] != digest(store.load_pending()):
+        if meta["pending_digest"] != digest(pending):
             raise NightwardError(
                 f"{store.pending_dir} does not match the last recorded capture session "
                 f"(edited by hand, or written by an older nightward) - capture again with "
                 f"`pytest --nightward-record` or `nightward run`")
-        return recompute(store, judge=judge_from_meta(store))
+        return recompute(store, judge=judge_from_meta(store), pending=pending)
 
 
 def _pytest_cmd(path: str, dir: str, run_id: str, extra: list[str]) -> list[str]:

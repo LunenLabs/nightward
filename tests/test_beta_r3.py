@@ -529,3 +529,17 @@ def test_busy_lock_from_another_host_says_it_was_committed(tmp_path):
     r = cli("run", ".", cwd=tmp_path)
     assert r.returncode == 2 and "dev-laptop-anna" in r.stderr
     assert "git rm --cached" in r.stderr
+
+
+# ---- R3-DATA-07: an unchanged capture reuses its files instead of rewriting them --
+
+def test_replace_pending_reuses_unchanged_files(tmp_path):
+    from nightward.core.baseline import Store
+    from nightward.core.behavior import Behavior
+    store = Store(tmp_path / ".nightward")
+    store.replace_pending([Behavior("a", 1, group="g"), Behavior("b", 2, group="g")])
+    ino = {n: (store.pending_dir / f"{n}.received.json").stat().st_ino for n in "ab"}
+    store.replace_pending([Behavior("a", 1, group="g"), Behavior("b", 3, group="g")])
+    assert (store.pending_dir / "a.received.json").stat().st_ino == ino["a"]
+    assert store.load_pending()["b"].payload == 3
+    assert not (store.root / "pending.tmp").exists()
