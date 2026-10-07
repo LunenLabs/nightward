@@ -372,7 +372,9 @@ claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in 
 ```
 
 Other hosts take the usual JSON entry. Start the server in the project root: it
-resolves `path` and `dir` against its own working directory.
+resolves `path` and `dir` against its own working directory. Started in a
+subdirectory, both tools refuse with "no nightward store at ..., but found ..."
+instead of creating a second, empty store there.
 
 ```json
 {"mcpServers": {"nightward": {"command": "nightward", "args": ["mcp"], "cwd": "/path/to/project"}}}

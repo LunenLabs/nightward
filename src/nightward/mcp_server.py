@@ -12,7 +12,7 @@ from .config import project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
-from .runner import execute_run, is_stale, refused_run_invalidates
+from .runner import execute_run, is_stale, refused_run_invalidates, store_above
 from .signal import status_payload
 
 # The semantic judge for nightward_run. Set by the human who configures the
@@ -34,6 +34,18 @@ def _judge_spec(path: str) -> str | None:
     # $NIGHTWARD_JUDGE or the last run's judge: a human's one-off
     # `nightward run --judge persona:lenient` must not become the agent's gate.
     return _server_judge or project_judge(path.split("::", 1)[0])
+
+
+def _check_store(dir: str) -> None:
+    """The CLI's guard (R1-OPS-07) for the agent: a server started in a
+    subdirectory must not create a second, empty store below the project's
+    (R3-OPS-02) - every behavior would read NEW there, forever."""
+    above = None if Path(dir).exists() else store_above(dir)
+    if above:
+        raise NightwardError(
+            f"no nightward store at {dir!r} (the MCP server runs in {Path.cwd()}), but "
+            f"found {above!r} - start the MCP server in the project root, or pass "
+            f"dir={above!r} with a path relative to {Path.cwd()}")
 
 
 def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> dict:
@@ -63,6 +75,7 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     "judge" says which, and why it was unavailable if it was. This tool cannot
     approve changes: a human does that with the nightward CLI.
     """
+    _check_store(dir)
     with refused_run_invalidates(dir):   # e.g. a typo in the committed judge
         spec = _judge_spec(path)
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
@@ -93,6 +106,7 @@ def status_tool(dir: str = ".nightward") -> dict:
     trusted: run again) or "unknown" (no report yet). generated_at says when
     the run happened.
     """
+    _check_store(dir)
     store = Store(Path(dir))
     report = store.load_report()
     return status_payload(report, stale=is_stale(store, report))

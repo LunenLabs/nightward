@@ -30,6 +30,7 @@ from .runner import (
     refused_run_invalidates,
     standing_rejections,
 )
+from .runner import store_above as _store_above
 from .signal import status_payload
 from .view import build_site
 
@@ -145,16 +146,6 @@ def _check_dir(dir_: str) -> None:
     p = Path(dir_)
     if p.exists() and not p.is_dir():
         raise NightwardError(f"--dir {dir_!r} exists but is not a directory")
-
-
-def _store_above(dir_: str) -> str | None:
-    """A store named `dir_` in a parent directory (cwd is a subdirectory of the project)."""
-    if Path(dir_).is_absolute():
-        return None
-    for parent in Path.cwd().parents:
-        if (parent / dir_).is_dir():
-            return os.path.relpath(parent / dir_)
-    return None
 
 
 def _missing_store_message(dir_: str) -> str:

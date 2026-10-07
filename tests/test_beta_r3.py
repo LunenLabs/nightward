@@ -414,6 +414,23 @@ def test_quoted_names_are_never_expanded(tmp_path):
     assert baseline_names(tmp_path / ".nightward") == ["p.%OS%", "price.$region", "~home"]
 
 
+# ---- R3-OPS-02: the MCP server in a subdirectory never makes a second store ------
+
+def test_mcp_in_a_subdirectory_refuses_to_create_a_second_store(tmp_path, monkeypatch):
+    from nightward import mcp_server
+    from nightward.errors import NightwardError
+    (tmp_path / "tests").mkdir()
+    write(tmp_path / "tests" / "test_a.py", 'def test_a(behavior):\n    behavior("a", 1)\n')
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("approve", "--all", cwd=tmp_path)
+    monkeypatch.chdir(tmp_path / "tests")
+    for call in (mcp_server.status_tool, mcp_server.run_tool):
+        with pytest.raises(NightwardError, match="start the MCP server in the project root"):
+            call()
+    assert not (tmp_path / "tests" / ".nightward").exists()
+
+
 # ---- R3-OPS-01: releasing the lock survives a reader holding the file -----------
 
 def test_lock_release_survives_a_reader_holding_the_file(tmp_path):

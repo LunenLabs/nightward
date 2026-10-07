@@ -8,6 +8,7 @@ from __future__ import annotations
 import datetime
 import importlib.metadata
 import importlib.util
+import os
 import subprocess
 import sys
 import uuid
@@ -20,6 +21,17 @@ from .core.blast import aggregate
 from .core.diff import CHANGED, NOT_RUN, REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
+
+
+def store_above(dir_: str) -> str | None:
+    """A store named `dir_` in a parent directory (cwd is a subdirectory of the
+    project): running there would silently create a second, empty store."""
+    if Path(dir_).is_absolute():
+        return None
+    for parent in Path.cwd().parents:
+        if (parent / dir_).is_dir():
+            return os.path.relpath(parent / dir_)
+    return None
 
 
 def make_judge(spec: str | None, store: Store):
