@@ -147,7 +147,8 @@ SHOP = ('import os\n'
         'def checkout(qty):\n    return {"qty": qty, "total": qty * UNIT}\n'
         'def banner():\n    return {"label": LABEL}\n')
 TEST_SHOP = ('from shop import checkout, banner\n'
-             'def test_checkout(behavior):\n    behavior("checkout.3", checkout(3), group="billing")\n'
+             'def test_checkout(behavior):\n'
+             '    behavior("checkout.3", checkout(3), group="billing")\n'
              'def test_banner(behavior):\n    behavior("ui.banner", banner(), group="ui")\n')
 
 
@@ -203,8 +204,8 @@ def test_reject_records_the_reviewed_capture_or_refuses(shop, monkeypatch):
 def test_reject_refuses_a_name_that_is_not_a_change(shop):
     # R3-FIN-07: a one-word slip must not "reject" an unchanged behavior.
     tmp_path, tw = shop
-    write(tmp_path / "test_shop.py", TEST_SHOP + 'def test_fee(behavior):\n'
-                                                '    behavior("checkout.fee", 0, group="billing")\n')
+    fee = 'def test_fee(behavior):\n    behavior("checkout.fee", 0, group="billing")\n'
+    write(tmp_path / "test_shop.py", TEST_SHOP + fee)
     cli("run", ".", cwd=tmp_path, env={"UNIT": "12"})
     assert cli("approve", "checkout.fee", cwd=tmp_path).returncode == 0
     cli("review", cwd=tmp_path)
