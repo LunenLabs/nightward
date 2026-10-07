@@ -245,3 +245,31 @@ def test_no_serve_hint_binds_loopback(tmp_path):
     # a path with a space arrives as one argument
     assert "'my site'" in out or '"my site"' in out, out
     assert "nightward view --out" in out
+
+
+# ---- R1-WEB-06 retest: advice that can actually silence the warning -----------
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+
+
+@needs_git
+def test_view_with_a_custom_out_dir_suggests_its_own_ignore_line(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    assert cli("init", cwd=tmp_path).returncode == 0
+    r = cli("view", "--no-serve", "--out", "blast-radius", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    err = r.stderr.replace("\n", " ")
+    assert "not git-ignored" in err and "blast-radius/" in err, err
+    assert "nightward init" not in err, err
+
+
+def test_init_on_an_existing_store_does_not_claim_it_created_one(tmp_path):
+    store = Store(tmp_path / ".nightward")
+    store.ensure()
+    for n in ("a", "b"):
+        store.write_pending(Behavior(name=n, payload=1))
+        store.approve(n)
+    r = cli("init", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "created" not in r.stdout and "2 approved" in r.stdout, r.stdout
+    assert "approve --all" not in r.stdout, r.stdout

@@ -238,12 +238,20 @@ def _git_ignored(path: Path) -> bool | None:
     return {0: True, 1: False}.get(r.returncode)
 
 
-def _warn_unless_ignored(path: Path, what: str) -> None:
+def _warn_unless_ignored(path: Path, what: str,
+                         fix: str = "run `nightward init` to add the .gitignore rules") -> None:
     # Only a nudge: a rule in a parent .gitignore or info/exclude counts too.
     if _git_ignored(path) is False:
         err_console.print(f"[yellow]warning:[/yellow] {escape(str(path))} is not git-ignored "
-                          f"and {what} - run `nightward init` to add the .gitignore rules",
-                          soft_wrap=True)
+                          f"and {what} - {escape(fix)}", soft_wrap=True)
+
+
+def _ignore_fix(out_path: Path) -> str:
+    """How to ignore a dashboard dir: init knows only the default one (R1-WEB-06)."""
+    rule = _store_prefix(str(out_path))
+    if rule == DEFAULT_SITE:
+        return "run `nightward init` to add the .gitignore rules"
+    return f"add `{rule or out_path.as_posix()}/` to .gitignore"
 
 
 def _print_summary(report: dict) -> None:
@@ -284,8 +292,15 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
     """Create the nightward store and add ignore rules to .gitignore."""
     _check_dir(dir)
     store = _store(dir)
+    existed = store.root.is_dir()
     store.ensure()
-    console.print(f"[green]created[/green] {escape(str(store.root))}/ (baseline, pending)")
+    approved = len(store.load_baseline()) if existed else 0
+    if existed:
+        # e.g. a fresh clone with a committed baseline: nothing was created (R1-WEB-06).
+        console.print(f"store exists: {escape(str(store.root))}/ ({approved} approved "
+                      f"behavior(s))")
+    else:
+        console.print(f"[green]created[/green] {escape(str(store.root))}/ (baseline, pending)")
 
     lines = _gitignore_lines(dir)
     if lines is None:
@@ -310,8 +325,13 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                 fh.write("\n")
             fh.write("\n".join(missing) + "\n")
         console.print(f"[green]updated[/green] .gitignore (+{len(missing)} lines)")
-    console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
-                  "then `nightward run <path>` and `nightward approve --all`.")
+    if approved:
+        # Approving everything would bury whatever moved since the baseline.
+        console.print("\nNext: `nightward run <path>` to gate the code against the approved "
+                      "baseline, then `nightward review` what moved.")
+    else:
+        console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
+                      "then `nightward run <path>` and `nightward approve --all`.")
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -847,7 +867,8 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
         _mark_reviewed(store, report, "view")
     console.print(f"[green]built[/green] {escape(str(out_path))}/ "
                   "(index.html, app.js, style.css, data.json)")
-    _warn_unless_ignored(out_path / "data.json", "it holds your captured behaviors")
+    _warn_unless_ignored(out_path / "data.json", "it holds your captured behaviors",
+                         _ignore_fix(out_path))
     if serve:
         from .view.serve import serve as _serve
         _serve(out_path, port=port, open_browser=open_browser)
