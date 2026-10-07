@@ -137,3 +137,200 @@ def test_renamed_source_test_is_no_removal_proof(tmp_path):
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert "b" in baseline_names(tw)
     assert "test_a.py::test_b did not run" in r.stdout
+
+
+# ---- D19: human decisions bind to exactly what the human saw -------------------
+
+SHOP = ('import os\n'
+        'UNIT = int(os.environ.get("UNIT", "10"))\n'
+        'LABEL = os.environ.get("LABEL", "Total")\n'
+        'def checkout(qty):\n    return {"qty": qty, "total": qty * UNIT}\n'
+        'def banner():\n    return {"label": LABEL}\n')
+TEST_SHOP = ('from shop import checkout, banner\n'
+             'def test_checkout(behavior):\n    behavior("checkout.3", checkout(3), group="billing")\n'
+             'def test_banner(behavior):\n    behavior("ui.banner", banner(), group="ui")\n')
+
+
+@pytest.fixture
+def shop(tmp_path, monkeypatch):
+    """Approved shop; then an agent run changed the price (regression) and the label."""
+    write(tmp_path / "shop.py", SHOP)
+    write(tmp_path / "test_shop.py", TEST_SHOP)
+    assert cli("init", cwd=tmp_path).returncode == 0
+    cli("run", ".", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("UNIT", "12")
+    monkeypatch.setenv("LABEL", "Order total")
+    from nightward.mcp_server import run_tool
+    assert run_tool(".")["boundary"] == "breached"      # agent: never a review
+    monkeypatch.delenv("UNIT")
+    monkeypatch.delenv("LABEL")
+    return tmp_path, tmp_path / ".nightward"
+
+
+def test_scoped_review_approves_only_what_it_showed(shop):
+    # R3-WEB-01: `review --group ui` showed only the banner.
+    tmp_path, tw = shop
+    r = cli("review", "--group", "ui", cwd=tmp_path)
+    assert "Order total" in r.stdout and "[CHANGED] checkout.3" not in r.stdout
+    assert "outside this selection, not reviewed: checkout.3" in r.stdout
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 2 and "checkout.3" in r.stderr, r.stdout
+    r = cli("approve", "checkout.3", cwd=tmp_path)
+    assert r.returncode == 2 and "nightward review checkout.3" in r.stderr
+    base = json.loads((tw / "baseline" / "checkout.3.approved.json").read_text("utf-8"))
+    assert base["payload"]["total"] == 30
+    assert cli("approve", "ui.banner", cwd=tmp_path).returncode == 0
+    # a second scoped review adds to what was seen
+    cli("review", "checkout.3", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    assert cli("gate", cwd=tmp_path).returncode == 0
+
+
+def test_reject_records_the_reviewed_capture_or_refuses(shop, monkeypatch):
+    # R3-FIN-02: an agent run between review and reject.
+    tmp_path, tw = shop
+    cli("review", cwd=tmp_path)
+    monkeypatch.setenv("UNIT", "11")
+    from nightward.mcp_server import run_tool
+    run_tool(".")
+    r = cli("reject", "checkout.3", cwd=tmp_path)
+    assert r.returncode == 2 and "changed since" in r.stderr, r.stdout
+    assert not (tw / "rejected").exists() or not list((tw / "rejected").iterdir())
+
+
+def test_reject_refuses_a_name_that_is_not_a_change(shop):
+    # R3-FIN-07: a one-word slip must not "reject" an unchanged behavior.
+    tmp_path, tw = shop
+    write(tmp_path / "test_shop.py", TEST_SHOP + 'def test_fee(behavior):\n'
+                                                '    behavior("checkout.fee", 0, group="billing")\n')
+    cli("run", ".", cwd=tmp_path, env={"UNIT": "12"})
+    assert cli("approve", "checkout.fee", cwd=tmp_path).returncode == 0
+    cli("review", cwd=tmp_path)
+    r = cli("reject", "checkout.fee", cwd=tmp_path)
+    assert r.returncode == 2, r.stdout
+    assert "checkout.fee" in r.stderr and "checkout.3" in r.stderr
+    assert not (tw / "rejected" / "checkout.fee.rejected.json").exists()
+
+
+def test_approve_refuses_a_stale_report(shop):
+    # R3-OPS-03: a `git pull` brought a teammate's baseline after the review.
+    tmp_path, tw = shop
+    cli("review", cwd=tmp_path)
+    f = tw / "baseline" / "checkout.3.approved.json"
+    data = json.loads(f.read_text("utf-8"))
+    data["payload"]["total"] = 33
+    f.write_text(json.dumps(data), encoding="utf-8")
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 2 and "nightward run" in r.stderr, r.stdout
+    assert json.loads(f.read_text("utf-8"))["payload"]["total"] == 33
+
+
+LOAN = ('import os\n'
+        'def test_loan_email(behavior):\n'
+        '    d = os.environ.get("DECISION", "approved")\n'
+        '    behavior("loan.email", f"Your loan application was {d}.", group="email",'
+        ' semantic=True)\n')
+
+
+def test_reject_overrules_a_judged_same(tmp_path):
+    # R3-WEB-03: a human rejection beats the judge's SAME.
+    write(tmp_path / "pyproject.toml", '[tool.nightward]\njudge = "persona:lenient"\n')
+    write(tmp_path / "test_loan.py", LOAN)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("approve", "--all", cwd=tmp_path)
+    r = cli("run", ".", cwd=tmp_path, env={"DECISION": "denied"})
+    assert r.returncode == 0 and "intact" in r.stdout          # lenient: SAME
+    assert cli("review", cwd=tmp_path).returncode == 0
+    r = cli("reject", "loan.email", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert cli("gate", cwd=tmp_path).returncode == 1
+    cli("run", ".", cwd=tmp_path, env={"DECISION": "denied"})
+    assert cli("gate", cwd=tmp_path).returncode == 1
+    status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
+    assert status["boundary"] == "breached"
+    assert status["changes"][0]["name"] == "loan.email" and status["changes"][0]["rejected"]
+
+
+def test_standing_rejection_is_visible_everywhere(shop):
+    # R3-FIN-03: a teammate's committed rejection of exactly this payload.
+    tmp_path, tw = shop
+    cli("review", cwd=tmp_path)
+    assert cli("reject", "checkout.3", cwd=tmp_path).returncode == 0
+    for args in (("run", "."), ("review",), ("status",)):
+        out = cli(*args, cwd=tmp_path, env={"UNIT": "12", "LABEL": "Order total"}).stdout
+        assert "rejected" in out, (args, out)
+    status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
+    assert [c["name"] for c in status["changes"] if c.get("rejected")] == ["checkout.3"]
+    cli("view", "--no-serve", cwd=tmp_path)
+    data = json.loads((tmp_path / "nightward-site" / "data.json").read_text("utf-8"))
+    items = [it for its in data["report"]["blast_radius"].values() for it in its]
+    assert [it["name"] for it in items if it.get("rejected")] == ["checkout.3"]
+    r = cli("approve", "checkout.3", cwd=tmp_path)
+    assert r.returncode == 0 and "overrides" in r.stdout
+
+
+def test_baseline_equal_to_a_rejection_breaches(shop):
+    # R3-FIN-03 variant: a merge brought an approval and a rejection of one payload.
+    tmp_path, tw = shop
+    cli("review", cwd=tmp_path)
+    assert cli("reject", "checkout.3", cwd=tmp_path).returncode == 0
+    rec = (tw / "rejected" / "checkout.3.rejected.json").read_text("utf-8")
+    cli("approve", "checkout.3", cwd=tmp_path)              # the other branch
+    (tw / "rejected").mkdir(exist_ok=True)
+    (tw / "rejected" / "checkout.3.rejected.json").write_text(rec, encoding="utf-8")
+    cli("run", ".", cwd=tmp_path, env={"UNIT": "12", "LABEL": "Order total"})
+    assert cli("gate", cwd=tmp_path).returncode == 1
+    status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
+    assert any(c["name"] == "checkout.3" and c.get("rejected") for c in status["changes"])
+
+
+PAYOUT = ('import os\n'
+          'def test_payout(behavior):\n'
+          '    fee = int(os.environ.get("FEE_BPS", "290"))\n'
+          '    behavior("payout.net", {"net": 10000 - 10000 * fee // 10000}, group="p")\n')
+
+
+@pytest.fixture
+def payout(tmp_path):
+    write(tmp_path / "test_payout.py", PAYOUT)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("approve", "--all", cwd=tmp_path)
+    assert cli("gate", cwd=tmp_path).returncode == 0
+    return tmp_path, tmp_path / ".nightward"
+
+
+def test_run_refused_by_a_bad_judge_config_invalidates_the_report(payout, monkeypatch):
+    # R3-FIN-01: refused before pytest started - the old "intact" must not stand.
+    tmp_path, tw = payout
+    write(tmp_path / "pyproject.toml", '[tool.nightward]\njudge = "persona:edtor"\n')
+    r = cli("run", ".", cwd=tmp_path, env={"FEE_BPS": "390"})
+    assert r.returncode == 2 and "edtor" in r.stderr
+    assert "$ pytest" not in r.stdout
+    assert cli("gate", cwd=tmp_path).returncode != 0
+    cli("run", ".", cwd=tmp_path)            # still refused; and via MCP:
+    monkeypatch.chdir(tmp_path)
+    from nightward import mcp_server
+    write(tw / "report.json", "{}")
+    with pytest.raises(Exception, match="edtor"):
+        mcp_server.run_tool(".")
+    assert mcp_server.status_tool()["boundary"] == "unknown"
+
+
+def test_run_refused_by_a_busy_lock_invalidates_the_report(payout):
+    tmp_path, tw = payout
+    write(tw / ".lock", json.dumps({"pid": os.getpid(), "host": __import__("socket").gethostname(),
+                                    "command": "nightward_run (MCP)", "since": "now"}))
+    r = cli("run", ".", cwd=tmp_path, env={"FEE_BPS": "390"})
+    assert r.returncode == 2 and "another nightward process" in r.stderr
+    assert cli("gate", cwd=tmp_path).returncode != 0
+
+
+def test_run_echo_shows_the_passthrough_args(payout):
+    # R3-DATA-03: the logged command is how CI readers check what ran.
+    tmp_path, tw = payout
+    r = cli("run", ".", "--", "-m", "not slow", "-p", "no:randomly", cwd=tmp_path)
+    assert "$ pytest . -m 'not slow' -p no:randomly --nightward-record" in r.stdout, r.stdout

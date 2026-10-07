@@ -63,14 +63,20 @@ nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
                   `approve A B C` works like --all --include-removed limited to those
                   names, while one name always applies, even a removal or a rejection).
-                  It promotes only the capture a human last saw through `run`,
-                  `review` or `view`; if anything captured again since (e.g. an
-                  agent's nightward_run), it refuses until you review again
-nightward reject  confirm a change as a real regression (boundary stays breached;
-                  `approve --all` skips it as "kept (rejected)" while that payload
-                  is pending - `approve <name>` overrides and clears the rejection).
-                  Commit .nightward/rejected/ like the baseline, so a rejection
-                  protects every clone and CI, not just your machine
+                  It promotes only changes a human was shown, exactly as shown,
+                  through `run`, `review` or `view`: a scoped `review --group G`
+                  covers only G, and a change captured again since (e.g. by an
+                  agent's nightward_run) or a stale report (a `git pull` moved
+                  the baseline) is refused until you run/review again
+nightward reject  confirm a change you reviewed as a real regression. It takes only
+                  a change in the last report (or a judged-SAME ruling, which the
+                  rejection overrules: the behavior is unapproved again) and keeps
+                  the boundary breached; `approve --all` skips it as "kept
+                  (rejected)" while that payload is pending, and `run`, `review`,
+                  `status` and the dashboard mark it "rejected by <who>" -
+                  `approve <name>` overrides and clears the rejection. Commit
+                  .nightward/rejected/ like the baseline, so a rejection protects
+                  every clone and CI, not just your machine
 nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
@@ -333,7 +339,9 @@ the old and new wording it ruled on (up to 1,000 chars each).
 Rulings are visible wherever the verdict is:
 
 - `nightward review` lists every behavior the judge ruled SAME, with its diff,
-  even when the boundary is intact. A wrong SAME is a hole in the gate, so audit them.
+  even when the boundary is intact. A wrong SAME is a hole in the gate, so audit them,
+  and overrule one with `nightward reject <name>`: a human rejection beats the judge,
+  so the behavior is unapproved again and the gate breaches until the code is fixed.
 - `status --json` (and MCP) carry `judged`, `judge_model` and `judge_reason` on each
   change, and a `judged_same` list of `{name, group, judge_model, judge_reason}`.
 - The dashboard has a "ruled semantically SAME" section with the diffs.
@@ -369,7 +377,8 @@ resolves `path` and `dir` against its own working directory.
 | `nightward_status` | `dir=".nightward"` | reads the last run's verdict without running anything |
 
 Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
-`kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled),
+`kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
+`rejected`, `rejected_by` when the payload is a standing rejection),
 `judged_same`, `stale`, `incomplete` (`{"failed": n, "errors": m}` or null),
 `generated_at`, and `judge`. `boundary` is one of:
 

@@ -153,7 +153,8 @@ def test_review_filters_by_name(tmp_path):
     r = cli("review", "metric_a", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "metric_a" in r.stdout
-    assert "metric_b" not in r.stdout and "scored_rows" not in r.stdout
+    # the others are only named in the "outside this selection" line (R3-WEB-01)
+    assert "] metric_b" not in r.stdout and "] scored_rows" not in r.stdout
 
 
 def test_review_filters_by_group(tmp_path):
@@ -161,7 +162,7 @@ def test_review_filters_by_group(tmp_path):
     r = cli("review", "--group", "n", "--dir", str(tmp_path / ".tw"), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "metric_b" in r.stdout
-    assert "metric_a" not in r.stdout and "scored_rows" not in r.stdout
+    assert "] metric_a" not in r.stdout and "] scored_rows" not in r.stdout
 
 
 def test_review_unknown_name_is_a_clean_error(tmp_path):

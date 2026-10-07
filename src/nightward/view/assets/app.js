@@ -306,6 +306,13 @@ function renderCard(it) {
       title: "An LLM judge ruled this fingerprint mismatch semantically DIFFERENT — verdict by " + (it.judge_model || "unknown model"),
     }));
   }
+  if (it.rejected) {
+    head.appendChild(el("span", {
+      cls: "badge badge-removed",
+      text: "rejected",
+      title: "This exact payload is a standing rejection" + (it.rejected_by ? " by " + it.rejected_by : "") + " (.nightward/rejected/) - approving it overrides that decision",
+    }));
+  }
   head.appendChild(el("span", { cls: "card-name", text: it.name }));
   card.appendChild(head);
 
@@ -405,6 +412,10 @@ function renderJudgedSame(report) {
     j.appendChild(document.createTextNode(it.judge_reason || "ruled SAME"));
     card.appendChild(j);
     renderDiff(card, it.diff);
+    // A wrong SAME is overruled by rejecting it: it becomes unapproved again.
+    const actions = el("div", { cls: "card-actions" });
+    actions.appendChild(copyChip("reject (overrule the judge)", cliCommand("reject", [it.name])));
+    card.appendChild(actions);
     details.appendChild(card);
   }
   box.appendChild(details);

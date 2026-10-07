@@ -68,6 +68,10 @@ def test_cli_typo_judge_does_not_break_approve(tmp_path):
     assert "passed" not in r.stdout          # the suite never ran
     meta = json.loads((tmp_path / ".nightward" / "run_meta.json").read_text(encoding="utf-8"))
     assert "judge" not in meta
+    # A refused run leaves no verdict to approve from (D19); a good run does.
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 2 and "no report" in r.stderr
+    assert cli("run", ".", cwd=tmp_path).returncode == 0
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
 
 

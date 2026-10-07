@@ -5,6 +5,7 @@ import errno
 import functools
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -15,11 +16,20 @@ from rich.markup import escape
 
 from . import shellquote
 from .config import project_judge
-from .core.baseline import Store, digest
-from .core.diff import REMOVED, UNCHANGED, compare
+from .core.baseline import Store, change_token
+from .core.diff import REMOVED, UNCHANGED
 from .core.lock import store_lock
 from .errors import NightwardError
-from .runner import execute_run, is_stale, judge_from_meta, recompute, recompute_capture
+from .runner import (
+    classify,
+    execute_run,
+    is_stale,
+    judge_from_meta,
+    recompute,
+    recompute_capture,
+    refused_run_invalidates,
+    standing_rejections,
+)
 from .signal import status_payload
 from .view import build_site
 
@@ -108,7 +118,8 @@ def handle_errors(fn):
         try:
             return fn(*args, **kwargs)
         except NightwardError as exc:
-            err_console.print(f"[red]error:[/red] {escape(str(exc))}")
+            # soft_wrap: a command in the message must stay copy-pasteable
+            err_console.print(f"[red]error:[/red] {escape(str(exc))}", soft_wrap=True)
             raise typer.Exit(2) from None
     return wrapper
 
@@ -154,8 +165,8 @@ def _existing_store(dir_: str) -> Store:
 def _require_report(store: Store) -> dict:
     report = store.load_report()
     if report is None:
-        raise NightwardError("no report - run `nightward run` (a run that aborted or "
-                             "timed out invalidates the last report)")
+        raise NightwardError("no report - run `nightward run` (a run that aborted, was refused "
+                             "or timed out invalidates the last report)")
     return report
 
 
@@ -175,27 +186,98 @@ STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture chang
                  "`pytest --nightward-record`)")
 
 
-def _mark_reviewed(store: Store, report: dict | None, via: str) -> None:
-    """Record the capture a human just saw, so approve promotes exactly that (D10).
+def _report_items(report: dict) -> list[dict]:
+    """Every change a report can show: the blast radius, then the judged-SAME rulings."""
+    return ([it for items in report.get("blast_radius", {}).values() for it in items]
+            + list(report.get("judged_same") or []))
 
-    Only human surfaces call this (run/review/view) - never MCP: an agent's
-    run between review and approve must not choose what the approval covers.
+
+def _blast_names(report: dict) -> set[str]:
+    return {it["name"] for items in report.get("blast_radius", {}).values() for it in items}
+
+
+def _mark_reviewed(store: Store, report: dict | None, via: str,
+                   names: set[str] | None = None) -> None:
+    """Record the changes a human was just shown, so approve and reject act on
+    exactly those (D10, D19). names: what was displayed (None: everything).
+
+    Only human surfaces call this (run/report/review/view) - never MCP: an
+    agent's run between review and approve must not choose what an approval
+    covers.
     """
-    if report and report.get("pending_digest"):
-        store.mark_reviewed(report["pending_digest"], via)
+    if not report or not report.get("pending_digest"):
+        return
+    items = _report_items(report)
+    shown = {it["name"]: it["token"] for it in items
+             if it.get("token") and (names is None or it["name"] in names)}
+    store.mark_reviewed(shown, via, {it["name"]: it.get("token") for it in items})
 
 
-def _check_reviewed(store: Store, pending) -> None:
-    mark = store.load_reviewed()
-    if not mark:
-        raise NightwardError("no human has reviewed this capture yet - run `nightward "
-                             "review` (or `nightward run` / `nightward view`), then approve")
-    if mark.get("pending_digest") != digest(pending):
-        raise NightwardError(
-            f"the capture changed since you last reviewed it (with `nightward "
-            f"{mark.get('via', 'review')}`) - another run (an agent's nightward_run, CI, a "
-            f"teammate) captured again. Run `nightward review` again, then approve what "
-            f"it shows.")
+def _fresh_report(store: Store, verb: str) -> dict:
+    """The report a decision acts on; refused when it no longer describes the store."""
+    report = store.load_report()
+    if report is None:
+        raise NightwardError(f"no report - run `nightward run` (a run that aborted or was "
+                             f"refused invalidates the last report), review it, then {verb}")
+    if is_stale(store, report):
+        # e.g. a `git pull` brought a teammate's baseline: the changes the human
+        # reviewed are not the changes on disk any more (R3-OPS-03).
+        raise NightwardError(f"the baseline or the capture changed since the last report (a "
+                             f"`git pull`/checkout, or another run) - run `nightward run`, "
+                             f"review again, then {verb}")
+    return report
+
+
+def _shown(names: list[str], limit: int = 5) -> str:
+    more = f" and {len(names) - limit} more" if len(names) > limit else ""
+    return ", ".join(names[:limit]) + more
+
+
+def _check_reviewed(store: Store, names: list[str], baseline, pending, verb: str) -> None:
+    """Refuse unless the human was shown each of `names` in its current state (D19)."""
+    if not names:
+        return
+    seen = store.load_reviewed().get("seen")
+    if seen is None:
+        raise NightwardError(f"no human has reviewed this capture yet - run `nightward "
+                             f"review` (or `nightward run` / `nightward view`), then {verb}")
+    changed = [n for n in names
+               if n in seen and seen[n] != change_token(baseline.get(n), pending.get(n))]
+    unseen = [n for n in names if n not in seen]
+    if not changed and not unseen:
+        return
+    parts = []
+    if changed:
+        parts.append(f"{_shown(changed)} changed since you last reviewed it (another run - "
+                     f"an agent's nightward_run, CI, a teammate - captured again)")
+    if unseen:
+        parts.append(f"{_shown(unseen)} was not shown in your last review")
+    todo = changed + unseen
+    cmd = (shellquote.command("review", todo) if len(todo) <= 5 else None) or "nightward review"
+    raise NightwardError("; ".join(parts) + f". Run `{cmd}`, then {verb} what it shows.")
+
+
+def _who() -> str:
+    """Who is deciding: git's user.name, else the OS login (recorded with a rejection)."""
+    try:
+        r = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    import getpass
+    try:
+        return getpass.getuser()
+    except Exception:  # no login name is not an error
+        return ""
+
+
+def _rejected_note(it: dict) -> str:
+    if not it.get("rejected"):
+        return ""
+    by = f" by {escape(it['rejected_by'])}" if it.get("rejected_by") else ""
+    return f" [red](rejected{by})[/red]"
 
 
 def _store_prefix(dir_: str) -> str | None:
@@ -275,7 +357,8 @@ def _print_summary(report: dict) -> None:
         for it in items:
             judged = (f" [dim](judged DIFFERENT by {escape(it['judge_model'])})[/dim]"
                       if it.get("judged") else "")
-            console.print(f"  - [[cyan]{it['kind']}[/cyan]] {escape(it['name'])}{judged}")
+            console.print(f"  - [[cyan]{it['kind']}[/cyan]] {escape(it['name'])}{judged}"
+                          f"{_rejected_note(it)}")
 
 
 @app.command()
@@ -334,20 +417,23 @@ def run(ctx: typer.Context,
         # pytest finds the rootdir from anywhere; a second store here would
         # report every behavior as NEW (R1-OPS-07).
         raise NightwardError(_missing_store_message(dir))
-    console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
-                  f"--nightward-dir {escape(dir)}[/dim]")
-    # --judge and $NIGHTWARD_JUDGE are per-run overrides; the committed
-    # [tool.nightward] judge is the project's decision (D14).
-    if judge:
-        source = "--judge, this run only"
-    elif os.environ.get("NIGHTWARD_JUDGE"):
-        judge, source = os.environ["NIGHTWARD_JUDGE"], "$NIGHTWARD_JUDGE, this run only"
-    else:
-        judge, source = project_judge(path.split("::", 1)[0]), "pyproject.toml"
-    if judge:
-        console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
     extra = [a for a in ctx.args if a != "--"]
-    result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
+    # A refused run (bad judge config, busy lock, ...) invalidates the last
+    # report like an aborted one: the code it described may have changed.
+    with refused_run_invalidates(dir):
+        # --judge and $NIGHTWARD_JUDGE are per-run overrides; the committed
+        # [tool.nightward] judge is the project's decision (D14).
+        if judge:
+            source = "--judge, this run only"
+        elif os.environ.get("NIGHTWARD_JUDGE"):
+            judge, source = os.environ["NIGHTWARD_JUDGE"], "$NIGHTWARD_JUDGE, this run only"
+        else:
+            judge, source = project_judge(path.split("::", 1)[0]), "pyproject.toml"
+        console.print(f"[dim]$ pytest {escape(shlex.join([path, *extra]))} --nightward-record "
+                      f"--nightward-dir {escape(dir)}[/dim]", soft_wrap=True)
+        if judge:
+            console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
+        result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
     not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
     if not_run:
         err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
@@ -371,7 +457,7 @@ def run(ctx: typer.Context,
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
-    _mark_reviewed(_store(dir), result["report"], "run")
+    _mark_reviewed(_store(dir), result["report"], "run", _blast_names(result["report"]))
     # A committed report.json lets a CI `gate` without `run` pass on an old verdict.
     _warn_unless_ignored(Path(dir) / "report.json",
                          "per-run state (pending/, report.json, run_meta.json) must not be "
@@ -398,7 +484,7 @@ def report_cmd(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"
     store = _existing_store(dir)
     report = recompute_capture(store)
     _print_summary(report)
-    _mark_reviewed(store, report, "report")
+    _mark_reviewed(store, report, "report", _blast_names(report))
     _exit_if_incomplete(report)
 
 
@@ -466,7 +552,8 @@ def review(names: list[str] | None = NAMES_ARG,
              if (kept := [it for it in items if it["name"] in wanted])}
     judged_same = [it for it in judged_same if it["name"] in wanted]
     intact = report.get("boundary") == "intact"
-    _mark_reviewed(store, report, "review")
+    _mark_reviewed(store, report, "review", wanted)
+    outside = sorted(_blast_names(report) - wanted)
     if not blast:
         if not judged_same:
             console.print("[green]boundary intact - nothing to review[/green]" if intact
@@ -477,11 +564,21 @@ def review(names: list[str] | None = NAMES_ARG,
     for g, items in blast.items():
         console.print(f"\n[yellow]group: {escape(g)}[/yellow]")
         for it in items:
-            console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]")
+            console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]"
+                          f"{_rejected_note(it)}")
+            if it.get("rejected"):
+                console.print("[dim]this exact payload is a standing rejection "
+                              "(.nightward/rejected/); approving it overrides that "
+                              "decision[/dim]")
             if it.get("judged"):
                 console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}: "
                               f"{escape(it.get('judge_reason', ''))}[/dim]")
             _print_diff(it, max_lines)
+    if outside:
+        # A scoped review covers only what it showed (R3-WEB-01).
+        console.print(f"\n[yellow]{len(outside)} other unapproved change(s) outside this "
+                      f"selection, not reviewed:[/yellow] {escape(_shown(outside))}",
+                      soft_wrap=True)
     if judged_same:
         # Outside the boundary, but a wrong SAME is a hole in the gate: show the
         # exact wording the judge accepted so a human can audit it (R1-LLM-04).
@@ -492,21 +589,6 @@ def review(names: list[str] | None = NAMES_ARG,
                           f"[dim]{escape(it.get('judge_model', ''))}: "
                           f"{escape(it.get('judge_reason', ''))}[/dim]")
             _print_diff(it, max_lines)
-
-
-def _standing_rejections(store: Store, baseline, pending) -> set[str]:
-    """Names whose current state is exactly what the user rejected.
-
-    The record is the received behavior, or the approved one for a rejected
-    removal; a later, different payload is a new change and is not held.
-    """
-    held = set()
-    for name, rec in store.load_rejected().items():
-        current = pending.get(name) or baseline.get(name)
-        if current is not None and (current.fingerprint(), current.group) == (
-                rec.fingerprint(), rec.group):
-            held.add(name)
-    return held
 
 
 def _removal_doubt(name: str, b, meta: dict) -> str | None:
@@ -583,8 +665,9 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     pending = store.load_pending()
     if not baseline and not pending:
         raise NightwardError(f"nothing captured in {dir!r} yet - run `nightward run` first")
-    # Approve what the human saw, not what an agent captured after it (D10).
-    _check_reviewed(store, pending)
+    # Approve only what the human saw, on a report that still describes the
+    # store (D10, D19).
+    report = _fresh_report(store, "approve")
     # Reuse the last run's judge (cached verdicts): --all then approves exactly
     # what the report lists as unapproved, and judged-SAME behaviors don't flip
     # back to CHANGED the moment something else is approved. Approving a
@@ -594,8 +677,9 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     held: list[str] = []
     doubts: dict[str, str] = {}
     kept_rejected: list[str] = []
+    rejected = standing_rejections(store, baseline, pending)
     if all_:
-        changes = [c for c in compare(baseline, pending, judge=judge, with_diff=False)
+        changes = [c for c in classify(store, baseline, pending, judge=judge, with_diff=False)
                    if c.kind != UNCHANGED]
         removed = [c.name for c in changes if c.kind == REMOVED]
         if include_removed:
@@ -608,29 +692,34 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         else:
             held = removed
         # A confirmed regression must never ride along with a bulk approval.
-        rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
         targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
-    elif names and len(names) == 1:
-        targets = names
     elif names:
-        # Several names (e.g. the dashboard's group chip) are a bulk approval
-        # limited to them: unproven removals and standing rejections stay, as
-        # with --all --include-removed; one explicit name overrides (R2-WEB-03).
         names = list(dict.fromkeys(names))
         unknown = [n for n in names if n not in pending and n not in baseline]
         if unknown:
             raise NightwardError(f"no pending or baseline behavior named "
                                  f"{', '.join(map(repr, unknown))}; nothing was approved")
-        meta = store.load_run_meta()
-        doubts = {n: why for n in names
-                  if n not in pending and (why := _removal_doubt(n, baseline[n], meta))}
-        held = list(doubts)
-        rejected = _standing_rejections(store, baseline, pending)
-        kept_rejected = [n for n in names if n in rejected and n not in held]
-        targets = [n for n in names if n not in held and n not in rejected]
+        listed = {it["name"] for it in _report_items(report)}
+        unchanged = [n for n in names if n not in listed]
+        if unchanged:
+            raise NightwardError(f"{_shown(unchanged)}: unchanged in the last report - "
+                                 f"nothing to approve; nothing was approved")
+        if len(names) == 1:
+            targets = names
+        else:
+            # Several names (e.g. the dashboard's group chip) are a bulk approval
+            # limited to them: unproven removals and standing rejections stay, as
+            # with --all --include-removed; one explicit name overrides (R2-WEB-03).
+            meta = store.load_run_meta()
+            doubts = {n: why for n in names
+                      if n not in pending and (why := _removal_doubt(n, baseline[n], meta))}
+            held = list(doubts)
+            kept_rejected = [n for n in names if n in rejected and n not in held]
+            targets = [n for n in names if n not in held and n not in rejected]
     else:
         raise NightwardError("specify a behavior name or --all")
+    _check_reviewed(store, targets, baseline, pending, "approve")
     if all_:
         refreshed = _backfill_sources(store, baseline, pending)
         if refreshed:
@@ -641,14 +730,20 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         return
 
     for n in targets:
+        if n in rejected:   # only an explicit single name gets here (R3-FIN-03)
+            by = f" by {rejected[n]}" if rejected[n] else ""
+            console.print(f"[yellow]overrides the rejection{escape(by)}[/yellow] of "
+                          f"{escape(n)} (.nightward/rejected/{escape(n)}.rejected.json)",
+                          soft_wrap=True)
         verb = _approve_one(store, n, baseline, pending)
         # The short fingerprint ties the approval to the reviewed content.
         what = f" ({pending[n].fingerprint()[:8]})" if n in pending else ""
         console.print(f"[green]{verb}[/green] {escape(n)}{what}")
-        if names and len(names) == 1 and store.clear_rejection(n):
-            console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
+        if n in rejected and store.clear_rejection(n):
+            console.print(f"  [dim]cleared the rejection of {escape(n)} - commit its "
+                          f"deletion with the baseline[/dim]", soft_wrap=True)
     if kept_rejected:
-        console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
+        console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) "
                       f"rejected as regressions: {escape(', '.join(kept_rejected))}\n  fix the "
                       f"code, or override with `nightward approve <name>`.", soft_wrap=True)
     if doubts:
@@ -671,17 +766,33 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
 @app.command()
 @handle_errors
 def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
-    """Confirm a change as a real regression. Boundary stays breached.
+    """Confirm a change you reviewed as a real regression. The boundary stays breached.
 
-    `approve --all` will skip it while the same payload is pending; an explicit
-    `approve <name>` overrides and clears the rejection.
+    Works on any unapproved change and on a judged-SAME ruling (a rejection
+    overrules the judge). `approve --all` skips it while the same payload is
+    pending; an explicit `approve <name>` overrides and clears the rejection.
     """
     store = _existing_store(dir)
     with store_lock(store.root, "nightward reject"):
-        store.mark_rejected(name)
-    console.print(f"[red]rejected[/red] {escape(name)} - boundary stays breached. "
-                  f"Fix the code and re-run `nightward run`.")
-    console.print(f"[dim]commit {escape(str(store.rejected_dir))}/ with your change: "
+        report = _fresh_report(store, f"reject {name!r}")
+        listed = {it["name"] for it in _report_items(report)}
+        if name not in listed:
+            # A slip of the name must not "reject" a correct behavior (R3-FIN-07).
+            open_ = sorted(_blast_names(report))
+            raise NightwardError(
+                f"{name!r} is not an unapproved change (or a judged-SAME ruling) in the "
+                f"last report - nothing to reject. "
+                + (f"Unapproved: {_shown(open_, 10)}" if open_ else "Nothing is unapproved."))
+        baseline, pending = store.load_baseline(), store.load_pending()
+        # Reject the capture the human saw, not whatever is pending now (R3-FIN-02).
+        _check_reviewed(store, [name], baseline, pending, "reject")
+        store.mark_rejected(name, by=_who())
+        report = recompute(store, judge=judge_from_meta(store), baseline=baseline,
+                           pending=pending)
+    console.print(f"[red]rejected[/red] {escape(name)} - the boundary is "
+                  f"{escape(report['boundary'])} ({report['unapproved']} unapproved) until the "
+                  f"code changes. Fix it and re-run `nightward run`.", soft_wrap=True)
+    console.print(f"[dim]commit {escape(store.rejected_dir.as_posix())}/ with your change: "
                   f"a rejection protects every clone that has it[/dim]", soft_wrap=True)
 
 
@@ -845,7 +956,8 @@ def _print_status(payload: dict) -> None:
         console.print(f"capture incomplete: {_incomplete_text(payload['incomplete'])}")
     for ch in payload["changes"]:
         console.print(f"  - [[cyan]{ch['kind']}[/cyan]] {escape(ch['name'])} "
-                      f"[dim]({escape(ch.get('group') or '(ungrouped)')})[/dim]")
+                      f"[dim]({escape(ch.get('group') or '(ungrouped)')})[/dim]"
+                      f"{_rejected_note(ch)}")
     if payload.get("judged_same"):
         console.print(f"[dim]{len(payload['judged_same'])} change(s) ruled semantically "
                       f"SAME by the judge - audit with `nightward review`[/dim]")

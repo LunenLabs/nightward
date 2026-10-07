@@ -36,6 +36,7 @@ def collect_data(nightward_dir: Path | str) -> dict:
     pending = store.load_pending()
     names = {it["name"] for items in (report or {}).get("blast_radius", {}).values()
              for it in items}
+    names |= {it["name"] for it in (report or {}).get("judged_same") or []}   # reject chips
     return {
         "report": report,
         # Copy-paste commands use these per-shell forms, never the raw name: a

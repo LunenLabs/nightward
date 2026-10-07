@@ -96,7 +96,8 @@ def test_second_writer_fails_fast_while_the_store_is_locked(approved_app):
         with pytest.raises(NightwardError, match="another nightward process"):
             mcp_server.run_tool(str(tmp_path), str(tw))
     assert (tw / "pending" / "replicas.received.json").read_bytes() == before
-    assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    # D19: the refused runs invalidated the last report; nothing reads it as current
+    assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode != 0
     assert not (tw / ".lock").exists()
 
 

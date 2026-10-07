@@ -16,10 +16,11 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
                 "stale": False, "incomplete": None, "generated_at": None, "judge": None}
 
-    # Every field of a change except its (possibly large) diff, so judged
-    # rulings (judged / judge_model / judge_reason) reach agents and CI.
+    # Every field of a change except its (possibly large) diff and its review
+    # token, so judged rulings (judged / judge_model / judge_reason) and
+    # standing rejections (rejected / rejected_by) reach agents and CI.
     changes = [
-        {k: v for k, v in it.items() if k != "diff"}
+        {k: v for k, v in it.items() if k not in ("diff", "token")}
         for items in report.get("blast_radius", {}).values()
         for it in items
     ]

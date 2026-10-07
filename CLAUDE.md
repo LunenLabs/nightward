@@ -146,7 +146,17 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
 - **Rejections are binding for bulk approval.** `approve --all` skips any
   behavior whose current pending (or, for a removal, baseline) state matches its
   `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
-  `approve <name>` overrides and deletes the record.
+  `approve <name>` overrides and deletes the record. `runner.classify` (compare +
+  standing rejections) marks such changes `rejected`/`rejected_by` in the report,
+  and flips a judged-SAME or an UNCHANGED (baseline == rejected payload, e.g. after a
+  merge) back to CHANGED - a human rejection beats the judge (D19).
+- **Decisions bind to what the human saw (D19).** Each report item carries a
+  `token` (`baseline.change_token`: old state -> new state). `run`/`report`/`review`/
+  `view` record the tokens they displayed in `reviewed.json` (a scoped review =
+  scoped mark); `approve` and `reject` refuse a name whose current token isn't
+  there, and refuse a missing or stale report. `reject` only takes a name in the
+  report (blast radius or judged-SAME). Any refused run (judge config, ledger, busy
+  lock) invalidates report.json (`runner.refused_run_invalidates`).
 - **`nightward report` = verdict without pytest.** `runner.recompute_capture` trusts
   `pending/` only if it matches run_meta `pending_digest` (written by the plugin in
   the same flush), then recomputes under the lock. `run PATH -- <pytest args>`

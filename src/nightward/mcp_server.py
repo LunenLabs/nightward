@@ -12,7 +12,7 @@ from .config import project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
-from .runner import execute_run, is_stale
+from .runner import execute_run, is_stale, refused_run_invalidates
 from .signal import status_payload
 
 # The semantic judge for nightward_run. Set by the human who configures the
@@ -61,8 +61,10 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     "judge" says which, and why it was unavailable if it was. This tool cannot
     approve changes: a human does that with the nightward CLI.
     """
+    with refused_run_invalidates(dir):   # e.g. a typo in the committed judge
+        spec = _judge_spec(path)
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
-                         judge_spec=_judge_spec(path), command="nightward_run (MCP)")
+                         judge_spec=spec, command="nightward_run (MCP)")
     payload = status_payload(result["report"])
     payload["warnings"] = {
         "skipped": result["skipped"],

@@ -11,11 +11,13 @@ import importlib.util
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
-from .core.baseline import Store, digest
+from .core.baseline import Store, change_token, digest
 from .core.blast import aggregate
-from .core.diff import compare
+from .core.diff import CHANGED, UNCHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
 
@@ -38,16 +40,63 @@ def judge_from_meta(store: Store):
     return make_judge(store.load_run_meta().get("judge"), store)
 
 
-def recompute(store: Store, judge=None) -> dict:
+def standing_rejections(store: Store, baseline, pending) -> dict[str, str]:
+    """Names whose current state is exactly what someone rejected -> who (or "").
+
+    The record is the received behavior, or the approved one for a rejected
+    removal; a later, different payload is a new change and is not held.
+    """
+    held = {}
+    for name, rec in store.load_rejected().items():
+        current = pending.get(name) or baseline.get(name)
+        if current is not None and (current.fingerprint(), current.group) == (
+                rec.fingerprint(), rec.group):
+            held[name] = store.rejected_by(name) or ""
+    return held
+
+
+def classify(store: Store, baseline, pending, judge=None, *, with_diff: bool = True):
+    """compare(), plus the human decisions the store holds (D19).
+
+    A standing rejection is part of what a reviewer must see, and it beats
+    the judge: a judged-SAME rewording someone rejected, or an approved
+    baseline that is exactly a rejected payload (a merge brought both), is
+    unapproved again until the code is fixed or `approve NAME` overrides it.
+    """
+    changes = compare(baseline, pending, judge=judge, with_diff=with_diff)
+    rejected = standing_rejections(store, baseline, pending)
+    for c in changes:
+        c.token = change_token(baseline.get(c.name), pending.get(c.name))
+        if c.name not in rejected:
+            continue
+        c.rejected, c.rejected_by = True, rejected[c.name]
+        if c.kind != UNCHANGED:
+            continue
+        who = f" by {c.rejected_by}" if c.rejected_by else ""
+        if c.judged:
+            why = (f"the judge ({c.judge_model}) ruled this SAME, but it was rejected{who} "
+                   f"- a human rejection overrules the judge")
+            c.judged = False
+        else:
+            why = (f"the approved baseline is exactly the payload rejected{who} "
+                   f"(rejected/{c.name}.rejected.json) - fix the code, or approve it by "
+                   f"name to clear the rejection")
+        c.kind = CHANGED
+        c.diff_text = why + ("\n" + c.diff_text if c.diff_text else "")
+    return changes
+
+
+def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     """Compare pending against baseline, aggregate, persist, and return the report.
 
     The report records digests of both inputs so a later reader can tell when
     either moved under it (see is_stale), and whether the capture behind it was
     incomplete (failed/errored tests) - such a report never gates green.
+    baseline/pending: already-loaded inputs (saves reading the store again).
     """
-    baseline = store.load_baseline()
-    pending = store.load_pending()
-    report = aggregate(compare(baseline, pending, judge=judge))
+    baseline = store.load_baseline() if baseline is None else baseline
+    pending = store.load_pending() if pending is None else pending
+    report = aggregate(classify(store, baseline, pending, judge=judge))
     meta = store.load_run_meta()
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
@@ -165,6 +214,18 @@ def _with_tail(msg: str, result: subprocess.CompletedProcess) -> str:
     return msg
 
 
+@contextmanager
+def refused_run_invalidates(dir: str | Path) -> Iterator[None]:
+    """A run refused or aborted anywhere - judge config, ledger, busy lock,
+    pytest - leaves no verdict behind: the old report no longer describes
+    the code, so gate/status must not read it as current (D12, D19)."""
+    try:
+        yield
+    except NightwardError:
+        Store(Path(dir)).invalidate_report()
+        raise
+
+
 def execute_run(path: str = ".", dir: str = ".nightward", *,
                 capture_output: bool = False, judge_spec: str | None = None,
                 timeout: float | None = None, command: str = "nightward run",
@@ -178,7 +239,8 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     [tool.nightward]; MCP: server --judge, [tool.nightward]); it is persisted
     in run_meta only so approve recomputes with this run's (cached) verdicts.
     timeout (seconds) bounds the pytest run. Any run without a verified capture
-    (abort, timeout, unrecorded flush) invalidates report.json. command names
+    (refused before pytest, abort, timeout, unrecorded flush) invalidates
+    report.json. command names
     the holder in the store lock; a concurrent writer fails with NightwardError.
     pytest_args are passed to pytest as-is (-m, -p, --timeout ...); a narrowed
     run is recorded as such and never proves a removal (D13).
@@ -187,6 +249,13 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     output_tail is pytest's last lines when capture_output=True, so a caller can
     see why tests failed.
     """
+    with refused_run_invalidates(dir):
+        return _execute_run(path, dir, capture_output=capture_output, judge_spec=judge_spec,
+                            timeout=timeout, command=command, pytest_args=pytest_args)
+
+
+def _execute_run(path: str, dir: str, *, capture_output: bool, judge_spec: str | None,
+                 timeout: float | None, command: str, pytest_args: list[str] | None) -> dict:
     store = Store(Path(dir))
     extra = list(pytest_args or ())
     if any(a.startswith("--nightward") for a in extra):
@@ -195,7 +264,6 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     if not Path(path.split("::", 1)[0]).exists():
         # pytest would say so too, but behind an exit code nightward can't tell
         # from a broken install (R1-OPS-08). E.g. an agent deleted the test dir.
-        store.invalidate_report()
         raise NightwardError(f"path {path!r} does not exist (under {Path.cwd()}); "
                              f"nothing was run - {_ABORTED}")
     spec = judge_spec or None

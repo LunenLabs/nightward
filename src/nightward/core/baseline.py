@@ -7,7 +7,7 @@ Layout (git-native, approvaltests-style):
       rejected/<name>.rejected.json    # committed — confirmed regressions (approve --all skips)
       report.json                      # last blast radius (+ digests of what it compared)
       run_meta.json                    # last run's counts, run token, judge spec
-      reviewed.json                    # the capture a human last saw (approve checks it)
+      reviewed.json                    # the changes a human last saw (approve checks them)
 
 Every name-to-path mapping goes through `_file`, which validates the name, so
 no CLI argument can address a file outside the store.
@@ -47,6 +47,18 @@ def digest(behaviors: dict[str, Behavior]) -> str:
     for name, b in sorted(behaviors.items()):
         h.update(canonical_json([name, b.group, b.fingerprint()]).encode("utf-8"))
     return h.hexdigest()
+
+
+def change_token(old: Behavior | None, new: Behavior | None) -> str:
+    """Identity of one change as a human sees it: what it was and what it is now.
+
+    A review marks these per name, and approve/reject act only on a name whose
+    token is unchanged since (D19): an agent's later run, or a `git pull` that
+    moved the baseline, gives a different token.
+    """
+    def state(b: Behavior | None):
+        return None if b is None else [b.group, b.semantic, b.fingerprint()]
+    return hashlib.sha256(canonical_json([state(old), state(new)]).encode("utf-8")).hexdigest()
 
 
 def _file_text(b: Behavior) -> str:
@@ -180,20 +192,33 @@ class Store:
             raise NightwardError(f"no baseline behavior named {name!r} to remove")
         dst.unlink()
 
-    def mark_rejected(self, name: str) -> None:
-        """Record a confirmed regression. Audit only — the baseline is untouched.
+    def mark_rejected(self, name: str, by: str | None = None) -> None:
+        """Record a confirmed regression. The baseline is untouched.
 
         The recorded snapshot is the received behavior, or (for a regression
-        that *removed* a behavior) the approved one that went missing.
+        that *removed* a behavior) the approved one that went missing. `by`
+        names who rejected it: the record is committed and shared (D17).
         """
         src = self._file(self.pending_dir, name, "received")
         if not src.exists():
             src = self._file(self.baseline_dir, name, "approved")
         if not src.exists():
             raise NightwardError(f"no pending or baseline behavior named {name!r} to reject")
+        record = Behavior.from_dict(_read_json(src)).to_dict()
+        if by:
+            record["rejected_by"] = by
         self.rejected_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._file(self.rejected_dir, name, "rejected"),
-                      src.read_text(encoding="utf-8"))
+                      canonical_json(record) + "\n")
+
+    def rejected_by(self, name: str) -> str | None:
+        """Who recorded the rejection of `name` (None: unknown or no record)."""
+        try:
+            data = _read_json(self._file(self.rejected_dir, name, "rejected"))
+        except (OSError, NightwardError):
+            return None
+        by = data.get("rejected_by") if isinstance(data, dict) else None
+        return by if isinstance(by, str) and by else None
 
     def clear_rejection(self, name: str) -> bool:
         """Drop a rejection record (an explicit approve overrides it)."""
@@ -220,10 +245,18 @@ class Store:
             raise NightwardError(f"corrupt file {self.report_path}: expected a JSON object")
         return report
 
-    # ---- what a human last saw (D10) ------------------------------------
-    def mark_reviewed(self, pending_digest: str, via: str) -> None:
+    # ---- what a human last saw (D10, D19) --------------------------------
+    def mark_reviewed(self, seen: dict[str, str], via: str, current: dict[str, str]) -> None:
+        """Add the changes a human was just shown ({name: change token}).
+
+        Marks from earlier (scoped) reviews stay while they still match a
+        change in the report (`current`); approve checks each token against
+        the store.
+        """
+        merged = {n: t for n, t in self.load_reviewed().get("seen", {}).items()
+                  if current.get(n) == t}
         _atomic_write(self.reviewed_path, json.dumps(
-            {"pending_digest": pending_digest, "via": via}))
+            {"seen": merged | seen, "via": via}, ensure_ascii=False, sort_keys=True))
 
     def load_reviewed(self) -> dict:
         if not self.reviewed_path.exists():
@@ -232,7 +265,9 @@ class Store:
             mark = _read_json(self.reviewed_path)
         except NightwardError:
             return {}
-        return mark if isinstance(mark, dict) else {}
+        if not isinstance(mark, dict) or not isinstance(mark.get("seen"), dict):
+            return {}      # absent, or an older whole-capture mark: nothing seen
+        return mark
 
     # ---- run metadata (skipped/failed counts from the last run) ---------
     def write_run_meta(self, meta: dict) -> None:

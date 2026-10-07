@@ -26,12 +26,19 @@ class Change:
     judged: bool = False      # an LLM judge ruled on this fingerprint mismatch
     judge_model: str = ""     # provider:model spec that ruled
     judge_reason: str = ""
+    rejected: bool = False    # the current state is a standing rejection (rejected/)
+    rejected_by: str = ""
+    token: str = ""           # identity of this change (see baseline.change_token)
 
     def to_dict(self) -> dict:
         d = {"name": self.name, "kind": self.kind, "group": self.group}
         if self.judged:
             d |= {"judged": True, "judge_model": self.judge_model,
                   "judge_reason": self.judge_reason}
+        if self.rejected:
+            d |= {"rejected": True, "rejected_by": self.rejected_by}
+        if self.token:
+            d["token"] = self.token
         return d
 
 
