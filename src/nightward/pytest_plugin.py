@@ -49,6 +49,8 @@ class Recorder:
         # test proves that a behavior it no longer captures is really gone.
         self._passed: set[str] = set()
         self._broken: set[str] = set()
+        # Deselected (-k/-m) tests: their behaviors were not checked (D21).
+        self.deselected: set[str] = set()
 
     def begin(self, source: str) -> None:
         """A test (re)starts: drop what an earlier attempt of it captured.
@@ -66,6 +68,9 @@ class Recorder:
 
     def completed(self) -> list[str]:
         return sorted(self._passed - self._broken)
+
+    def pytest_deselected(self, items) -> None:
+        self.deselected.update(item.nodeid for item in items)
 
     def pytest_runtest_logreport(self, report) -> None:
         if report.when == "setup":   # a fresh attempt (e.g. a rerun) starts clean
@@ -272,6 +277,7 @@ def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None)
     stats = reporter.stats if reporter else {}
     meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
     meta["completed"] = rec.completed()
+    meta["deselected_ids"] = sorted(rec.deselected)
     # Ties run_meta to exactly this flush: `nightward report` trusts pending/
     # only when it still matches (R2-DATA-04).
     meta["pending_digest"] = digest({b.name: b for b in rec.behaviors})

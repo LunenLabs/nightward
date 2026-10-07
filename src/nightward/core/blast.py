@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
-from .diff import CHANGED, NEW, REMOVED, UNCHANGED, Change
+from .diff import CHANGED, NEW, NOT_RUN, REMOVED, UNCHANGED, Change
 
 
 def aggregate(changes: list[Change]) -> dict:
-    unapproved = [c for c in changes if c.kind != UNCHANGED]
+    unapproved = [c for c in changes if c.kind not in (UNCHANGED, NOT_RUN)]
 
     by_group: dict[str, list[dict]] = defaultdict(list)
     for c in unapproved:
@@ -24,6 +24,7 @@ def aggregate(changes: list[Change]) -> dict:
         "new": by_kind[NEW],
         "changed": by_kind[CHANGED],
         "removed": by_kind[REMOVED],
+        "not_run": by_kind[NOT_RUN],
         # fingerprint mismatches an LLM judge ruled equivalent (audit visibility)
         "judged_same": sum(1 for c in changes if c.kind == UNCHANGED and c.judged),
     }
@@ -37,4 +38,6 @@ def aggregate(changes: list[Change]) -> dict:
         # audit what the judge waved through (R1-LLM-04).
         "judged_same": [c.to_dict() | {"diff": c.diff_text}
                         for c in changes if c.kind == UNCHANGED and c.judged],
+        # Approved behaviors this run did not check: their test was deselected.
+        "not_run": [{"name": c.name, "group": c.group} for c in changes if c.kind == NOT_RUN],
     }

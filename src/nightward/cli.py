@@ -17,7 +17,7 @@ from rich.markup import escape
 from . import shellquote
 from .config import project_judge
 from .core.baseline import Store, change_token
-from .core.diff import REMOVED, UNCHANGED
+from .core.diff import NOT_RUN, REMOVED, UNCHANGED
 from .core.lock import store_lock
 from .errors import NightwardError
 from .runner import (
@@ -328,6 +328,14 @@ def _warn_unless_ignored(path: Path, what: str) -> None:
                           soft_wrap=True)
 
 
+def _print_not_run(report: dict) -> None:
+    not_run = [it["name"] for it in report.get("not_run") or []]
+    if not_run:
+        console.print(f"[yellow]{len(not_run)} behavior(s) not checked[/yellow] (their test "
+                      f"was deselected with -k/-m): {escape(_shown(not_run))} - a run "
+                      f"without the selection checks them", soft_wrap=True)
+
+
 def _print_summary(report: dict) -> None:
     c = report["counts"]
     # Same word as status --json and the dashboard: a run with failing capture
@@ -343,6 +351,7 @@ def _print_summary(report: dict) -> None:
                       f"({report['unapproved']} unapproved{'; ' + gap if gap else ''})")
     console.print(f"unchanged={c['unchanged']} changed={c['changed']} "
                   f"new={c['new']} removed={c['removed']}")
+    _print_not_run(report)
     if c.get("judged_same"):
         console.print(f"[dim]{c['judged_same']} fingerprint mismatch(es) ruled "
                       f"semantically SAME by the judge[/dim]")
@@ -434,7 +443,7 @@ def run(ctx: typer.Context,
         if judge:
             console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
         result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
-    not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
+    not_run = [f"{result[k]} {k}" for k in ("skipped", "xfailed") if result[k]]
     if not_run:
         err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
                           "behaviors they capture appear as REMOVED; blast radius may show "
@@ -680,7 +689,7 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     rejected = standing_rejections(store, baseline, pending)
     if all_:
         changes = [c for c in classify(store, baseline, pending, judge=judge, with_diff=False)
-                   if c.kind != UNCHANGED]
+                   if c.kind not in (UNCHANGED, NOT_RUN)]
         removed = [c.name for c in changes if c.kind == REMOVED]
         if include_removed:
             # A test that didn't run captures nothing and looks REMOVED; approving
@@ -701,6 +710,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
             raise NightwardError(f"no pending or baseline behavior named "
                                  f"{', '.join(map(repr, unknown))}; nothing was approved")
         listed = {it["name"] for it in _report_items(report)}
+        skipped = [n for n in names if n in {it["name"] for it in report.get("not_run") or []}]
+        if skipped:
+            raise NightwardError(f"{_shown(skipped)}: not checked by the last run (its test "
+                                 f"was deselected) - nothing to approve; run without the "
+                                 f"-k/-m selection first")
         unchanged = [n for n in names if n not in listed]
         if unchanged:
             raise NightwardError(f"{_shown(unchanged)}: unchanged in the last report - "
@@ -878,6 +892,7 @@ def gate(dir: str = typer.Option(DEFAULT_DIR)):
     as_of = f" [dim]{escape(_as_of(report.get('generated_at')))}[/dim]"
     if report.get("boundary") == "intact":
         console.print(f"[green]boundary intact[/green]{as_of}")
+        _print_not_run(report)
         raise typer.Exit(0)
     console.print(f"[red]boundary breached[/red] ({report.get('unapproved', 0)} "
                   f"unapproved){as_of}")
@@ -958,6 +973,7 @@ def _print_status(payload: dict) -> None:
         console.print(f"  - [[cyan]{ch['kind']}[/cyan]] {escape(ch['name'])} "
                       f"[dim]({escape(ch.get('group') or '(ungrouped)')})[/dim]"
                       f"{_rejected_note(ch)}")
+    _print_not_run(payload)
     if payload.get("judged_same"):
         console.print(f"[dim]{len(payload['judged_same'])} change(s) ruled semantically "
                       f"SAME by the judge - audit with `nightward review`[/dim]")

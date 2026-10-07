@@ -319,11 +319,14 @@ def suite(tmp_path):
 ])
 def test_include_removed_holds_unproven_removals(suite, path, env, lost):
     tmp_path, tw = suite
-    cli("run", path, "--dir", str(tw), cwd=tmp_path, env=env)
+    ran = cli("run", path, "--dir", str(tw), cwd=tmp_path, env=env)
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / f"{lost}.approved.json").exists()
-    assert lost in r.stdout and "can't prove gone" in r.stdout
+    if "not slow" in str(env):   # deselected - D21: "not checked", never even REMOVED
+        assert "not checked" in ran.stdout and lost in ran.stdout
+    else:
+        assert lost in r.stdout and "can't prove gone" in r.stdout
 
 
 def test_include_removed_approves_proven_removal(suite):
@@ -351,7 +354,8 @@ def test_run_warns_about_deselected_and_xfailed(suite):
     tmp_path, tw = suite
     r = cli("run", ".", "--dir", str(tw), cwd=tmp_path,
             env={"FLAKY": "1", "PYTEST_ADDOPTS": '-m "not slow"'})
-    assert "1 deselected" in r.stderr and "1 xfailed" in r.stderr
+    # D21: a deselected test's behavior is "not checked", not a false REMOVED
+    assert "1 behavior(s) not checked" in r.stdout and "1 xfailed" in r.stderr
     meta = json.loads((tw / "run_meta.json").read_text(encoding="utf-8"))
     assert meta["deselected"] == 1 and meta["xfailed"] == 1
 

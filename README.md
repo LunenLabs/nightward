@@ -141,7 +141,14 @@ nightward gate
 
 `nightward report` trusts the capture only if `run_meta.json` proves `pending/` is
 exactly what a complete pytest session flushed; a failed/errored session exits 1 like
-`run`. Or let nightward drive pytest and pass the arguments through:
+`run`. A behavior whose recorded test you deselected (`-k`/`-m`) is **not checked**,
+not REMOVED: `run`, `report`, `gate`, `status --json` (`not_run`, `narrowed: true`) and
+the dashboard list it, it doesn't count as unapproved, and the gate verdict covers the
+behaviors the run did check. So the recipe above stays green on a GPU-less PR runner
+while a full run (nightly, or `nightward run`) checks the rest. This needs the recorded
+test in the baseline (`source`, written on approve): approve once from a full run.
+Baselines from before sources existed, and skipped or xfailed tests, still read as
+REMOVED (fail closed). Or let nightward drive pytest and pass the arguments through:
 `nightward run tests -- -m "not gpu" -p no:randomly`. Either way a run with extra
 pytest arguments never proves a removal.
 
@@ -378,7 +385,8 @@ resolves `path` and `dir` against its own working directory.
 
 Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
 `kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
-`rejected`, `rejected_by` when the payload is a standing rejection),
+`rejected`, `rejected_by` when the payload is a standing rejection), `not_run`
+(`{name, group}` of approved behaviors whose test was deselected) and `narrowed`,
 `judged_same`, `stale`, `incomplete` (`{"failed": n, "errors": m}` or null),
 `generated_at`, and `judge`. `boundary` is one of:
 

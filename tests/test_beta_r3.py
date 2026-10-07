@@ -335,3 +335,62 @@ def test_run_echo_shows_the_passthrough_args(payout):
     tmp_path, tw = payout
     r = cli("run", ".", "--", "-m", "not slow", "-p", "no:randomly", cwd=tmp_path)
     assert "$ pytest . -m 'not slow' -p no:randomly --nightward-record" in r.stdout, r.stdout
+
+
+# ---- R3-DATA-02 (D21): explicit deselection is "not checked", not "removed" ------
+
+ML = ('import os, pytest\n'
+      'def test_features(behavior):\n'
+      '    behavior("feature_stats", {"rows": 1000}, group="features")\n'
+      '@pytest.mark.gpu\n'
+      'def test_train(behavior):\n'
+      '    behavior("model_metrics", {"auc": 0.912}, group="model")\n'
+      '@pytest.mark.skipif(bool(os.environ.get("NO_EVAL")), reason="no eval data")\n'
+      'def test_eval(behavior):\n'
+      '    behavior("eval_metrics", {"f1": 0.8}, group="model")\n')
+
+
+@pytest.fixture
+def ml(tmp_path):
+    write(tmp_path / "pytest.ini", "[pytest]\nmarkers =\n    gpu: needs a GPU\n")
+    write(tmp_path / "test_ml.py", ML)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    return tmp_path, tmp_path / ".nightward"
+
+
+def test_deselected_behaviors_are_not_checked_not_removed(ml):
+    tmp_path, tw = ml
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "-m", "not gpu", "--nightward-record",
+                    "-p", "no:cacheprovider"], cwd=tmp_path, capture_output=True)
+    r = cli("report", cwd=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "REMOVED" not in r.stdout
+    assert "1 behavior(s) not checked" in r.stdout and "model_metrics" in r.stdout
+    assert cli("gate", cwd=tmp_path).returncode == 0
+    status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
+    assert status["boundary"] == "intact" and status["narrowed"] is True
+    assert [n["name"] for n in status["not_run"]] == ["model_metrics"]
+    # never removal proof, and nothing to approve by name
+    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    assert "model_metrics" in baseline_names(tw)
+    r = cli("approve", "model_metrics", cwd=tmp_path)
+    assert r.returncode == 2 and "not checked" in r.stderr
+    assert "model_metrics" in baseline_names(tw)
+
+
+def test_run_passthrough_deselection_is_not_checked(ml):
+    tmp_path, tw = ml
+    r = cli("run", ".", "--", "-m", "not gpu", cwd=tmp_path)
+    assert r.returncode == 0 and "not checked" in r.stdout, r.stdout + r.stderr
+    assert cli("gate", cwd=tmp_path).returncode == 0
+
+
+def test_skipped_capture_stays_removed(ml):
+    # Skips stay fail-closed: the test was selected and did not capture.
+    tmp_path, tw = ml
+    cli("run", ".", cwd=tmp_path, env={"NO_EVAL": "1"})
+    assert cli("gate", cwd=tmp_path).returncode == 1
+    status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
+    assert [c["name"] for c in status["changes"] if c["kind"] == "REMOVED"] == ["eval_metrics"]

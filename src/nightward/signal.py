@@ -14,7 +14,8 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
     verdict no longer applies, so boundary reads "stale" instead of intact/breached."""
     if report is None:
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
-                "stale": False, "incomplete": None, "generated_at": None, "judge": None}
+                "not_run": [], "narrowed": False, "stale": False, "incomplete": None,
+                "generated_at": None, "judge": None}
 
     # Every field of a change except its (possibly large) diff and its review
     # token, so judged rulings (judged / judge_model / judge_reason) and
@@ -39,6 +40,9 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
         "unapproved": report.get("unapproved", 0),
         "changes": changes,
         "judged_same": judged_same,
+        # approved behaviors whose test was deselected (-k/-m): not checked (D21)
+        "not_run": list(report.get("not_run") or []),
+        "narrowed": bool(report.get("narrowed")),
         "stale": stale,
         "incomplete": incomplete,
         "generated_at": report.get("generated_at"),

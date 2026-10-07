@@ -192,6 +192,16 @@ function renderWarnings(report, meta) {
       "— skipped tests don't capture their behavior (it shows up as a false REMOVED), and failed tests make the blast radius incomplete."));
     w.appendChild(warn);
   }
+
+  const notRun = (report && report.not_run) || [];
+  if (notRun.length) {
+    const warn = el("div", { cls: "warn warn-info" });
+    warn.appendChild(el("strong", { text: notRun.length + " behavior(s) not checked " }));
+    warn.appendChild(document.createTextNode(
+      "- their test was deselected (-k/-m) in this run: " +
+      notRun.map(function (n) { return n.name; }).join(", ")));
+    w.appendChild(warn);
+  }
 }
 
 function renderCounts(counts) {

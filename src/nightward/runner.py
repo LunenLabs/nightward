@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .core.baseline import Store, change_token, digest
 from .core.blast import aggregate
-from .core.diff import CHANGED, UNCHANGED, compare
+from .core.diff import CHANGED, NOT_RUN, REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
 
@@ -65,8 +65,15 @@ def classify(store: Store, baseline, pending, judge=None, *, with_diff: bool = T
     """
     changes = compare(baseline, pending, judge=judge, with_diff=with_diff)
     rejected = standing_rejections(store, baseline, pending)
+    deselected = set(store.load_run_meta().get("deselected_ids") or ())
     for c in changes:
         c.token = change_token(baseline.get(c.name), pending.get(c.name))
+        source = baseline[c.name].source if c.name in baseline else None
+        if c.kind == REMOVED and source in deselected and c.name not in rejected:
+            # The user narrowed the run with -k/-m: not checked, not removed (D21).
+            # Skips and source-less baselines stay REMOVED (fail closed).
+            c.kind, c.diff_text = NOT_RUN, ""
+            continue
         if c.name not in rejected:
             continue
         c.rejected, c.rejected_by = True, rejected[c.name]
@@ -100,6 +107,7 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     meta = store.load_run_meta()
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
+    report["narrowed"] = bool(meta.get("narrowed"))
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)

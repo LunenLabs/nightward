@@ -413,10 +413,10 @@ def test_report_refuses_a_capture_no_session_recorded(approved_x):
 def test_narrowed_plugin_capture_proves_no_removal(approved_x):
     tmp_path, tw = approved_x
     record(tmp_path, tw, "-m", "not slow")
-    cli("report", "--dir", str(tw), cwd=tmp_path)
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    rep = cli("report", "--dir", str(tw), cwd=tmp_path)
+    assert "not checked" in rep.stdout   # D21: deselected, so not even REMOVED
+    cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert (tw / "baseline" / "slow.approved.json").exists()
-    assert "narrowed" in r.stdout
 
 
 def test_run_passes_pytest_args_through(approved_x):

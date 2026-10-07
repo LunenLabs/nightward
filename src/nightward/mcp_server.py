@@ -44,7 +44,9 @@ def run_tool(path: str = ".", dir: str = ".nightward", timeout: int = 600) -> di
     dir: the nightward store; timeout: seconds before pytest is stopped (the
     store is then left untouched and the last report invalidated).
     Returns {boundary, unapproved, changes: [{name, kind, group, judged,
-    judge_model, judge_reason}], judged_same, stale, incomplete, generated_at,
+    judge_model, judge_reason, rejected, rejected_by}], judged_same, not_run
+    (approved behaviors whose test was deselected: not checked), narrowed,
+    stale, incomplete, generated_at,
     judge, warnings: {skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched (custom scrub rules that matched nothing),
     pytest_returncode, pytest_output_tail}}.

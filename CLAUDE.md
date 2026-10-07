@@ -150,6 +150,10 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   standing rejections) marks such changes `rejected`/`rejected_by` in the report,
   and flips a judged-SAME or an UNCHANGED (baseline == rejected payload, e.g. after a
   merge) back to CHANGED - a human rejection beats the judge (D19).
+- **Deselected = not checked (D21).** The plugin records `deselected_ids`; a
+  REMOVED whose baseline `source` was deselected (-k/-m) becomes `NOT_RUN` in
+  `runner.classify`: listed in report `not_run`, excluded from `unapproved`, never
+  removal proof. Skips/xfails and source-less baselines stay REMOVED (fail closed).
 - **Decisions bind to what the human saw (D19).** Each report item carries a
   `token` (`baseline.change_token`: old state -> new state). `run`/`report`/`review`/
   `view` record the tokens they displayed in `reviewed.json` (a scoped review =
