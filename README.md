@@ -73,7 +73,9 @@ nightward reject  confirm a change as a real regression (boundary stays breached
                   is pending - `approve <name>` overrides and clears the rejection).
                   Commit .nightward/rejected/ like the baseline, so a rejection
                   protects every clone and CI, not just your machine
-nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
+nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, stale or
+                  incomplete; 2 no store, no report (no run yet, or the last run
+                  aborted) or another error. Only 0 is a pass
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
                   "done"; "breached", "incomplete" (capture tests failed/errored),
@@ -81,6 +83,7 @@ nightward status  boundary summary with the change list (--json: the machine
                   re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
 nightward mcp     stdio MCP server for AI agents: run + status, never approve
+nightward --version  the installed version (put it in bug reports and CI logs)
 ```
 
 Every command uses the store at `./.nightward` (or `--dir`), so run them from the

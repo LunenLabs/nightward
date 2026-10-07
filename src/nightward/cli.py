@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from . import shellquote
+from . import __version__, shellquote
 from .config import project_judge
 from .core.baseline import Store, digest
 from .core.diff import REMOVED, UNCHANGED, compare
@@ -81,6 +81,19 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console(file=_stdout, legacy_windows=False)
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        print(f"nightward {__version__}", file=_stdout)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(version: bool = typer.Option(
+        False, "--version", callback=_print_version, is_eager=True,
+        help="Show the nightward version and exit")):
+    """nightward - regression firewall for AI-driven changes"""
 err_console = Console(stderr=True, legacy_windows=False)
 
 DEFAULT_DIR = ".nightward"
@@ -136,9 +149,9 @@ def _store_above(dir_: str) -> str | None:
 def _missing_store_message(dir_: str) -> str:
     above = _store_above(dir_)
     if above:
-        return (f"no nightward store at {dir_!r}, but found {above!r} - run from the "
+        return (f"no nightward store at '{dir_}', but found '{above}' - run from the "
                 f"project root, or pass --dir {above}")
-    return (f"no nightward store at {dir_!r} (under {Path.cwd()}) - check --dir, or "
+    return (f"no nightward store at '{dir_}' (under {Path.cwd()}) - check --dir, or "
             f"create one with `nightward init` and `nightward run`")
 
 
@@ -347,8 +360,14 @@ def run(ctx: typer.Context,
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
-    (a -k/-m/deselecting run never proves a removal).
+    (without a path, `nightward run -- -k clamp` runs "."; a -k/-m/deselecting run
+    never proves a removal).
     """
+    extra = [a for a in ctx.args if a != "--"]
+    if path.startswith("-"):
+        # `nightward run -- -k clamp`: click hands the first pytest arg to PATH,
+        # which is optional (R3-OPS-05).
+        path, extra = ".", [path, *extra]
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
         # pytest finds the rootdir from anywhere; a second store here would
@@ -366,10 +385,9 @@ def run(ctx: typer.Context,
         judge, source = project_judge(path.split("::", 1)[0]), "pyproject.toml"
     if judge:
         console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
-    extra = [a for a in ctx.args if a != "--"]
     result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
     not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
-    if not_run:
+    if not_run and result["report"]["counts"].get("removed"):
         err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
                           "behaviors they capture appear as REMOVED; blast radius may show "
                           "false positives")
@@ -831,7 +849,12 @@ def doctor(names: list[str] | None = NAMES_ARG,
 @app.command()
 @handle_errors
 def gate(dir: str = typer.Option(DEFAULT_DIR)):
-    """Exit 0 if the boundary is intact, 1 otherwise (for CI / agent loops)."""
+    """Exit with the verdict of the last run (for CI / agent loops).
+
+    0: boundary intact. 1: breached, stale (baseline or capture changed since
+    the report) or incomplete (capture tests failed). 2: no store, no report
+    (no run yet, or the last run aborted) or another error. Only 0 is a pass.
+    """
     store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):
@@ -906,6 +929,8 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
 
 
 def _as_of(generated_at: str | None) -> str:
+    if not generated_at:   # a report from an older nightward (R3-OPS-05)
+        return "(no run time recorded - re-run `nightward run`)"
     return (f"(as of the last run, {generated_at}; re-run `nightward run` after code "
             f"edits)")
 
