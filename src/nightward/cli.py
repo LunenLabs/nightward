@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from . import shellquote
+from . import __version__, shellquote
 from .config import judge_setting
 from .core.baseline import Store, digest
 from .core.diff import REMOVED, UNCHANGED, compare
@@ -81,6 +81,19 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console(file=_stdout, legacy_windows=False)
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        print(f"nightward {__version__}", file=_stdout)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(version: bool = typer.Option(
+        False, "--version", callback=_print_version, is_eager=True,
+        help="Show the nightward version and exit")):
+    """nightward - regression firewall for AI-driven changes"""
 err_console = Console(stderr=True, legacy_windows=False)
 
 DEFAULT_DIR = ".nightward"
@@ -136,9 +149,9 @@ def _store_above(dir_: str) -> str | None:
 def _missing_store_message(dir_: str) -> str:
     above = _store_above(dir_)
     if above:
-        return (f"no nightward store at {dir_!r}, but found {above!r} - run from the "
+        return (f"no nightward store at '{dir_}', but found '{above}' - run from the "
                 f"project root, or pass --dir {above}")
-    return (f"no nightward store at {dir_!r} (under {Path.cwd()}) - check --dir, or "
+    return (f"no nightward store at '{dir_}' (under {Path.cwd()}) - check --dir, or "
             f"create one with `nightward init` and `nightward run`")
 
 
@@ -238,12 +251,20 @@ def _git_ignored(path: Path) -> bool | None:
     return {0: True, 1: False}.get(r.returncode)
 
 
-def _warn_unless_ignored(path: Path, what: str) -> None:
+def _warn_unless_ignored(path: Path, what: str,
+                         fix: str = "run `nightward init` to add the .gitignore rules") -> None:
     # Only a nudge: a rule in a parent .gitignore or info/exclude counts too.
     if _git_ignored(path) is False:
         err_console.print(f"[yellow]warning:[/yellow] {escape(str(path))} is not git-ignored "
-                          f"and {what} - run `nightward init` to add the .gitignore rules",
-                          soft_wrap=True)
+                          f"and {what} - {escape(fix)}", soft_wrap=True)
+
+
+def _ignore_fix(out_path: Path) -> str:
+    """How to ignore a dashboard dir: init knows only the default one (R1-WEB-06)."""
+    rule = _store_prefix(str(out_path))
+    if rule == DEFAULT_SITE:
+        return "run `nightward init` to add the .gitignore rules"
+    return f"add `{rule or out_path.as_posix()}/` to .gitignore"
 
 
 def _shown_path(path: Path) -> str:
@@ -310,8 +331,15 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
     """Create the nightward store and add ignore rules to .gitignore."""
     _check_dir(dir)
     store = _store(dir)
+    existed = store.root.is_dir()
     store.ensure()
-    console.print(f"[green]created[/green] {escape(str(store.root))}/ (baseline, pending)")
+    approved = len(store.load_baseline()) if existed else 0
+    if existed:
+        # e.g. a fresh clone with a committed baseline: nothing was created (R1-WEB-06).
+        console.print(f"store exists: {escape(str(store.root))}/ ({approved} approved "
+                      f"behavior(s))")
+    else:
+        console.print(f"[green]created[/green] {escape(str(store.root))}/ (baseline, pending)")
 
     lines = _gitignore_lines(dir)
     if lines is None:
@@ -336,8 +364,13 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                 fh.write("\n")
             fh.write("\n".join(missing) + "\n")
         console.print(f"[green]updated[/green] .gitignore (+{len(missing)} lines)")
-    console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
-                  "then `nightward run <path>` and `nightward approve --all`.")
+    if approved:
+        # Approving everything would bury whatever moved since the baseline.
+        console.print("\nNext: `nightward run <path>` to gate the code against the approved "
+                      "baseline, then `nightward review` what moved.")
+    else:
+        console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
+                      "then `nightward run <path>` and `nightward approve --all`.")
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -353,8 +386,14 @@ def run(ctx: typer.Context,
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
-    (a -k/-m/deselecting run never proves a removal).
+    (without a path, `nightward run -- -k clamp` runs "."; a -k/-m/deselecting run
+    never proves a removal).
     """
+    extra = [a for a in ctx.args if a != "--"]
+    if path.startswith("-"):
+        # `nightward run -- -k clamp`: click hands the first pytest arg to PATH,
+        # which is optional (R3-OPS-05).
+        path, extra = ".", [path, *extra]
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
         # pytest finds the rootdir from anywhere; a second store here would
@@ -374,10 +413,9 @@ def run(ctx: typer.Context,
         source = _shown_path(where) if where else "pyproject.toml"
     if judge:
         console.print(f"[dim]judge: {escape(judge)} ({source})[/dim]")
-    extra = [a for a in ctx.args if a != "--"]
     result = execute_run(path, dir, judge_spec=judge, pytest_args=extra)
     not_run = [f"{result[k]} {k}" for k in ("skipped", "deselected", "xfailed") if result[k]]
-    if not_run:
+    if not_run and result["report"]["counts"].get("removed"):
         err_console.print(f"[yellow]warning:[/yellow] {', '.join(not_run)} test(s) - "
                           "behaviors they capture appear as REMOVED; blast radius may show "
                           "false positives")
@@ -616,28 +654,53 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
 APPROVE_NAMES_ARG = typer.Argument(
     None, help="Behavior(s) to approve. One name always applies; several are approved "
                "like --all --include-removed limited to them", show_default=False)
+APPROVE_GROUP_OPT = typer.Option(
+    None, "--group", help="Approve the NEW/CHANGED behaviors of this group (repeatable): "
+                          "--all limited to the group, rejections kept",
+    show_default=False)
 
 
 @app.command()
 @handle_errors
 def approve(names: list[str] | None = APPROVE_NAMES_ARG,
+            group: list[str] | None = APPROVE_GROUP_OPT,
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
             include_removed: bool = typer.Option(
                 False, "--include-removed",
-                help="With --all, also accept REMOVED behaviors that a whole-suite run "
+                help="With --all or --group, also accept REMOVED behaviors that a whole-suite run "
                      "proves gone: their test ran to completion without capturing them "
                      "(drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
-    if all_ and names:
-        raise NightwardError("give behavior names or --all, not both")
+    if sum(map(bool, (all_, names, group))) > 1:
+        raise NightwardError("pick one: behavior names, --group or --all (not both)")
     store = _existing_store(dir)
     with store_lock(store.root, "nightward approve"):
-        _approve(store, dir, names, all_, include_removed)
+        _approve(store, dir, names, all_, include_removed, groups=group)
+
+
+def _group_names(baseline, pending, judge, groups: list[str],
+                 include_removed: bool) -> tuple[list[str], list[str]]:
+    """(names to approve, REMOVED names left out) for `approve --group`.
+
+    The group's unapproved behaviors, as `review --group` scopes them, minus
+    removals unless --include-removed (as with --all). The command line stays
+    short however big the group is (R3-DATA-06): 1,440 names don't fit in
+    Windows' 32K command line, and neither does the dashboard's group chip.
+    """
+    known = {b.group or "(ungrouped)" for b in (*baseline.values(), *pending.values())}
+    unknown = [g for g in groups if g not in known]
+    if unknown:
+        raise NightwardError(f"no behavior in group {', '.join(map(repr, unknown))}; "
+                             f"nothing was approved")
+    changes = [c for c in compare(baseline, pending, judge=judge, with_diff=False)
+               if c.kind != UNCHANGED and (c.group or "(ungrouped)") in groups]
+    left_out = [] if include_removed else [c.name for c in changes if c.kind == REMOVED]
+    return [c.name for c in changes if c.name not in left_out], left_out
 
 
 def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
-             include_removed: bool) -> None:
+             include_removed: bool, groups: list[str] | None = None) -> None:
     baseline = store.load_baseline()
     pending = store.load_pending()
     if not baseline and not pending:
@@ -649,6 +712,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     # back to CHANGED the moment something else is approved. Approving a
     # judged-SAME rewording explicitly by name still re-anchors it.
     judge = judge_from_meta(store)
+    left_out: list[str] = []
+    if groups:
+        names, left_out = _group_names(baseline, pending, judge, groups, include_removed)
+    # One explicit name is a human override; a group is a bulk approval at any size.
+    single = bool(names) and len(names) == 1 and not groups
 
     held: list[str] = []
     doubts: dict[str, str] = {}
@@ -671,11 +739,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
         targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
-    elif names and len(names) == 1:
+    elif single:
         targets = names
-    elif names:
-        # Several names (e.g. the dashboard's group chip) are a bulk approval
-        # limited to them: unproven removals and standing rejections stay, as
+    elif names or groups:
+        # Several names (or --group, the dashboard's group chip) are a bulk
+        # approval limited to them: unproven removals and standing rejections stay, as
         # with --all --include-removed; one explicit name overrides (R2-WEB-03).
         names = list(dict.fromkeys(names))
         unknown = [n for n in names if n not in pending and n not in baseline]
@@ -691,15 +759,17 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         rejected = _standing_rejections(store, baseline, pending)
         kept_rejected = [n for n in names if n in rejected and n not in held]
         targets = [n for n in names if n not in held and n not in rejected]
+        held += left_out
     else:
-        raise NightwardError("specify a behavior name or --all")
+        raise NightwardError("specify a behavior name, --group or --all")
     if all_:
         refreshed = _backfill_sources(store, baseline, pending)
         if refreshed:
             console.print(f"[dim]refreshed the recorded test of {refreshed} unchanged "
                           f"behavior(s) (removal evidence only)[/dim]")
     if not targets and not held and not kept_rejected:
-        console.print("nothing to approve - boundary already intact")
+        console.print("nothing to approve in that group" if groups
+                      else "nothing to approve - boundary already intact")
         return
 
     for n in targets:
@@ -707,7 +777,7 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         # The short fingerprint ties the approval to the reviewed content.
         what = f" ({pending[n].fingerprint()[:8]})" if n in pending else ""
         console.print(f"[green]{verb}[/green] {escape(n)}{what}")
-        if names and len(names) == 1 and store.clear_rejection(n):
+        if single and store.clear_rejection(n):
             console.print(f"  [dim]cleared the earlier rejection of {escape(n)}[/dim]")
     if kept_rejected:
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) you "
@@ -723,7 +793,8 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
                       f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
                       f"a partial path. Accept them with `nightward approve <name>` or "
-                      f"`--all --include-removed`.", soft_wrap=True)
+                      f"`{'--group ... ' if groups else '--all '}--include-removed`.",
+                      soft_wrap=True)
     _print_summary(recompute(store, judge=judge))
 
 
@@ -818,7 +889,12 @@ def doctor(names: list[str] | None = NAMES_ARG,
 @app.command()
 @handle_errors
 def gate(dir: str = typer.Option(DEFAULT_DIR)):
-    """Exit 0 if the boundary is intact, 1 otherwise (for CI / agent loops)."""
+    """Exit with the verdict of the last run (for CI / agent loops).
+
+    0: boundary intact. 1: breached, stale (baseline or capture changed since
+    the report) or incomplete (capture tests failed). 2: no store, no report
+    (no run yet, or the last run aborted) or another error. Only 0 is a pass.
+    """
     store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):
@@ -854,14 +930,23 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
         _mark_reviewed(store, report, "view")
     console.print(f"[green]built[/green] {escape(str(out_path))}/ "
                   "(index.html, app.js, style.css, data.json)")
-    _warn_unless_ignored(out_path / "data.json", "it holds your captured behaviors")
+    _warn_unless_ignored(out_path / "data.json", "it holds your captured behaviors",
+                         _ignore_fix(out_path))
     if serve:
         from .view.serve import serve as _serve
         _serve(out_path, port=port, open_browser=open_browser)
     else:
-        console.print(f"open it with:  [cyan]python -m http.server -d "
-                      f"{escape(str(out_path))} {port}[/cyan]  "
-                      "(fetch needs http, not file://)")
+        # Loopback only, like --serve: data.json holds captured behaviors, and
+        # http.server alone listens on every interface (R3-WEB-05).
+        shell = shellquote.default_shell()
+        site = shellquote.quote(str(out_path), shell) or str(out_path)
+        store_arg = ("" if dir == DEFAULT_DIR
+                     else f" --dir {shellquote.quote(dir, shell) or dir}")
+        console.print(f"open it with:  [cyan]nightward view{escape(store_arg)} --out "
+                      f"{escape(site)} --port {port}"
+                      f"[/cyan]\n  or:  [cyan]python -m http.server --bind 127.0.0.1 -d "
+                      f"{escape(site)} {port}[/cyan]  (fetch needs http, not file://)",
+                      soft_wrap=True)
 
 
 @app.command()
@@ -884,6 +969,8 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
 
 
 def _as_of(generated_at: str | None) -> str:
+    if not generated_at:   # a report from an older nightward (R3-OPS-05)
+        return "(no run time recorded - re-run `nightward run`)"
     return (f"(as of the last run, {generated_at}; re-run `nightward run` after code "
             f"edits)")
 

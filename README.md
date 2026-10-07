@@ -62,7 +62,9 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
 nightward approve promote pending behavior(s) into the baseline
                   (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
                   `approve A B C` works like --all --include-removed limited to those
-                  names, while one name always applies, even a removal or a rejection).
+                  names, while one name always applies, even a removal or a rejection;
+                  `approve --group G` works like --all limited to group G, for groups
+                  too big to list on one command line).
                   It promotes only the capture a human last saw through `run`,
                   `review` or `view`; if anything captured again since (e.g. an
                   agent's nightward_run), it refuses until you review again
@@ -71,7 +73,9 @@ nightward reject  confirm a change as a real regression (boundary stays breached
                   is pending - `approve <name>` overrides and clears the rejection).
                   Commit .nightward/rejected/ like the baseline, so a rejection
                   protects every clone and CI, not just your machine
-nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
+nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, stale or
+                  incomplete; 2 no store, no report (no run yet, or the last run
+                  aborted) or another error. Only 0 is a pass
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
                   "done"; "breached", "incomplete" (capture tests failed/errored),
@@ -79,6 +83,7 @@ nightward status  boundary summary with the change list (--json: the machine
                   re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
 nightward mcp     stdio MCP server for AI agents: run + status, never approve
+nightward --version  the installed version (put it in bug reports and CI logs)
 ```
 
 Every command uses the store at `./.nightward` (or `--dir`), so run them from the
@@ -469,13 +474,17 @@ Rules for the loop:
 status, counts, and grouped diffs with copy-paste `approve`/`reject` commands. It is
 **read-only** (decisions stay in the CLI) and **static** (no backend), so it also
 deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered with
-`textContent` only — captured output never touches an HTML parser.
+`textContent` only — captured output never touches an HTML parser. The page is a
+snapshot of the store when it was built: after a new `run` or `approve`, rebuild it
+with `nightward view` (refreshing the browser shows the old build). The header shows
+the verdict's own time ("verdict as of", UTC) next to the build time.
 
 The copy-paste commands quote every behavior name for the shell picked in
 "commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
 Windows). A name such as `x;touch${IFS}pwned` therefore arrives as one literal
 argument and never runs as code. When a name has no safe form in the selected shell
-(`%` or `!` in cmd.exe), the dashboard says so and offers no command.
+(`%` or `!` in cmd.exe), the dashboard says so and offers no command. A group's
+"approve this group" command is `nightward approve --group G`, short at any group size.
 
 > ⚠️ The dashboard embeds your captured behaviors. **Do not publish a real `.nightward/`
 > store to a public site.** The Pages workflow only publishes synthetic clean-room data

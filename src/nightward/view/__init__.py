@@ -16,10 +16,27 @@ from pathlib import Path
 
 from ..core.baseline import Store
 from ..runner import is_stale
-from ..shellquote import quote_all
+from ..shellquote import SHELLS, quote, quote_all
 
 ASSETS = Path(__file__).parent / "assets"
 STATIC_FILES = ("index.html", "app.js", "style.css")
+DEFAULT_STORE = ".nightward"
+
+
+def run_command(nightward_dir: Path | str) -> dict[str, str | None]:
+    """`nightward run` for this store, per shell (None: no safe form there).
+
+    The page's "re-run" hint must work in the user's project, not name the
+    README's quickstart fixture (R3-WEB-04).
+    """
+    src = str(nightward_dir)
+    if Path(src) == Path(DEFAULT_STORE):
+        return {shell: "nightward run ." for shell in SHELLS}
+    out: dict[str, str | None] = {}
+    for shell in SHELLS:
+        q = quote(src, shell)
+        out[shell] = None if q is None else f"nightward run . --dir {q}"
+    return out
 
 
 def collect_data(nightward_dir: Path | str) -> dict:
@@ -34,8 +51,9 @@ def collect_data(nightward_dir: Path | str) -> dict:
     run_meta = store.load_run_meta()
     baseline = store.load_baseline()    # {} if absent
     pending = store.load_pending()
-    names = {it["name"] for items in (report or {}).get("blast_radius", {}).values()
-             for it in items}
+    blast = (report or {}).get("blast_radius", {})
+    # Group names too: the group chip is `approve --group G` (R3-DATA-06).
+    names = {it["name"] for items in blast.values() for it in items} | set(blast)
     return {
         "report": report,
         # Copy-paste commands use these per-shell forms, never the raw name: a
@@ -51,7 +69,9 @@ def collect_data(nightward_dir: Path | str) -> dict:
             # baseline or capture moved since the report: its verdict is void
             "stale": is_stale(store, report),
             "source": str(src),
-            "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+            "run_command": run_command(src),
+            # when this page was built, with its offset like report.generated_at
+            "generated": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         },
     }
 
