@@ -96,7 +96,15 @@ class _App(typer.Typer):
 
     def __call__(self, *args, **kwargs):
         kwargs.setdefault("windows_expand_args", False)
-        return super().__call__(*args, **kwargs)
+        try:
+            return super().__call__(*args, **kwargs)
+        except OSError as exc:
+            # Click/rich write --help and usage straight to sys.stdout, not
+            # through _stdout: `nightward --help | head` lands here (R4-FIN-04).
+            if exc.errno not in (errno.EPIPE, errno.EINVAL):
+                raise
+            _stdout._gone(exc)
+            raise SystemExit(0) from None
 
 
 app = _App(

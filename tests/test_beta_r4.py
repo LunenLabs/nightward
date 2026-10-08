@@ -373,3 +373,15 @@ def test_stale_lock_takeover_admits_one_writer(tmp_path):
         assert not (store / ".lock").exists()
         assert not (store / ".lock.takeover").exists()
 
+
+# ---- R4-FIN-04: `nightward --help | head` is not an error ------------------------
+
+@pytest.mark.parametrize("args", [["--help"], ["approve", "--help"]])
+def test_help_into_a_closed_pipe_is_quiet(tmp_path, args):
+    for _ in range(3):
+        p = subprocess.Popen([sys.executable, "-m", "nightward", *args], cwd=tmp_path,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p.stdout.close()                      # the reader (`head`) is already gone
+        err = p.stderr.read().decode("utf-8", "replace")
+        assert p.wait(timeout=60) == 0, err
+        assert "Traceback" not in err and "Exception ignored" not in err, err
