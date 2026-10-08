@@ -47,7 +47,7 @@ def test_findings_structural_changes():
         {"a": 1, "b": 2, "items": [1, 2], "meta": [1], "amount": "49.99"},
     )
     assert _kinds(found) == {"amount": STRUCTURAL, "b": STRUCTURAL,
-                             "items[]": STRUCTURAL, "meta": STRUCTURAL}
+                             "items": STRUCTURAL, "meta": STRUCTURAL}
 
 
 def test_one_off_value_change_is_a_real_change_not_volatile():
