@@ -274,15 +274,26 @@ def _check_reviewed(store: Store, names: list[str], baseline, pending, verb: str
     raise NightwardError("; ".join(parts) + f". Run `{cmd}`, then {verb} what it shows.")
 
 
+def _git(*args: str, input: str | None = None) -> subprocess.CompletedProcess | None:
+    """Run git; None when git is missing or hangs.
+
+    git writes UTF-8 whatever the console code page: decoding with the locale
+    (cp949 on Korean Windows) garbles or crashes on a name like "José" or a
+    Hangul user.name (R4-FIN-02).
+    """
+    try:
+        return subprocess.run(["git", *args], capture_output=True, encoding="utf-8",
+                              errors="replace", timeout=10, input=input,
+                              stdin=None if input is not None else subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _who() -> str:
     """Who is deciding: git's user.name, else the OS login (recorded with a rejection)."""
-    try:
-        r = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, timeout=10)
-        if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
+    r = _git("config", "user.name")
+    if r is not None and r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip()
     import getpass
     try:
         return getpass.getuser()
@@ -329,12 +340,8 @@ def _legacy_gitignore_lines(dir_: str) -> list[str]:
 
 def _git_ignored(path: Path) -> bool | None:
     """Whether git ignores `path` (None: no git, or not inside a repository)."""
-    try:
-        r = subprocess.run(["git", "check-ignore", "-q", str(path)], capture_output=True,
-                           stdin=subprocess.DEVNULL, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return {0: True, 1: False}.get(r.returncode)
+    r = _git("check-ignore", "-q", str(path))
+    return None if r is None else {0: True, 1: False}.get(r.returncode)
 
 
 # What git must commit (the boundary and the decisions on it) and what it must
@@ -362,20 +369,17 @@ _TRANSIENT_PROBES = ("report.json", "run_meta.json", "reviewed.json", ".lock",
 
 def _ignore_rules(paths: list[str]) -> dict[str, str] | None:
     """{path: "source:line:pattern"} for each of `paths` git ignores (None: no git)."""
-    try:
-        r = subprocess.run(["git", "check-ignore", "-v", "--no-index", "--", *paths],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           stdin=subprocess.DEVNULL, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+    # -z: NUL-separated and unquoted - without it git quotes a non-ASCII path
+    # ("\354\240\200...") and it would never match the path we passed.
+    r = _git("check-ignore", "-v", "-z", "--no-index", "--stdin", input="\0".join(paths) + "\0")
+    if r is None or r.returncode not in (0, 1):   # not a repository, or outside it
         return None
-    if r.returncode not in (0, 1):     # not a repository, or the store is outside it
-        return None
+    fields = r.stdout.split("\0")
     rules = {}
-    for line in r.stdout.splitlines():
-        meta, _, path = line.partition("\t")
-        if meta.rsplit(":", 1)[-1].startswith("!"):
+    for source, line, pattern, path in zip(*[iter(fields)] * 4, strict=False):
+        if pattern.startswith("!"):
             continue                   # a negation: matched, but not ignored
-        rules[path] = meta
+        rules[path] = f"{source}:{line}:{pattern}"
     return rules
 
 

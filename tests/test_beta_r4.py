@@ -191,3 +191,34 @@ def test_remove_names_refuses_anything_not_removed(parts):
     # the "kept" hint names the cheap override
     r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
     assert "approve --remove" in r.stdout
+
+
+# ---- R4-FIN-02: git output is UTF-8, whatever the console code page -------------
+
+@pytest.mark.parametrize("who", ["류정현", "José Müller"])
+def test_reject_records_a_non_ascii_git_user_name_intact(tmp_path, who):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", who], check=True)
+    write(tmp_path / "test_fee.py", 'import os\ndef test_fee(behavior):\n'
+                                    '    behavior("fee", os.environ.get("FEE", "2.9"))\n')
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
+    cli("approve", "--all", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    cli("review", cwd=tmp_path)
+    r = cli("reject", "fee", cwd=tmp_path, env={"PYTHONUTF8": "0"})
+    assert r.returncode == 0 and "Traceback" not in r.stderr, r.stderr
+    rec = json.loads((tmp_path / ".nightward" / "rejected" / "fee.rejected.json")
+                     .read_text("utf-8"))
+    assert rec["rejected_by"] == who
+    assert f"rejected by {who}" in cli("status", cwd=tmp_path).stdout
+
+
+def test_ignore_check_reads_a_non_ascii_store_path(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    write(tmp_path / "test_a.py", 'def test_a(behavior):\n    behavior("a", 1)\n')
+    assert cli("init", "--dir", "저장소", cwd=tmp_path).returncode == 0
+    r = cli("run", ".", "--dir", "저장소", cwd=tmp_path, env={"PYTHONUTF8": "0"})
+    assert r.returncode == 0, r.stderr
+    assert "not git-ignored" not in r.stderr and "warning" not in r.stderr, r.stderr
