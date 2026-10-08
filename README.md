@@ -120,7 +120,8 @@ command then stops with `... has unresolved merge conflict markers`. Keep one si
 Judge rulings are stored one file per ruling (`.nightward/judge/`), so two branches
 that each record a ruling merge cleanly. A conflict there means both branches ruled
 on the same pair differently: read both sides and keep one. The single-file
-`judge_verdicts.json` that older versions wrote is still read; if it conflicts, keep
+`judge_verdicts.json` that older versions wrote is still read (its entries replay only
+when they describe the pair, see below); if it conflicts, keep
 both sides' entries (each entry is an independent ruling).
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
@@ -400,7 +401,14 @@ green.
   fresh clones and CI replay verdicts without a key. A replayed ruling is marked
   `(replayed from the committed ledger, not ruled this run)` in `review`, and
   `"judge_replayed": true` in `status --json` and MCP: whoever last edited the
-  ledger made that ruling.
+  ledger made that ruling. An entry is replayed only when it describes exactly the
+  pair being judged: its file is named by the hash of its key (the two fingerprints
+  and the judge), and its `behavior`, `model`, `old` and `new` fields match the
+  behavior and wording being judged. So the fields a reviewer reads are the ones that
+  decide. Any other entry is not replayed (`warning: judge ledger entry <file> (...)
+  - not replayed`): the pair is ruled again, or compared exactly when the judge is
+  unavailable. A legacy `judge_verdicts.json` entry follows the same rule and is
+  moved into `judge/` when it is used.
 - A persona is deterministic and free, so it rules again on every run and its
   ledger entries are a record only. A hand-edited persona entry (`DIFFERENT` ->
   `SAME`) never changes the verdict: `run` warns that the ledger entry did not match

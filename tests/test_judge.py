@@ -85,7 +85,7 @@ def test_cache_prevents_rejudging_and_persists(tmp_path, monkeypatch):
 
     # a fresh Judge instance (e.g. a later `approve` recompute) reuses the ledger
     j2 = Judge(spec, cache_path=ledger)
-    assert j2.equivalent("a", "b", "fp-old", "fp-new").cached is True
+    assert j2.equivalent("a", "b", "fp-old", "fp-new", name="daily_brief").cached is True
     assert len(calls) == 1
     [f] = (tmp_path / "judge").glob("*.json")
     entry = json.loads(f.read_text(encoding="utf-8"))

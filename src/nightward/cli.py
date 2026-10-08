@@ -480,6 +480,12 @@ def _print_summary(report: dict) -> None:
             f"{escape(judge['spec'])} rules now (edited by hand, or recorded under older "
             f"rules); it was ruled again and rewritten - review the ledger diff",
             soft_wrap=True)
+    for why in judge.get("ledger_rejected") or ():
+        # A forged or hand-edited model ruling: never replayed (R4-LLM-03).
+        err_console.print(
+            f"[yellow]warning:[/yellow] judge ledger entry {escape(why)} - not replayed; "
+            f"ruled again, or compared exactly if the judge is unavailable. Review "
+            f"the ledger diff", soft_wrap=True)
     if judge.get("unavailable") and not judge.get("spec"):
         err_console.print(
             f"[yellow]note:[/yellow] {len(judge['compared_exactly'])} approved semantic "

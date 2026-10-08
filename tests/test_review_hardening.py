@@ -216,13 +216,16 @@ def test_r9_corrupt_ledger_fails_loudly_and_is_preserved(tmp_path):
     assert ledger.read_text(encoding="utf-8") == "<<<<<<< HEAD\n"
 
 
-def test_r9_hand_edited_entry_without_reason_still_replays(tmp_path):
-    # A model ruling (persona rulings re-judge under new rules: R1-FIN-03).
+def test_r9_hand_edited_entry_without_its_wording_is_not_replayed(tmp_path):
+    # A model ruling replays only when it describes the pair it decides
+    # (R4-LLM-03): a bare {"verdict": "SAME"} is no ruling on "a" -> "b".
     ledger = tmp_path / "judge_verdicts.json"
     spec = "anthropic:claude-haiku-4-5"
     write(ledger, json.dumps({f"f1:f2:{spec}": {"verdict": "SAME"}}))
-    v = Judge(spec, cache_path=ledger).equivalent("a", "b", "f1", "f2")
-    assert v.verdict == "SAME" and v.cached
+    j = Judge(spec, cache_path=ledger)
+    v = j.equivalent("a", "b", "f1", "f2", name="x")
+    assert v is None or not v.cached       # ruled again (or unavailable), never replayed
+    assert j.summary()["ledger_rejected"]
 
 
 # R10: `approve --all` ignored the judge, so it re-anchored judged-SAME
