@@ -226,6 +226,7 @@ def rejected_floor(tmp_path):
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"BUG": "1"})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     assert cli("reject", "replica_floor", "--dir", str(tw), cwd=tmp_path).returncode == 0
     return tmp_path, tw
 
@@ -269,6 +270,7 @@ def test_rejected_removal_is_kept_by_include_removed(rejected_floor):
     tmp_path, tw = rejected_floor
     # D18: only a clean whole-suite run (the default path) may drop a removal
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"DROP": "1"})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     assert cli("reject", "probe", "--dir", str(tw), cwd=tmp_path).returncode == 0
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr

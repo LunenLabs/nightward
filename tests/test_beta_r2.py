@@ -471,6 +471,7 @@ def test_store_files_are_written_with_lf(approved_app):
     tmp_path, tw = approved_app
     write(tmp_path / "app.py", APP.replace('"dev": 1', '"dev": 2'))
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("reject", "replicas", "--dir", str(tw), cwd=tmp_path)
     cli("approve", "replicas", "--dir", str(tw), cwd=tmp_path)
     files = [p for p in tw.rglob("*.json") if p.is_file()]
