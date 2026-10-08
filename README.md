@@ -250,15 +250,25 @@ scrub.register_field("request_id")                 # mask this key at any depth
 scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
 ```
 
-**Scope follows the conftest.py, like its fixtures.** A rule registered in a
-`conftest.py` (also through a helper that conftest calls) applies only to behaviors
-captured by tests under that conftest's directory. Rules in the root `conftest.py`
-cover the whole suite; `scrub.register_field("token")` in `services/orders/conftest.py`
-masks orders' tokens but never a `token` field in `services/billing`. The scope also
-doesn't depend on which directories a run collected, so `nightward run services/billing`
-captures exactly what the whole-suite run does. `scrub.disable_defaults()` is scoped
-the same way. Rules registered anywhere else (a test module, a plugin) are global.
+**Rules are test-owned, and their scope follows the file that registers them.** Call
+`scrub.register`, `register_field` and `disable_defaults` directly in a `conftest.py`
+or a test module (pytest's `python_files`). The rule applies only to behaviors
+captured by tests under that file's directory, like a conftest's fixtures. Rules in
+the root `conftest.py` cover the whole suite; `scrub.register_field("token")` in
+`services/orders/conftest.py` or `services/orders/test_orders.py` masks orders' tokens
+but never a `token` field in `services/billing`. The scope doesn't depend on which
+directories a run collected, so `nightward run services/billing` captures exactly what
+the whole-suite run does. A call from any other file (product code, a shared helper,
+a plugin) is refused with an error naming the file and line: a rule there could
+rewrite a regressed value back into the approved one with nothing in the test diff.
 `nightward doctor` names the conftest.py each suggested rule belongs in.
+
+**What custom rules replaced is reported.** `nightward run` prints, per custom rule,
+how many values it replaced and in which behaviors whenever that count changes since
+the last run (`note: scrub rule register(r'...') in conftest.py replaced 1 value(s)
+this run (was 0) in route`). A replacement that is not a `<PLACEHOLDER>` is called
+out as a rewrite, not a mask. MCP `warnings.scrub_rules` carries the same data
+(`rule`, `values`, `behaviors`, `was`, `changed`, `placeholder`).
 
 `register()` patterns run over the payload's **canonical JSON text**, not over the
 decoded strings: pretty-printed (`"key": "value"`, keys sorted), and inside a string
@@ -480,7 +490,9 @@ absolute path of the store the verdict comes from). `nightward_run` also returns
 
 `nightward_run` adds `warnings`: `skipped`, `failed`, `errors`, `deselected`,
 `xfailed`, `scrubbed` (values the default scrubbers masked), `scrub_unmatched`
-(custom scrub rules that matched nothing), `pytest_returncode`, and
+(custom scrub rules that matched nothing), `scrub_rules` (per custom rule: values and
+behaviors it replaced this run, whether that changed, and whether its replacement is a
+`<PLACEHOLDER>`), `pytest_returncode`, and
 `pytest_output_tail` (pytest's last lines, so the agent can see why tests failed).
 The agent is done when `boundary` is `"intact"` and `stale` is false.
 

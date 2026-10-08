@@ -618,6 +618,20 @@ def run(ctx: typer.Context,
                           f"in {scrubbed['behaviors']} behavior(s) (timestamps/uuids)"
                           f"{': ' + escape(shown) if shown else ''} - opt out with "
                           f"scrub=False[/dim]", soft_wrap=True)
+    for rule in result["scrub_rules"]:
+        # What a custom rule replaced is part of what the gate saw (D28): say it
+        # whenever the count moves, e.g. a rule that starts rewriting a value.
+        if not (rule["values"] and rule["changed"]):
+            continue
+        names = _names_text(rule["behaviors"])
+        rewrite = ("" if rule["placeholder"] else
+                   " - its replacement is not a <PLACEHOLDER>: it writes a plausible value "
+                   "(a rewrite, not a mask), so review it")
+        err_console.print(
+            f"[{'dim' if rule['placeholder'] else 'yellow'}]note: scrub rule "
+            f"{escape(rule['rule'])} replaced {rule['values']} value(s) this run (was "
+            f"{rule['was'] if rule['was'] is not None else 'not registered'}) in "
+            f"{escape(names)}{escape(rewrite)}[/]", soft_wrap=True)
     for rule in result["scrub_unmatched"]:
         # The user believes this noise is handled; it isn't (R1-WEB-03).
         why = ("no captured dict has that key" if rule.startswith("register_field(") else

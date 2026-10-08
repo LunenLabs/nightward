@@ -92,7 +92,8 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
     stale, incomplete, generated_at, judge, store (absolute path of the gated
     store), path (what pytest ran), warnings: {skipped, failed, errors, deselected,
     xfailed, scrubbed,
-    scrub_unmatched (custom scrub rules that matched nothing),
+    scrub_unmatched (custom scrub rules that matched nothing), scrub_rules (per custom
+    rule: values and behaviors it replaced, and whether that changed since the last run),
     pytest_returncode, pytest_output_tail}}.
     boundary is one of:
       "intact"     done: no unapproved change;
@@ -124,6 +125,7 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
         "xfailed": result["xfailed"],
         "scrubbed": result["scrubbed"],
         "scrub_unmatched": result["scrub_unmatched"],
+        "scrub_rules": result["scrub_rules"],
         "pytest_returncode": result["pytest_returncode"],
         "pytest_output_tail": result["output_tail"],
     }

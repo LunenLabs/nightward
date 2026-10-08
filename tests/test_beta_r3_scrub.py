@@ -92,9 +92,12 @@ def test_an_unmatched_scoped_rule_names_its_conftest(tmp_path):
     assert rule.startswith("register_field('nope')") and "conftest.py" in rule
 
 
-def test_rules_registered_outside_a_conftest_stay_global():
+def test_rules_registered_in_a_test_module_are_scoped_to_its_directory():
+    # D28 (round 4): no rule is global any more; a test module scopes like a conftest.
     scrub.register_field("token")
     assert scrub.scrub_counted({"token": "x"}, path=Path("/elsewhere/test_x.py"))[0] == {
+        "token": "x"}
+    assert scrub.scrub_counted({"token": "x"}, path=Path(__file__))[0] == {
         "token": "<SCRUBBED>"}
 
 
@@ -105,7 +108,8 @@ def test_scoped_rule_applies_only_under_its_directory(tmp_path):
     outside = tmp_path / "billing" / "test_b.py"
     assert scrub.scrub_counted({"token": "x"}, path=inside)[0] == {"token": "<SCRUBBED>"}
     assert scrub.scrub_counted({"token": "x"}, path=outside)[0] == {"token": "x"}
-    assert scrub.scrub_counted({"token": "x"})[0] == {"token": "x"}   # unknown test
+    # no test file (library use of scrub()): every rule applies
+    assert scrub.scrub_counted({"token": "x"})[0] == {"token": "<SCRUBBED>"}
 
 
 def test_doctor_names_the_conftest_to_put_a_rule_in(tmp_path):

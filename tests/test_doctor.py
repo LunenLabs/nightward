@@ -33,7 +33,7 @@ def _kinds(found):
 
 def _apply(rule: str, payload):
     """Run a suggested conftest line against a payload, as the plugin would."""
-    exec(rule, {"scrub": scrub})
+    exec(compile(rule, "conftest.py", "exec"), {"scrub": scrub})   # a conftest line (D28)
     try:
         return scrub.scrub(payload)
     finally:
