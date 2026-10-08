@@ -26,7 +26,7 @@ BASELINE = [
     Behavior("loyalty_points", {"earned": 28, "tier": "silver"}, group="billing"),
     Behavior("user_login", {"status": "ok", "session": "<scrubbed>", "mfa": False}, group="auth"),
     Behavior("password_policy", {"min_len": 8, "needs_symbol": True}, group="auth"),
-    Behavior("주문_검색", {"results": 12, "정렬": "관련도순"}, group="검색"),
+    Behavior("order_search", {"results": 12, "sort": "relevance"}, group="search"),
 ]
 
 # --- this run's observed behaviors (after an AI "fixed" the tax rule) -------
@@ -42,7 +42,7 @@ PENDING = [
     # NEW: a brand-new behavior appeared
     Behavior("checkout_total_with_coupon", {"subtotal": 25.50, "discount": 5.0, "total": 23.31},
              group="billing"),
-    # 주문_검색 (검색) is GONE this run -> REMOVED (could be a real regression)
+    # order_search (search) is GONE this run -> REMOVED (could be a real regression)
 ]
 
 
@@ -60,10 +60,8 @@ def main(out_dir: str = "demo-site") -> None:
         store.write_run_meta({"skipped": 1, "failed": 0})
 
         # recompute the report the same way the CLI does
-        from nightward.core.blast import aggregate
-        from nightward.core.diff import compare
-        report = aggregate(compare(store.load_baseline(), store.load_pending()))
-        store.write_report(report)
+        from nightward.runner import recompute
+        report = recompute(store)
 
         out = build_site(tw, out_dir)
         print(f"demo site -> {out}  (boundary: {report['boundary']}, "

@@ -91,6 +91,7 @@ def test_r4_reject_cannot_escape_the_store(tmp_path):
 
 
 def test_r4_reject_unknown_name_is_an_error(tmp_path):
+    Store(tmp_path / ".nightward").ensure()   # a missing store is its own error (R1-OPS-07)
     r = cli("reject", "ghost", cwd=tmp_path)
     assert r.returncode == 2
     assert "ghost" in r.stderr
@@ -149,9 +150,11 @@ def test_r6_init_gitignore_follows_dir(tmp_path):
 def test_r6_init_default_dir_lines_unchanged(tmp_path):
     cli("init", cwd=tmp_path)
     gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert gi[-6:] == [".nightward/pending/", ".nightward/rejected/",
+    # rejected/ is committed (D17): a rejection must protect every clone.
+    assert gi[-7:] == [".nightward/pending/",
                        ".nightward/report.json", ".nightward/run_meta.json",
-                       ".nightward/pending.tmp/", ".nightward/**/*.tmp"]
+                       ".nightward/pending.tmp/", ".nightward/**/*.tmp", ".nightward/.lock",
+                       ".nightward/reviewed.json"]
 
 
 def test_r6_init_store_outside_cwd_is_not_ignored_here(tmp_path):
@@ -208,15 +211,17 @@ def test_r8_captured_abort_message_carries_pytest_output(tmp_path):
 def test_r9_corrupt_ledger_fails_loudly_and_is_preserved(tmp_path):
     ledger = tmp_path / "judge_verdicts.json"
     write(ledger, "<<<<<<< HEAD\n")
-    with pytest.raises(NightwardError, match="corrupt judge verdict ledger"):
+    with pytest.raises(NightwardError, match="merge conflict markers"):
         Judge("persona:lenient", cache_path=ledger)
     assert ledger.read_text(encoding="utf-8") == "<<<<<<< HEAD\n"
 
 
 def test_r9_hand_edited_entry_without_reason_still_replays(tmp_path):
+    # A model ruling (persona rulings re-judge under new rules: R1-FIN-03).
     ledger = tmp_path / "judge_verdicts.json"
-    write(ledger, json.dumps({"f1:f2:persona:strict": {"verdict": "SAME"}}))
-    v = Judge("persona:strict", cache_path=ledger).equivalent("a", "b", "f1", "f2")
+    spec = "anthropic:claude-haiku-4-5"
+    write(ledger, json.dumps({f"f1:f2:{spec}": {"verdict": "SAME"}}))
+    v = Judge(spec, cache_path=ledger).equivalent("a", "b", "f1", "f2")
     assert v.verdict == "SAME" and v.cached
 
 
@@ -235,7 +240,7 @@ def test_r10_approve_all_matches_the_report(tmp_path):
     cli("run", ".", "--judge", "persona:lenient", cwd=tmp_path)
     r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "count" in r.stdout and "summary" not in r.stdout
+    assert "approved count" in r.stdout and "approved summary" not in r.stdout
     approved = json.loads((tmp_path / ".nightward" / "baseline" / "summary.approved.json")
                           .read_text(encoding="utf-8"))
     assert approved["payload"] == "market went up"  # original anchor kept
@@ -250,6 +255,7 @@ def test_r10_approve_name_and_all_together_is_an_error(tmp_path):
 
 # R11: `view` on a busy port died with a raw OSError traceback.
 def test_r11_view_busy_port_is_a_clean_error(tmp_path):
+    Store(tmp_path / ".nightward").ensure()   # a missing store is its own error (R1-OPS-07)
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
         busy.listen()

@@ -7,6 +7,7 @@ import pytest
 
 from nightward import mcp_server
 from nightward.core.baseline import Store
+from nightward.runner import recompute
 
 SAMPLE = '''
 def test_a(behavior):
@@ -29,10 +30,8 @@ def test_status_tool_reads_last_report(tmp_path):
     tw = tmp_path / ".nightward"
     store = Store(tw)
     store.ensure()
-    store.write_report({"boundary": "intact", "unapproved": 0,
-                        "counts": {"total": 0, "unchanged": 0, "new": 0,
-                                   "changed": 0, "removed": 0},
-                        "blast_radius": {}})
+    # A real report carries digests of its inputs; one without them reads stale.
+    recompute(store)
     out = mcp_server.status_tool(str(tw))
     assert out["boundary"] == "intact"
 

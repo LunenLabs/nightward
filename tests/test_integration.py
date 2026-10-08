@@ -101,8 +101,10 @@ def test_duplicate_name_fails_the_test(tmp_path):
         encoding="utf-8",
     )
     r = _cli("run", "test_dup.py", "--dir", str(tmp_path / ".nightward"), cwd=tmp_path)
-    # pytest reports a failure -> nightward warns but still exits 0 (returncode 1 path)
-    assert "warning" in r.stderr.lower() or r.returncode == 0
+    # pytest reports a failure -> the capture is incomplete: summary, then exit 1
+    # (R1-DATA-02: a green exit let CI merge a failing capture)
+    assert r.returncode == 1
+    assert "capture incomplete" in r.stderr
 
 
 def test_nonascii_payload_review_survives_legacy_encoding(tmp_path):

@@ -4,47 +4,110 @@ Layout (git-native, approvaltests-style):
     .nightward/
       baseline/<name>.approved.json    # committed — the regression boundary
       pending/<name>.received.json     # gitignored — this run's observed behavior
-      rejected/<name>.rejected.json    # audit trail of confirmed regressions
-      report.json                      # last blast radius
-      run_meta.json                    # last run's skipped/failed counts + judge spec
+      rejected/<name>.rejected.json    # committed — confirmed regressions (approve --all skips)
+      report.json                      # last blast radius (+ digests of what it compared)
+      run_meta.json                    # last run's counts, run token, judge spec
+      reviewed.json                    # the changes a human last saw (approve checks them)
 
 Every name-to-path mapping goes through `_file`, which validates the name, so
 no CLI argument can address a file outside the store.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
+import re
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
 
 from ..errors import NightwardError
+from ..shellquote import command
 from .behavior import Behavior, canonical_json, validate_name
 
 
 def _atomic_write(path: Path, text: str) -> None:
     """Write via a sibling temp file + os.replace, so readers never see a torn file."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    _write_lf(tmp, text)
     os.replace(tmp, path)
 
 
-def baseline_digest(baseline: dict[str, Behavior]) -> str:
-    """Identity of an approved boundary: changes iff any approved behavior does."""
+def _write_lf(path: Path, text: str) -> None:
+    # Always "\n": write_text would emit CRLF on Windows, and a baseline
+    # committed from Linux would then diff on every line (R2-OPS-05).
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _reuse(old: Path, new: Path, text: str) -> bool:
+    """Hard-link an unchanged file of the last capture instead of rewriting it.
+
+    Byte-identical captures are the common case, and on Windows every freshly
+    written file costs an antivirus scan at its first open (R3-DATA-07).
+    """
+    try:
+        if old.read_bytes() != text.encode("utf-8"):
+            return False
+        os.link(old, new)
+    except OSError:
+        return False
+    return True
+
+
+def digest(behaviors: dict[str, Behavior]) -> str:
+    """Identity of a behavior set (baseline or pending): changes iff any behavior does."""
     h = hashlib.sha256()
-    for name, b in sorted(baseline.items()):
+    for name, b in sorted(behaviors.items()):
         h.update(canonical_json([name, b.group, b.fingerprint()]).encode("utf-8"))
     return h.hexdigest()
+
+
+def change_token(old: Behavior | None, new: Behavior | None) -> str:
+    """Identity of one change as a human sees it: what it was and what it is now.
+
+    A review marks these per name, and approve/reject act only on a name whose
+    token is unchanged since (D19): an agent's later run, or a `git pull` that
+    moved the baseline, gives a different token.
+    """
+    def state(b: Behavior | None):
+        return None if b is None else [b.group, b.semantic, b.fingerprint()]
+    return hashlib.sha256(canonical_json([state(old), state(new)]).encode("utf-8")).hexdigest()
+
+
+def _file_text(b: Behavior) -> str:
+    # Trailing newline: git diffs and end-of-file-fixer hooks expect one. Layout
+    # only - fingerprints hash the payload, so existing baselines stay valid.
+    return canonical_json(b.to_dict()) + "\n"
 
 
 def _read_json(path: Path) -> object:
     """Parse a store file; any unreadable content becomes a NightwardError."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        text = path.read_text(encoding="utf-8")
+        return json.loads(text)
+    except UnicodeDecodeError as exc:
         raise NightwardError(f"corrupt file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        if _CONFLICT.search(text):
+            raise NightwardError(_conflict_message(path)) from exc
+        raise NightwardError(f"corrupt file {path}: {exc}") from exc
+
+
+# git's conflict markers at the start of a line (both sides approved differently).
+_CONFLICT = re.compile(r"^(<{7}|>{7})( |$)", re.M)
+
+
+def _conflict_message(path: Path) -> str:
+    msg = (f"{path} has unresolved merge conflict markers - keep one side "
+           f"(`git checkout --ours -- {path}` or `--theirs`), then `nightward run`")
+    for suffix in (".approved.json", ".received.json", ".rejected.json"):
+        if path.name.endswith(suffix):
+            name = path.name[:-len(suffix)]
+            approve = command("approve", [name]) or "nightward approve <name>"
+            return msg + f" and `{approve}` if the result should stand"
+    return msg
 
 
 class Store:
@@ -55,6 +118,7 @@ class Store:
         self.rejected_dir = self.root / "rejected"
         self.report_path = self.root / "report.json"
         self.meta_path = self.root / "run_meta.json"
+        self.reviewed_path = self.root / "reviewed.json"
 
     def ensure(self) -> None:
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
@@ -67,9 +131,7 @@ class Store:
     # ---- pending (this run) --------------------------------------------
     def write_pending(self, b: Behavior) -> None:
         self.pending_dir.mkdir(parents=True, exist_ok=True)
-        self._file(self.pending_dir, b.name, "received").write_text(
-            canonical_json(b.to_dict()), encoding="utf-8"
-        )
+        _write_lf(self._file(self.pending_dir, b.name, "received"), _file_text(b))
 
     def clear_pending(self) -> None:
         if self.pending_dir.exists():
@@ -86,10 +148,14 @@ class Store:
         if staging.exists():
             shutil.rmtree(staging)
         staging.mkdir(parents=True)
-        for b in behaviors:
-            self._file(staging, b.name, "received").write_text(
-                canonical_json(b.to_dict()), encoding="utf-8"
-            )
+        try:
+            for b in behaviors:
+                text, dst = _file_text(b), self._file(staging, b.name, "received")
+                if not _reuse(self._file(self.pending_dir, b.name, "received"), dst, text):
+                    _write_lf(dst, text)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         if self.pending_dir.exists():
             shutil.rmtree(self.pending_dir)
         staging.rename(self.pending_dir)
@@ -114,6 +180,9 @@ class Store:
     def load_pending(self) -> dict[str, Behavior]:
         return self._load_dir(self.pending_dir, "received")
 
+    def load_rejected(self) -> dict[str, Behavior]:
+        return self._load_dir(self.rejected_dir, "rejected")
+
     # ---- decisions -----------------------------------------------------
     def approve(self, name: str) -> None:
         """Promote a pending behavior into the baseline (add or change)."""
@@ -124,6 +193,15 @@ class Store:
         _atomic_write(self._file(self.baseline_dir, name, "approved"),
                       src.read_text(encoding="utf-8"))
 
+    def refresh_source(self, name: str, source: str) -> None:
+        """Record the test that now captures an approved behavior (D13).
+
+        Removal evidence only: the payload, group and fingerprint stay as approved.
+        """
+        path = self._file(self.baseline_dir, name, "approved")
+        b = Behavior.from_dict(_read_json(path))
+        _atomic_write(path, _file_text(dataclasses.replace(b, source=source)))
+
     def approve_removal(self, name: str) -> None:
         """Accept that a behavior is gone: drop it from the baseline."""
         dst = self._file(self.baseline_dir, name, "approved")
@@ -131,25 +209,50 @@ class Store:
             raise NightwardError(f"no baseline behavior named {name!r} to remove")
         dst.unlink()
 
-    def mark_rejected(self, name: str) -> None:
-        """Record a confirmed regression. Audit only — the baseline is untouched.
+    def mark_rejected(self, name: str, by: str | None = None) -> None:
+        """Record a confirmed regression. The baseline is untouched.
 
         The recorded snapshot is the received behavior, or (for a regression
-        that *removed* a behavior) the approved one that went missing.
+        that *removed* a behavior) the approved one that went missing. `by`
+        names who rejected it: the record is committed and shared (D17).
         """
         src = self._file(self.pending_dir, name, "received")
         if not src.exists():
             src = self._file(self.baseline_dir, name, "approved")
         if not src.exists():
             raise NightwardError(f"no pending or baseline behavior named {name!r} to reject")
+        record = Behavior.from_dict(_read_json(src)).to_dict()
+        if by:
+            record["rejected_by"] = by
         self.rejected_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._file(self.rejected_dir, name, "rejected"),
-                      src.read_text(encoding="utf-8"))
+                      canonical_json(record) + "\n")
+
+    def rejected_by(self, name: str) -> str | None:
+        """Who recorded the rejection of `name` (None: unknown or no record)."""
+        try:
+            data = _read_json(self._file(self.rejected_dir, name, "rejected"))
+        except (OSError, NightwardError):
+            return None
+        by = data.get("rejected_by") if isinstance(data, dict) else None
+        return by if isinstance(by, str) and by else None
+
+    def clear_rejection(self, name: str) -> bool:
+        """Drop a rejection record (an explicit approve overrides it)."""
+        f = self._file(self.rejected_dir, name, "rejected")
+        if not f.exists():
+            return False
+        f.unlink()
+        return True
 
     # ---- report --------------------------------------------------------
     def write_report(self, report: dict) -> None:
         self.report_path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(self.report_path, json.dumps(report, indent=2, ensure_ascii=False))
+
+    def invalidate_report(self) -> None:
+        """Drop the last report: it no longer describes the store (fail closed)."""
+        self.report_path.unlink(missing_ok=True)
 
     def load_report(self) -> dict | None:
         if not self.report_path.exists():
@@ -158,6 +261,30 @@ class Store:
         if not isinstance(report, dict):
             raise NightwardError(f"corrupt file {self.report_path}: expected a JSON object")
         return report
+
+    # ---- what a human last saw (D10, D19) --------------------------------
+    def mark_reviewed(self, seen: dict[str, str], via: str, current: dict[str, str]) -> None:
+        """Add the changes a human was just shown ({name: change token}).
+
+        Marks from earlier (scoped) reviews stay while they still match a
+        change in the report (`current`); approve checks each token against
+        the store.
+        """
+        merged = {n: t for n, t in self.load_reviewed().get("seen", {}).items()
+                  if current.get(n) == t}
+        _atomic_write(self.reviewed_path, json.dumps(
+            {"seen": merged | seen, "via": via}, ensure_ascii=False, sort_keys=True))
+
+    def load_reviewed(self) -> dict:
+        if not self.reviewed_path.exists():
+            return {}
+        try:
+            mark = _read_json(self.reviewed_path)
+        except NightwardError:
+            return {}
+        if not isinstance(mark, dict) or not isinstance(mark.get("seen"), dict):
+            return {}      # absent, or an older whole-capture mark: nothing seen
+        return mark
 
     # ---- run metadata (skipped/failed counts from the last run) ---------
     def write_run_meta(self, meta: dict) -> None:

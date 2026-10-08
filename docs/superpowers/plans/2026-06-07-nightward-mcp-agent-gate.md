@@ -2,39 +2,39 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** AI 에이전트가 `nightward_run`/`nightward_status`를 MCP 도구로 직접 호출해 회귀 경계를 측정하되, `approve`/`reject`(경계 이동)는 사람 CLI에만 남긴다.
+**Goal:** Let an AI agent call `nightward_run`/`nightward_status` directly as MCP tools to measure the regression boundary, while `approve`/`reject` (moving the boundary) stay in the human CLI only.
 
-**Architecture:** (1) `cli.run`의 캡처 로직을 `runner.py:execute_run`으로 추출해 CLI와 MCP가 *같은 측정값*을 공유한다(CLI 동작 회귀 0). (2) `mcp_server.py`의 도구 함수는 `mcp` 패키지를 import하지 않는 순수 함수라 optional dep 없이도 테스트된다 — `build_server`만 lazy import로 FastMCP에 등록한다. (3) `nightward mcp` 서브커맨드가 stdio 서버를 띄운다.
+**Architecture:** (1) Extract `cli.run`'s capture logic into `runner.py:execute_run` so the CLI and MCP share *the same measurement* (zero CLI behavior regressions). (2) The tool functions in `mcp_server.py` are pure functions that do not import the `mcp` package, so they are testable without the optional dep — only `build_server` registers them with FastMCP via a lazy import. (3) A `nightward mcp` subcommand starts the stdio server.
 
-**Tech Stack:** Python 3.10+, pytest(서브프로세스 캡처), typer(CLI), MCP Python SDK(FastMCP, optional extra), subprocess.
+**Tech Stack:** Python 3.10+, pytest (subprocess capture), typer (CLI), MCP Python SDK (FastMCP, optional extra), subprocess.
 
-**근거 spec:** `docs/superpowers/specs/2026-06-07-nightward-mcp-agent-gate-design.md`
+**Source spec:** `docs/superpowers/specs/2026-06-07-nightward-mcp-agent-gate-design.md`
 
 ---
 
 ## File Structure
 
-| 파일 | 책임 | 신규/수정 |
+| File | Responsibility | New/Modified |
 |------|------|-----------|
-| `src/nightward/runner.py` | `execute_run`(pytest 캡처+recompute, console 무출력) + `recompute`. CLI/MCP 공유. | **Create** |
-| `src/nightward/cli.py` | `run`을 `execute_run` 사용으로, `approve`를 `recompute` 사용으로 교체. `_recompute` 제거. `mcp` 서브커맨드 추가. | Modify |
-| `src/nightward/mcp_server.py` | `run_tool`/`status_tool`(순수) + `_TOOLS`(에이전트 표면) + `build_server`/`serve`(lazy FastMCP). approve/reject 미등록. | **Create** |
-| `pyproject.toml` | `mcp` optional extra 추가, `dev` extra에 `mcp` 추가(테스트용). | Modify |
-| `tests/test_runner.py` | `execute_run` 캡처·에러 단위 테스트(추출 회귀 가드). | **Create** |
-| `tests/test_mcp.py` | **격리 가드**(approve 미노출) + run/status 동작 + stdout 오염 방지(capfd) + 한글. | **Create** |
+| `src/nightward/runner.py` | `execute_run` (pytest capture + recompute, no console output) + `recompute`. Shared by CLI/MCP. | **Create** |
+| `src/nightward/cli.py` | Switch `run` to use `execute_run` and `approve` to use `recompute`. Remove `_recompute`. Add the `mcp` subcommand. | Modify |
+| `src/nightward/mcp_server.py` | `run_tool`/`status_tool` (pure) + `_TOOLS` (agent surface) + `build_server`/`serve` (lazy FastMCP). approve/reject not registered. | **Create** |
+| `pyproject.toml` | Add the `mcp` optional extra; add `mcp` to the `dev` extra (for tests). | Modify |
+| `tests/test_runner.py` | `execute_run` capture/error unit tests (extraction regression guard). | **Create** |
+| `tests/test_mcp.py` | **Isolation guard** (approve not exposed) + run/status behavior + no stdout pollution (capfd) + Hangul. | **Create** |
 
-**경계 원칙(spec §2, 타협 불가):** `_TOOLS`에 `approve`/`reject`가 들어가면 게이트가 자살한다. `build_server`는 `_TOOLS`만 등록하므로 `_TOOLS` 검사 = 노출 표면 검사 — 이게 격리 가드의 축.
+**Boundary principle (spec §2, non-negotiable):** if `approve`/`reject` get into `_TOOLS`, the gate commits suicide. `build_server` registers only `_TOOLS`, so checking `_TOOLS` = checking the exposed surface — this is the axis of the isolation guard.
 
 ---
 
-## Task 1: `runner.py` 추출 + `cli.py` 리팩터링 (CLI 회귀 0)
+## Task 1: Extract `runner.py` + refactor `cli.py` (zero CLI regressions)
 
 **Files:**
 - Create: `src/nightward/runner.py`
 - Test: `tests/test_runner.py`
-- Modify: `src/nightward/cli.py` (import, `_recompute` 제거, `run` 본문, `approve`의 호출부)
+- Modify: `src/nightward/cli.py` (imports, remove `_recompute`, `run` body, `approve` call site)
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_runner.py`
+- [ ] **Step 1: Write the failing test** — `tests/test_runner.py`
 
 ```python
 """runner.execute_run — shared capture logic behind CLI run and the MCP server."""
@@ -65,12 +65,12 @@ def test_execute_run_no_tests_raises(tmp_path):
         execute_run(str(tmp_path / "test_empty.py"), str(tmp_path / ".nightward"))
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [ ] **Step 2: Confirm it fails**
 
 Run: `pytest tests/test_runner.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'nightward.runner'`
 
-- [ ] **Step 3: `runner.py` 구현**
+- [ ] **Step 3: Implement `runner.py`**
 
 ```python
 """Shared run logic: capture behaviors via pytest, recompute the blast radius.
@@ -128,14 +128,14 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     }
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Confirm the tests pass**
 
 Run: `pytest tests/test_runner.py -v`
 Expected: PASS (2 passed)
 
-- [ ] **Step 5: `cli.py`를 `runner` 사용으로 리팩터링**
+- [ ] **Step 5: Refactor `cli.py` to use `runner`**
 
-5a. import 교체 — `from .core.blast import aggregate` 줄을 제거하고 `from .runner import execute_run, recompute`를 추가. 결과 import 블록(파일 상단):
+5a. Replace imports — remove the `from .core.blast import aggregate` line and add `from .runner import execute_run, recompute`. Resulting import block (top of file):
 
 ```python
 from .core.baseline import Store
@@ -146,7 +146,7 @@ from .signal import status_payload
 from .view import build_site
 ```
 
-5b. `_recompute` 헬퍼 정의(현재 `cli.py:71-74`)를 **삭제**:
+5b. **Delete** the `_recompute` helper definition (currently `cli.py:71-74`):
 
 ```python
 def _recompute(store: Store) -> dict:
@@ -155,7 +155,7 @@ def _recompute(store: Store) -> dict:
     return report
 ```
 
-5c. `run` 명령 본문(현재 `cli.py:114-142`)을 아래로 **교체**:
+5c. **Replace** the `run` command body (currently `cli.py:114-142`) with:
 
 ```python
 @app.command()
@@ -176,18 +176,18 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
     _print_summary(result["report"])
 ```
 
-5d. `approve` 명령의 마지막 줄(현재 `cli.py:195`) `_print_summary(_recompute(store))`를 `recompute`로:
+5d. Switch the last line of the `approve` command (currently `cli.py:195`), `_print_summary(_recompute(store))`, to `recompute`:
 
 ```python
     _print_summary(recompute(store))
 ```
 
-- [ ] **Step 6: 전체 테스트로 CLI 회귀 0 확인**
+- [ ] **Step 6: Confirm zero CLI regressions with the full suite**
 
 Run: `pytest -q`
-Expected: PASS — 기존 `tests/test_integration.py`(run/approve/gate/status 사이클, no-tests=exit 2, 한글 review)가 전부 그대로 통과. `ruff check .`도 통과(미사용 `aggregate` import 제거됨).
+Expected: PASS — the existing `tests/test_integration.py` (run/approve/gate/status cycle, no-tests = exit 2, Hangul review) all pass unchanged. `ruff check .` also passes (unused `aggregate` import removed).
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/nightward/runner.py src/nightward/cli.py tests/test_runner.py
@@ -196,13 +196,13 @@ git commit -m "refactor: extract execute_run/recompute into runner.py (CLI behav
 
 ---
 
-## Task 2: `mcp_server.py` — 도구 함수 + 격리 가드 + stdout 오염 방지
+## Task 2: `mcp_server.py` — tool functions + isolation guard + no stdout pollution
 
 **Files:**
 - Create: `src/nightward/mcp_server.py`
 - Test: `tests/test_mcp.py`
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_mcp.py`
+- [ ] **Step 1: Write the failing test** — `tests/test_mcp.py`
 
 ```python
 """MCP adapter — the agent-facing surface.
@@ -270,12 +270,12 @@ def test_run_tool_preserves_hangul(tmp_path):
     assert "결제" in [c["name"] for c in out["changes"]]
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [ ] **Step 2: Confirm it fails**
 
 Run: `pytest tests/test_mcp.py -v`
 Expected: FAIL — `ImportError: cannot import name 'mcp_server'`
 
-- [ ] **Step 3: `mcp_server.py` 구현**
+- [ ] **Step 3: Implement `mcp_server.py`**
 
 ```python
 """MCP server — let an AI agent trigger the gate, but never approve it.
@@ -337,12 +337,12 @@ def serve() -> None:
     build_server().run()
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Confirm the tests pass**
 
 Run: `pytest tests/test_mcp.py -v`
-Expected: PASS (6 passed) — `build_server`/`serve`는 아직 호출 안 하므로 `mcp` 미설치여도 통과.
+Expected: PASS (6 passed) — `build_server`/`serve` are not called yet, so this passes even without `mcp` installed.
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/nightward/mcp_server.py tests/test_mcp.py
@@ -351,14 +351,14 @@ git commit -m "feat(mcp): agent-facing run/status tools with approve/reject isol
 
 ---
 
-## Task 3: `nightward mcp` 서브커맨드 + `mcp` optional extra + 서버 빌드 검증
+## Task 3: `nightward mcp` subcommand + `mcp` optional extra + server build check
 
 **Files:**
 - Modify: `pyproject.toml` (`[project.optional-dependencies]`)
-- Modify: `src/nightward/cli.py` (`mcp` 서브커맨드)
-- Test: `tests/test_mcp.py` (build_server smoke 추가)
+- Modify: `src/nightward/cli.py` (`mcp` subcommand)
+- Test: `tests/test_mcp.py` (add build_server smoke test)
 
-- [ ] **Step 1: 실패하는 테스트 추가** — `tests/test_mcp.py` 끝에 append
+- [ ] **Step 1: Add the failing tests** — append to the end of `tests/test_mcp.py`
 
 ```python
 def test_build_server_registers_without_error():
@@ -376,14 +376,14 @@ def test_cli_exposes_mcp_subcommand():
     assert "mcp" in r.stdout
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [ ] **Step 2: Confirm they fail**
 
 Run: `pytest tests/test_mcp.py::test_build_server_registers_without_error tests/test_mcp.py::test_cli_exposes_mcp_subcommand -v`
-Expected: `test_build_server...` SKIP(미설치 시) 또는 FAIL(설치됐는데 API 안 맞을 때); `test_cli_exposes_mcp_subcommand` FAIL — help에 `mcp` 없음.
+Expected: `test_build_server...` SKIP (when not installed) or FAIL (installed but the API doesn't match); `test_cli_exposes_mcp_subcommand` FAIL — no `mcp` in help.
 
-- [ ] **Step 3: `pyproject.toml`에 의존성 추가**
+- [ ] **Step 3: Add the dependency to `pyproject.toml`**
 
-`[project.optional-dependencies]` 블록(현재 `dev = ["pytest>=7", "ruff>=0.5"]` 한 줄)을 아래로 교체:
+Replace the `[project.optional-dependencies]` block (currently the single line `dev = ["pytest>=7", "ruff>=0.5"]`) with:
 
 ```toml
 [project.optional-dependencies]
@@ -391,11 +391,11 @@ dev = ["pytest>=7", "ruff>=0.5", "mcp>=1.0"]
 mcp = ["mcp>=1.0"]
 ```
 
-그리고 설치: `pip install -e ".[dev]"` (FastMCP를 dev 환경에 들임 → smoke test가 SKIP이 아니라 실제 실행됨).
+Then install: `pip install -e ".[dev]"` (brings FastMCP into the dev environment → the smoke test actually runs instead of SKIPping).
 
-- [ ] **Step 4: `cli.py`에 `mcp` 서브커맨드 추가**
+- [ ] **Step 4: Add the `mcp` subcommand to `cli.py`**
 
-`status` 명령 정의 다음, `if __name__ == "__main__":` 앞에 추가:
+Add after the `status` command definition, before `if __name__ == "__main__":`:
 
 ```python
 @app.command("mcp")
@@ -406,19 +406,19 @@ def mcp_cmd():
     serve()
 ```
 
-(`mcp` 미설치 시 `serve()` 내부 `build_server`가 `NightwardError`를 던지고 `handle_errors`가 exit 2 + 안내 메시지로 변환한다.)
+(When `mcp` is not installed, `build_server` inside `serve()` raises `NightwardError`, and `handle_errors` converts it into exit 2 + a guidance message.)
 
-- [ ] **Step 5: 테스트 통과 확인**
+- [ ] **Step 5: Confirm the tests pass**
 
 Run: `pytest tests/test_mcp.py -v`
-Expected: PASS — `test_build_server_registers_without_error` 포함 통과(dev에 mcp 설치됨), `test_cli_exposes_mcp_subcommand` 통과.
+Expected: PASS — including `test_build_server_registers_without_error` (mcp is installed in dev), and `test_cli_exposes_mcp_subcommand` passes.
 
-- [ ] **Step 6: 전체 게이트**
+- [ ] **Step 6: Full gate**
 
-Run: `pytest -q` 그리고 `ruff check .`
-Expected: 모두 통과.
+Run: `pytest -q` and `ruff check .`
+Expected: all pass.
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add pyproject.toml src/nightward/cli.py tests/test_mcp.py
@@ -430,17 +430,17 @@ git commit -m "feat(mcp): nightward mcp stdio subcommand + mcp optional extra"
 ## Self-Review
 
 **1. Spec coverage:**
-- spec §3 공유 로직 추출(`execute_run`) → Task 1 ✓
-- spec §3.1 `nightward_run`/`nightward_status` 2도구 + 반환 형태(`status_payload` + `warnings`) → Task 2 `run_tool`/`status_tool` ✓
-- spec §3.1 approve/reject/init/view 미노출 → Task 2 `_TOOLS` + 격리 가드 테스트 ✓
-- spec §4 에러: no-tests → Task 1 `test_execute_run_no_tests_raises` ✓; status report 부재 → `unknown` → Task 2 `test_status_tool_no_report_is_unknown` ✓
-- spec §4 stdio 오염 금지 → `capture_output=True` + Task 2 `test_run_tool_does_not_pollute_stdout`(capfd) ✓
-- spec §4 인코딩(한글) → Task 2 `test_run_tool_preserves_hangul` ✓ (MCP transport의 `ensure_ascii=False`는 FastMCP가 JSON 직렬화 시 처리; 도구는 dict 반환까지 책임)
-- spec §7 `mcp` optional extra + `nightward mcp` 실행 → Task 3 ✓
-- spec §2 "트리거≠승인" 불변 → 격리 가드가 회귀 방지 ✓
+- spec §3 shared logic extraction (`execute_run`) → Task 1 ✓
+- spec §3.1 two tools `nightward_run`/`nightward_status` + return shape (`status_payload` + `warnings`) → Task 2 `run_tool`/`status_tool` ✓
+- spec §3.1 approve/reject/init/view not exposed → Task 2 `_TOOLS` + isolation guard test ✓
+- spec §4 errors: no-tests → Task 1 `test_execute_run_no_tests_raises` ✓; status with no report → `unknown` → Task 2 `test_status_tool_no_report_is_unknown` ✓
+- spec §4 no stdio pollution → `capture_output=True` + Task 2 `test_run_tool_does_not_pollute_stdout` (capfd) ✓
+- spec §4 encoding (Hangul) → Task 2 `test_run_tool_preserves_hangul` ✓ (`ensure_ascii=False` on the MCP transport is handled by FastMCP during JSON serialization; the tools are responsible up to returning a dict)
+- spec §7 `mcp` optional extra + running `nightward mcp` → Task 3 ✓
+- spec §2 "trigger ≠ approval" invariant → isolation guard prevents regressions ✓
 
-**2. Placeholder scan:** TODO/TBD/"적절한 처리" 없음. 모든 코드 블록 완전. ✓
+**2. Placeholder scan:** no TODO/TBD/"handle appropriately". All code blocks complete. ✓
 
-**3. Type consistency:** `execute_run` 반환 키(`report/skipped/failed/pytest_returncode`)를 Task 2 `run_tool`이 그대로 소비. `_TOOLS` 키(`nightward_run`/`nightward_status`)를 격리 테스트가 그대로 검사. `recompute`(public) 이름이 `runner.py` 정의와 `cli` import/호출에서 일치. ✓
+**3. Type consistency:** Task 2 `run_tool` consumes `execute_run`'s return keys (`report/skipped/failed/pytest_returncode`) as-is. The isolation test checks the `_TOOLS` keys (`nightward_run`/`nightward_status`) as-is. The `recompute` (public) name matches between its `runner.py` definition and the `cli` import/call. ✓
 
-**미해결 가정 1개:** FastMCP의 `server.tool(name=...)(fn)` 등록 API와 `server.run()`의 stdio 기본 transport는 MCP SDK 1.x 기준. `test_build_server_registers_without_error`가 이를 실제로 검증하므로, 버전이 어긋나면 Task 3 Step 5에서 빨강으로 드러난다(은폐되지 않음).
+**One unresolved assumption:** FastMCP's `server.tool(name=...)(fn)` registration API and `server.run()`'s default stdio transport are as of MCP SDK 1.x. `test_build_server_registers_without_error` actually verifies this, so a version mismatch shows up as red in Task 3 Step 5 (not hidden).
