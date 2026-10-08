@@ -151,10 +151,11 @@ def test_r6_init_default_dir_lines_unchanged(tmp_path):
     cli("init", cwd=tmp_path)
     gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
     # rejected/ is committed (D17): a rejection must protect every clone.
-    assert gi[-7:] == [".nightward/pending/",
+    # .lock.takeover: the stale-lock takeover mutex (R4-OPS-02), per-run too.
+    assert gi[-8:] == [".nightward/pending/",
                        ".nightward/report.json", ".nightward/run_meta.json",
                        ".nightward/pending.tmp/", ".nightward/**/*.tmp", ".nightward/.lock",
-                       ".nightward/reviewed.json"]
+                       ".nightward/.lock.takeover", ".nightward/reviewed.json"]
 
 
 def test_r6_init_store_outside_cwd_is_not_ignored_here(tmp_path):

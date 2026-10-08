@@ -128,7 +128,7 @@ DEFAULT_SITE = "nightward-site"   # `view` output: holds captured data, never co
 # ledger keeps judged-SAME boundaries deterministic on fresh clones / CI, and a
 # rejection must protect every clone, not just the machine that made it (D17).
 TRANSIENT_ENTRIES = ("pending/", "report.json", "run_meta.json",
-                     "pending.tmp/", "**/*.tmp", ".lock", "reviewed.json")
+                     "pending.tmp/", "**/*.tmp", ".lock", ".lock.takeover", "reviewed.json")
 # Ignore rules older versions of `init` wrote that must now go.
 LEGACY_ENTRIES = ("rejected/",)
 GITIGNORE_HEADER = "# nightward: approved baseline IS committed; transient state is not"

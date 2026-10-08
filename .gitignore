@@ -5,6 +5,7 @@
 .nightward/pending.tmp/
 .nightward/**/*.tmp
 .nightward/.lock
+.nightward/.lock.takeover
 .nightward/reviewed.json
 
 __pycache__/

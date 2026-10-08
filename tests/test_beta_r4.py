@@ -325,3 +325,51 @@ def test_new_rejections_record_reviewer_and_token(fee):
     assert rec["rejected_by"] and rec["token"]
     assert cli("gate", cwd=tmp_path).returncode == 1            # binding: breached, not stale
     assert status_json(tmp_path)["boundary"] == "breached"
+
+
+# ---- R4-OPS-02: a stale-lock takeover lets exactly one writer in ----------------
+
+def test_stale_lock_takeover_admits_one_writer(tmp_path):
+    # Calls the lock code directly: many contenders released at once onto the
+    # lock a killed run left behind. Holders must never overlap.
+    import socket
+    import threading
+    import time
+
+    from nightward.core.lock import store_lock
+    from nightward.errors import NightwardError
+    store = tmp_path / ".nightward"
+    store.mkdir()
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    stale = json.dumps({"pid": dead.pid, "host": socket.gethostname(),
+                        "command": "killed run", "since": "s"})
+    for _ in range(40):
+        write(store / ".lock", stale)
+        go = threading.Barrier(16)
+        held, errors = [], []
+
+        def contend(go=go, held=held, errors=errors):
+            go.wait()
+            try:
+                with store_lock(store, "racer"):
+                    a = time.perf_counter()
+                    time.sleep(0.05)
+                    held.append((a, time.perf_counter()))
+            except NightwardError:
+                pass
+            except Exception as exc:  # noqa: BLE001 - any crash is a failure here
+                errors.append(exc)
+
+        threads = [threading.Thread(target=contend) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert not errors, errors
+        held.sort()
+        assert held, "nobody took over the stale lock"
+        assert all(a2 >= b1 for (_, b1), (a2, _) in zip(held, held[1:], strict=False)), held
+        assert not (store / ".lock").exists()
+        assert not (store / ".lock.takeover").exists()
+

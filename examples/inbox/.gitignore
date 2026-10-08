@@ -5,4 +5,5 @@
 .nightward/pending.tmp/
 .nightward/**/*.tmp
 .nightward/.lock
+.nightward/.lock.takeover
 .nightward/reviewed.json

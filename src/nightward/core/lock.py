@@ -157,11 +157,36 @@ def store_lock(root: Path | str, command: str, token: str | None = None) -> Iter
         release(root, info)
 
 
+# Taking over a stale lock is check-then-delete-then-create: two writers that
+# both saw the stale record could each delete the other's fresh lock (R4-OPS-02).
+# The takeover itself is serialized by a second O_EXCL file; a takeover mutex
+# left behind by a killed process expires after _TAKEOVER_TTL seconds.
+_TAKEOVER_TTL = 30.0
+
+
 def _take_over(path: Path, holder: dict, info: dict) -> bool:
-    # Re-check right before removing: another writer may have taken it over.
-    if read_lock(path.parent) != holder:
+    mutex = path.with_name(path.name + ".takeover")
+    try:
+        fd = os.open(mutex, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except (FileExistsError, PermissionError):
+        try:
+            if time.time() - mutex.stat().st_mtime > _TAKEOVER_TTL:
+                _unlink(mutex)
+        except OSError:
+            pass
         return False
-    return _unlink(path) and _try_create(path, info)
+    os.close(fd)
+    try:
+        # Only now is the re-check meaningful: nobody else can be between it
+        # and the delete.
+        current = read_lock(path.parent)
+        if current is None:
+            return _try_create(path, info)
+        if current != holder:
+            return False
+        return _unlink(path) and _try_create(path, info)
+    finally:
+        _unlink(mutex)
 
 
 def _busy_message(root: Path, path: Path, holder: dict | None) -> str:
