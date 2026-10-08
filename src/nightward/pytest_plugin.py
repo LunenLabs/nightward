@@ -6,6 +6,7 @@ it. Behaviors are flushed to .nightward/pending only when --nightward-record is 
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 from pathlib import Path
@@ -50,6 +51,10 @@ class Recorder:
         self._broken: set[str] = set()
         # Deselected (-k/-m) tests: their behaviors were not checked (D21).
         self.deselected: set[str] = set()
+        # Tests left out at collection without being reported (D24):
+        # collect_ignore/--ignore paths, and items a hook dropped silently.
+        self.excluded: set[str] = set()
+        self.filtered = 0
 
     def begin(self, source: str) -> None:
         """A test (re)starts: drop what an earlier attempt of it captured.
@@ -70,6 +75,21 @@ class Recorder:
 
     def pytest_deselected(self, items) -> None:
         self.deselected.update(item.nodeid for item in items)
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_ignore_collect(self, collection_path, config):
+        ignored = yield
+        if ignored and _user_excluded(Path(collection_path), config):
+            self.excluded.add(Path(collection_path).name)
+        return ignored
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_collection_modifyitems(self, session, config, items):
+        before, reported = len(items), len(self.deselected)
+        result = yield
+        # Items gone without a pytest_deselected report: filtered by a hook.
+        self.filtered += before - len(items) - (len(self.deselected) - reported)
+        return result
 
     def pytest_runtest_logreport(self, report) -> None:
         if report.when == "setup":   # a fresh attempt (e.g. a rerun) starts clean
@@ -239,7 +259,19 @@ def _extra_args(config) -> list[str]:
     return extra
 
 
-def _scope(session, exitstatus, counts: dict, completed: list[str]) -> dict:
+def _user_excluded(path: Path, config) -> bool:
+    """Was `path` left out by the project (collect_ignore, --ignore, a hook),
+    rather than by pytest's own defaults (virtualenvs, norecursedirs)?"""
+    if path.is_dir():
+        if (path / "pyvenv.cfg").exists() or path.name == "__pycache__":
+            return False
+        return not any(fnmatch.fnmatch(path.name, pat)
+                       for pat in config.getini("norecursedirs"))
+    return path.suffix == ".py"
+
+
+def _scope(session, exitstatus, counts: dict, completed: list[str],
+           rec: Recorder | None = None) -> dict:
     """How much of the suite this run covered - removal evidence (D18).
 
     narrowed: -k/-m, deselection (incl. --lf) or a test-id argument.
@@ -277,6 +309,14 @@ def _scope(session, exitstatus, counts: dict, completed: list[str]) -> dict:
     if len(completed) != len(session.items):
         doubts.append(f"only {len(completed)} of {len(session.items)} collected test(s) "
                       f"ran and passed")
+    if rec is not None and (rec.excluded or rec.filtered > 0):
+        # collect_ignore, --ignore (also from addopts), a filtering hook: such a
+        # test never ran, and no counter says so (R4-OPS-01).
+        what = sorted(rec.excluded)
+        parts = ([f"collect_ignore/--ignore: {', '.join(what[:3])}"
+                  f"{' ...' if len(what) > 3 else ''}"] if what else [])
+        parts += [f"{rec.filtered} test(s) dropped by a hook"] if rec.filtered > 0 else []
+        doubts.append(f"tests were excluded at collection ({'; '.join(parts)})")
     return {"narrowed": narrowed, "clean": not doubts,
             "clean_doubt": "; ".join(dict.fromkeys(doubts)) or None}
 
@@ -304,7 +344,7 @@ def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None)
     # Ties run_meta to exactly this flush: `nightward report` trusts pending/
     # only when it still matches (R2-DATA-04).
     meta["pending_digest"] = digest({b.name: b for b in rec.behaviors})
-    meta |= _scope(session, exitstatus, meta, meta["completed"])
+    meta |= _scope(session, exitstatus, meta, meta["completed"], rec)
     last = store.load_run_meta()
     # Which behaviors the default scrubbers touched; "changed" lets `run` show
     # its note when that set moves instead of on every run.

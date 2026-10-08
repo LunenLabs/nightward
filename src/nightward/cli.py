@@ -772,7 +772,8 @@ def _removal_doubt(name: str, b, meta: dict) -> str | None:
     captures moved into skipped tests, --collect-only, --ignore), so only a
     clean whole-suite run proves a removal (see pytest_plugin._scope), and
     then only if the behavior's recorded test ran and passed under that exact
-    id. Baselines without a recorded test follow the same run rule.
+    id (D24) - so a test excluded at collection can't fake proof. Baselines
+    without a recorded test are never bulk-removable (approve --remove).
     """
     if "clean" not in meta:
         return ("the last run recorded no removal evidence (an older nightward, or no "
@@ -781,9 +782,13 @@ def _removal_doubt(name: str, b, meta: dict) -> str | None:
         return (f"the last run was not a clean whole-suite run ({meta.get('clean_doubt')}) "
                 f"- only `nightward run` of the whole suite with no extra pytest arguments, "
                 f"and every test passing, proves a removal")
-    if b.source and b.source not in set(meta.get("completed") or ()):
-        return (f"its recorded test {b.source} did not run under that id (renamed, "
-                f"re-parametrized or deleted?)")
+    if not b.source:
+        # No recorded test: nothing can show it ran without capturing (D24).
+        return ("no recorded test (a baseline from before sources existed) - only an "
+                "explicit `nightward approve --remove NAME` drops it")
+    if b.source not in set(meta.get("completed") or ()):
+        return (f"its recorded test {b.source} was not collected and passed under that "
+                f"id this run (renamed, re-parametrized, excluded or deleted?)")
     return None
 
 
@@ -817,6 +822,11 @@ APPROVE_GROUP_OPT = typer.Option(
                           "--all limited to the group, rejections kept",
     show_default=False)
 
+REMOVE_GROUP_OPT = typer.Option(
+    None, "--remove-group",
+    help="Drop every REMOVED behavior of this group (repeatable), like --remove",
+    show_default=False)
+
 
 @app.command()
 @handle_errors
@@ -829,13 +839,58 @@ def approve(names: list[str] | None = APPROVE_NAMES_ARG,
                      "a clean whole-suite run (no extra pytest arguments, nothing skipped, "
                      "deselected, xfailed or failing) in which their test passed "
                      "(drops them from the baseline)"),
+            remove: bool = typer.Option(
+                False, "--remove",
+                help="Drop the named REMOVED behaviors from the baseline - your decision, "
+                     "no run proof needed. Refuses any name that isn't REMOVED in the last "
+                     "(reviewed) report"),
+            remove_group: list[str] | None = REMOVE_GROUP_OPT,
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
-    if sum(map(bool, (all_, names, group))) > 1:
+    if remove or remove_group:
+        if all_ or group or include_removed or (remove_group and names):
+            raise NightwardError("--remove NAME... and --remove-group G stand alone: no "
+                                 "--all, --group or --include-removed")
+        if remove and not names:
+            raise NightwardError("--remove needs the behavior names to drop")
+    elif sum(map(bool, (all_, names, group))) > 1:
         raise NightwardError("pick one: behavior names, --group or --all (not both)")
     store = _existing_store(dir)
     with store_lock(store.root, "nightward approve"):
-        _approve(store, dir, names, all_, include_removed, groups=group)
+        if remove or remove_group:
+            _remove(store, names or [], remove_group or [])
+        else:
+            _approve(store, dir, names, all_, include_removed, groups=group)
+
+
+def _remove(store: Store, names: list[str], groups: list[str]) -> None:
+    """Drop exactly these REMOVED behaviors: an explicit human decision, so no run
+    proof is needed (D25) - but only what a fresh, reviewed report shows as REMOVED."""
+    report = _fresh_report(store, "remove")
+    removed = {it["name"]: it.get("group") or "(ungrouped)" for it in _report_items(report)
+               if it.get("kind") == REMOVED}
+    if groups:
+        names = sorted(n for n, g in removed.items() if g in groups)
+        if not names:
+            raise NightwardError(f"no REMOVED behavior in group "
+                                 f"{', '.join(map(repr, groups))}; nothing was removed")
+    names = list(dict.fromkeys(names))
+    wrong = [n for n in names if n not in removed]
+    if wrong:
+        raise NightwardError(f"not REMOVED in the last report: {_shown(wrong)} - --remove "
+                             f"only drops behaviors that stopped being captured; nothing was "
+                             f"removed")
+    baseline, pending = store.load_baseline(), store.load_pending()
+    _check_reviewed(store, names, baseline, pending, "remove")
+    rejected = standing_rejections(store, baseline, pending)
+    for n in names:
+        store.approve_removal(n)
+        console.print(f"[green]removed[/green] {escape(n)}")
+        if n in rejected and store.clear_rejection(n):
+            console.print(f"  [dim]cleared the rejection of {escape(n)}[/dim]")
+    console.print(f"[dim]{len(names)} behavior(s) dropped from the baseline - commit the "
+                  f"deletions[/dim]")
+    _print_summary(recompute(store, judge=judge_from_meta(store)))
 
 
 def _group_names(store: Store, baseline, pending, judge, groups: list[str],
@@ -967,11 +1022,14 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
             by_reason.setdefault(why, []).append(n)
         for why, which in by_reason.items():
             console.print(f"  - {escape(', '.join(which))}: {escape(why)}", soft_wrap=True)
-        console.print("  if a removal is intended, accept it with `nightward approve <name>`.")
+        console.print("  if a removal is intended, drop it explicitly: `nightward approve "
+                      "--remove NAME...` or `--remove-group G` (after `nightward review`).",
+                      soft_wrap=True)
     elif held:
         console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
                       f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
-                      f"a partial path. Accept them with `nightward approve <name>` or "
+                      f"a partial path. Drop intended ones with `nightward approve --remove "
+                      f"NAME...` / `--remove-group G`, or try "
                       f"`{'--group ... ' if groups else '--all '}--include-removed`.",
                       soft_wrap=True)
     _print_summary(recompute(store, judge=judge))

@@ -282,12 +282,17 @@ def test_legacy_partial_path_proves_no_removal(legacy_store, path):
     assert "whole-suite" in r.stdout
 
 
-def test_legacy_whole_suite_run_proves_removal(legacy_store):
+def test_legacy_removal_needs_an_explicit_remove_even_after_a_clean_run(legacy_store):
+    # D24 (supersedes D13/D18 for legacy baselines): no recorded test, no bulk proof.
     tmp_path, tw = legacy_store
     write(tmp_path / "test_b.py", 'def test_y(behavior):\n    behavior("y", 2, group="g")\n'
                                   'def test_z(behavior):\n    pass\n')
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert (tw / "baseline" / "z.approved.json").exists()
+    r = cli("approve", "--remove", "z", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (tw / "baseline" / "z.approved.json").exists()
 

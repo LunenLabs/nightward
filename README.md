@@ -67,7 +67,9 @@ nightward approve promote pending behavior(s) into the baseline
                   `approve A B C` works like --all --include-removed limited to those
                   names, while one name always applies, even a removal or a rejection;
                   `approve --group G` works like --all limited to group G, for groups
-                  too big to list on one command line).
+                  too big to list on one command line; `approve --remove NAME...` and
+                  `--remove-group G` drop exactly those REMOVED behaviors, no run proof
+                  needed - an explicit human removal of what review showed).
                   It promotes only changes a human was shown, exactly as shown,
                   through `run`, `review` or `view`: a scoped `review --group G`
                   covers only G, and a change captured again since (e.g. by an
@@ -131,12 +133,15 @@ so they read as REMOVED. That is why `approve --all` leaves removals alone. Each
 behavior records the test that captured it (`source`, never compared), and
 `--include-removed` only drops a removal after a **clean whole-suite run**: the
 default path (the rootdir or your configured `testpaths`), no extra pytest arguments
-(nothing after `--`, no `PYTEST_ADDOPTS`, no `--ignore`/`--collect-only`), pytest exit 0
-with every collected test passing and nothing skipped, xfailed, deselected or errored,
-and the behavior's recorded test ran under that exact id. Anything else keeps every
-removal and says why; a removal you intend is one explicit `nightward approve <name>`.
-Baselines from before sources existed follow the same rule; `approve --all` backfills
-`source` into unchanged baselines whose capturing test moved.
+(nothing after `--`, no `PYTEST_ADDOPTS`, no `--collect-only`), no test left out at
+collection (`collect_ignore`, `--ignore` even from `addopts`, a hook that drops items),
+pytest exit 0 with every collected test passing and nothing skipped, xfailed,
+deselected or errored, and the behavior's recorded test was collected and passed under
+that exact id. Baselines from before sources existed have no recorded test, so they are
+never removed in bulk. Anything else keeps every removal and says why. A removal you
+intend is an explicit decision instead: review it, then `nightward approve --remove
+NAME...` or `--remove-group G` (one `nightward approve <name>` also works).
+`approve --all` backfills `source` into unchanged baselines whose capturing test moved.
 Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 One writer per store: `run` (and MCP `nightward_run`), `approve` and `reject` hold

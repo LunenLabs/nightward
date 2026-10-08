@@ -78,7 +78,7 @@ def test_include_removed_keeps_removal_of_deleted_test(approved_pair):
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "b.approved.json").exists()
-    assert "approve <name>" in r.stdout
+    assert "approve --remove" in r.stdout
     assert cli("approve", "b", "--dir", str(tw), cwd=tmp_path).returncode == 0
     assert not (tw / "baseline" / "b.approved.json").exists()
 

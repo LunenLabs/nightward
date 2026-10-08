@@ -116,13 +116,16 @@ def test_direct_collect_only_capture_proves_no_removal(legacy_pair):
     assert baseline_names(tw) == ["a", "b"], r.stdout + r.stderr
 
 
-def test_clean_whole_suite_run_still_proves_a_legacy_removal(legacy_pair):
+def test_clean_whole_suite_run_does_not_bulk_remove_a_legacy_behavior(legacy_pair):
+    # D24 superseded this round's rule: a legacy (source-less) removal is explicit.
     tmp_path, tw = legacy_pair
     write(tmp_path / "test_b.py", "def test_b():\n    pass\n")
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
     r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert baseline_names(tw) == ["a"], r.stdout
+    assert baseline_names(tw) == ["a", "b"], r.stdout
+    assert "approve --remove" in r.stdout
 
 
 def test_renamed_source_test_is_no_removal_proof(tmp_path):
@@ -136,7 +139,7 @@ def test_renamed_source_test_is_no_removal_proof(tmp_path):
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert "b" in baseline_names(tw)
-    assert "test_a.py::test_b did not run" in r.stdout
+    assert "test_a.py::test_b was not collected and passed" in r.stdout
 
 
 # ---- D19: human decisions bind to exactly what the human saw -------------------
