@@ -408,6 +408,26 @@ function groupApproveNames(items) {
     .map(function (i) { return i.name; });
 }
 
+// A group header: its item count and the label of the `approve --group` chip.
+// The chip always covers the whole group, so when the kind filter hides some of
+// its NEW/CHANGED items the label says how many it will approve unseen (R4-WEB-04).
+function groupHead(allItems, visible) {
+  const names = groupApproveNames(allItems);
+  const shownNames = groupApproveNames(visible);
+  const hidden = names.filter(function (n) { return shownNames.indexOf(n) < 0; }).length;
+  const removals = names.length < allItems.length;
+  let label = null;
+  if (names.length) {
+    label = !hidden && !removals ? "approve this group"
+      : "approve all " + names.length + " NEW/CHANGED in this group" +
+        (hidden ? " (" + hidden + " hidden by your filters)" : "") +
+        (removals ? " - removals: approve each on its card" : "");
+  }
+  const count = visible.length === allItems.length ? allItems.length + " item(s)"
+    : visible.length + " of " + allItems.length + " item(s) shown";
+  return { label: label, count: count };
+}
+
 function renderGroups(report) {
   const root = $("groups");
   clear(root);
@@ -424,14 +444,9 @@ function renderGroups(report) {
     details.open = true;
     const summary = el("summary", { cls: "group-head" });
     summary.appendChild(el("span", { cls: "group-name", text: group }));
-    summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
-    // The chip covers the whole group, whatever the filters show.
-    const names = groupApproveNames(br[group]);
-    if (names.length) {
-      const label = names.length === br[group].length ? "approve this group"
-        : "approve this group's " + names.length + " NEW/CHANGED (removals: approve each on its card)";
-      summary.appendChild(copyChip(label, groupApproveCommand(group)));
-    }
+    const head = groupHead(br[group], items);
+    summary.appendChild(el("span", { cls: "group-count", text: head.count }));
+    if (head.label) summary.appendChild(copyChip(head.label, groupApproveCommand(group)));
     details.appendChild(summary);
 
     for (const it of items) details.appendChild(renderCard(it));
