@@ -68,3 +68,42 @@ def test_group_chip_counts_a_hidden_removal_only_as_hidden_not_as_approved():
 
 def test_group_without_new_or_changed_has_no_chip():
     assert chip([R], [R])["label"] is None
+
+
+# ---- R4-FIN-05: onboarding says to commit the decisions, not just the baseline --
+
+README = Path(__file__).parents[1] / "README.md"
+
+
+def cli(*args, cwd):
+    import sys
+    return subprocess.run([sys.executable, "-m", "nightward", *args], cwd=str(cwd),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def test_quickstart_commits_the_judge_ledger_and_rejections():
+    text = README.read_text(encoding="utf-8")
+    quickstart = text.split("```bash", 1)[1].split("```", 1)[0]
+    adds = [ln for ln in quickstart.splitlines() if ln.startswith("git add")]
+    assert adds, quickstart
+    line = adds[0]
+    assert "judge/" in line and "rejected/" in line, line
+    paths = line.split("#", 1)[0].split()[2:]
+    # either the whole store (init ignores the per-run files) or every committed dir
+    assert ".nightward" in paths or {".nightward/judge", ".nightward/rejected"} <= set(paths)
+
+
+@pytest.mark.parametrize("with_baseline", [False, True])
+def test_init_next_step_names_everything_to_commit(tmp_path, with_baseline):
+    if with_baseline:
+        from nightward.core.baseline import Store
+        from nightward.core.behavior import Behavior
+        store = Store(tmp_path / ".nightward")
+        store.ensure()
+        store.write_pending(Behavior(name="a", payload=1))
+        store.approve("a")
+    r = cli("init", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    out = " ".join(r.stdout.split())
+    for part in ("baseline/", "rejected/", "judge/"):
+        assert part in out, out

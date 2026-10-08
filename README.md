@@ -32,7 +32,7 @@ nightward init
 # 1. capture current behavior and approve it as the baseline
 nightward run example
 nightward approve --all
-git add .gitignore .nightward/baseline   # commit the approved baseline (= the boundary)
+git add .gitignore .nightward   # commit baseline/, rejected/, judge/ (init ignores per-run files)
 
 # 2. change the code, then re-run — the blast radius shows what moved
 nightward run example
