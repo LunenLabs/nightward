@@ -31,6 +31,7 @@ def test_h1_double_run_idempotent(tmp_path):
     write(tmp_path / "test_s.py", 'def test_s(behavior):\n    behavior("s", {"v": 1})\n')
     tw = tmp_path / ".tw"
     cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
     cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
@@ -45,6 +46,7 @@ def test_h2_removal_approval_via_cli(tmp_path):
           'def test_b(behavior):\n    behavior("b", {"v": 2})\n')
     tw = tmp_path / ".tw"
     cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
 
     # drop behavior "b"
@@ -53,6 +55,7 @@ def test_h2_removal_approval_via_cli(tmp_path):
     report = json.loads((tw / "report.json").read_text(encoding="utf-8"))
     assert report["counts"]["removed"] == 1
 
+    cli("review", "--dir", str(tw), cwd=tmp_path)  # D26: only review marks
     r = cli("approve", "b", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (tw / "baseline" / "b.approved.json").exists()
@@ -74,6 +77,7 @@ def test_h5_unicode_group_survives(tmp_path):
     tw = tmp_path / ".tw"
     env = dict(os.environ, PYTHONIOENCODING="cp949")
     cli("run", "test_g.py", "--dir", str(tw), cwd=tmp_path, env=env)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path, env=env)
     write(tmp_path / "test_g.py",
           'def test_g(behavior):\n    behavior("g", {"v": 2}, group="결제")\n')
@@ -142,6 +146,7 @@ def test_h11_skipped_test_warns(tmp_path):
           'def test_b(behavior):\n    behavior("b", {"v": 2})\n')
     tw = tmp_path / ".tw"
     cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
 
     # behavior "b" is now conditionally skipped, not removed on purpose

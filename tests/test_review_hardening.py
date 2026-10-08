@@ -184,6 +184,7 @@ def test_r8_aborted_run_keeps_previous_capture(tmp_path):
           'def test_a(behavior):\n    behavior("a", 1)\n'
           'def test_b(behavior):\n    behavior("b", 2)\n')
     assert cli("run", ".", cwd=tmp_path).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
     pending = tmp_path / ".nightward" / "pending"
     before = sorted(p.name for p in pending.iterdir())
@@ -234,10 +235,12 @@ def test_r10_approve_all_matches_the_report(tmp_path):
             '    behavior("count", {count})\n')
     write(test_py, body.format(text="market went up", count=1))
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", cwd=tmp_path)
 
     write(test_py, body.format(text="the market rose", count=2))
     cli("run", ".", "--judge", "persona:lenient", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "approved count" in r.stdout and "approved summary" not in r.stdout

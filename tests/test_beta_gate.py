@@ -45,6 +45,7 @@ def approved_price(tmp_path):
     write(tmp_path / "test_p.py", ENV_PRICE)
     tw = tmp_path / ".tw"
     assert cli("run", "test_p.py", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
     assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 0
     return tmp_path, tw
@@ -180,6 +181,7 @@ def test_failed_capture_run_exits_1_and_gate_blocks(tmp_path):
     assert report["incomplete"] == {"failed": 1, "errors": 1}
 
     # even once everything captured is approved, the gate stays closed
+    cli("review", "--dir", str(tw), cwd=tmp_path)  # D26: only review marks
     assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
     gate = cli("gate", "--dir", str(tw), cwd=tmp_path)
     assert gate.returncode == 1
@@ -221,6 +223,7 @@ def rejected_floor(tmp_path):
     write(tmp_path / "test_l.py", LIMITS)
     tw = tmp_path / ".tw"
     cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"BUG": "1"})
     assert cli("reject", "replica_floor", "--dir", str(tw), cwd=tmp_path).returncode == 0
@@ -255,6 +258,7 @@ def test_rejection_only_holds_the_rejected_payload(rejected_floor, tmp_path):
     tmp_path, tw = rejected_floor
     write(tmp_path / "test_l.py", LIMITS.replace("0 if bug else 1", "2"))
     cli("run", "test_l.py", "--dir", str(tw), cwd=tmp_path, env={"BUG": "1"})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert "kept (rejected)" not in r.stdout
     floor = json.loads((tw / "baseline" / "replica_floor.approved.json").read_text("utf-8"))
@@ -307,6 +311,7 @@ def suite(tmp_path):
         write(tmp_path / name, body)
     tw = tmp_path / ".tw"
     assert cli("run", ".", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
     return tmp_path, tw
 
@@ -320,6 +325,7 @@ def suite(tmp_path):
 def test_include_removed_holds_unproven_removals(suite, path, env, lost):
     tmp_path, tw = suite
     ran = cli("run", path, "--dir", str(tw), cwd=tmp_path, env=env)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / f"{lost}.approved.json").exists()
@@ -333,6 +339,7 @@ def test_include_removed_approves_proven_removal(suite):
     # test_keep ran to completion and no longer captures always2: a real removal.
     tmp_path, tw = suite
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"DROP_ALWAYS2": "1"})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (tw / "baseline" / "always2.approved.json").exists()
@@ -378,6 +385,7 @@ def test_legacy_baseline_without_source_needs_a_clean_run(suite):
         data.pop("source", None)
         f.write_text(canonical_json(data), encoding="utf-8")
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"PYTEST_ADDOPTS": '-m "not slow"'})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert (tw / "baseline" / "slow_report.approved.json").exists()
     assert "deselected" in r.stdout
@@ -398,6 +406,7 @@ def test_scrub_false_lets_a_datetime_change_breach(tmp_path):
     tw = tmp_path / ".tw"
     r = cli("run", "test_d.py", "--dir", str(tw), cwd=tmp_path)
     assert "default scrubbers masked 1 value(s) in 1 behavior(s)" in r.stderr
+    cli("review", "--dir", str(tw), cwd=tmp_path)  # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     cli("run", "test_d.py", "--dir", str(tw), cwd=tmp_path,
         env={"DUE": "2031-12-25T23:59:59+09:00"})

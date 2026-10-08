@@ -49,9 +49,11 @@ def test_shifted_parametrize_id_is_no_removal_proof(tmp_path):
     write(tmp_path / "test_svc.py", SVC_V1)
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     write(tmp_path / "test_svc.py", SVC_V2)
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"NO_QUEUE": "1"})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "svc.worker" in baseline_names(tw)
@@ -65,6 +67,7 @@ def test_capture_moved_into_a_skipped_test_in_one_change_is_kept(tmp_path):
           '    behavior("render.meta", 1, group="r")\n')
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     write(tmp_path / "test_a.py",
           'import pytest\n'
@@ -74,6 +77,7 @@ def test_capture_moved_into_a_skipped_test_in_one_change_is_kept(tmp_path):
           'def test_dev(behavior):\n'
           '    behavior("render.dev", "dev", group="r")\n')
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert "render.dev" in baseline_names(tw), r.stdout
 
@@ -100,6 +104,7 @@ def legacy_pair(tmp_path):
 def test_run_that_did_not_run_everything_proves_no_removal(legacy_pair, pytest_args, env):
     tmp_path, tw = legacy_pair
     cli("run", ".", "--", *pytest_args, cwd=tmp_path, env=env)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert baseline_names(tw) == ["a", "b"], r.stdout
@@ -133,10 +138,12 @@ def test_renamed_source_test_is_no_removal_proof(tmp_path):
                                   'def test_b(behavior):\n    behavior("b", 2)\n')
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     write(tmp_path / "test_a.py", 'def test_a(behavior):\n    behavior("a", 1)\n'
                                   'def test_b2():\n    pass\n')
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert "b" in baseline_names(tw)
     assert "test_a.py::test_b was not collected and passed" in r.stdout
@@ -162,6 +169,7 @@ def shop(tmp_path, monkeypatch):
     write(tmp_path / "test_shop.py", TEST_SHOP)
     assert cli("init", cwd=tmp_path).returncode == 0
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("UNIT", "12")
@@ -210,6 +218,7 @@ def test_reject_refuses_a_name_that_is_not_a_change(shop):
     fee = 'def test_fee(behavior):\n    behavior("checkout.fee", 0, group="billing")\n'
     write(tmp_path / "test_shop.py", TEST_SHOP + fee)
     cli("run", ".", cwd=tmp_path, env={"UNIT": "12"})
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "checkout.fee", cwd=tmp_path).returncode == 0
     cli("review", cwd=tmp_path)
     r = cli("reject", "checkout.fee", cwd=tmp_path)
@@ -244,6 +253,7 @@ def test_reject_overrules_a_judged_same(tmp_path):
     write(tmp_path / "test_loan.py", LOAN)
     cli("init", cwd=tmp_path)
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", cwd=tmp_path)
     r = cli("run", ".", cwd=tmp_path, env={"DECISION": "denied"})
     assert r.returncode == 0 and "intact" in r.stdout          # lenient: SAME
@@ -302,6 +312,7 @@ def payout(tmp_path):
     write(tmp_path / "test_payout.py", PAYOUT)
     cli("init", cwd=tmp_path)
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", cwd=tmp_path)
     assert cli("gate", cwd=tmp_path).returncode == 0
     return tmp_path, tmp_path / ".nightward"
@@ -359,6 +370,7 @@ def ml(tmp_path):
     write(tmp_path / "test_ml.py", ML)
     cli("init", cwd=tmp_path)
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
     return tmp_path, tmp_path / ".nightward"
 
@@ -412,6 +424,7 @@ def test_quoted_names_are_never_expanded(tmp_path):
     cli("init", cwd=tmp_path)
     cli("run", ".", cwd=tmp_path)
     env = {"region": "eu", "OS": "Windows_NT", "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    cli("review", cwd=tmp_path)  # D26: only review marks
     for name in ("price.$region", "p.%OS%", "~home"):
         r = cli("approve", name, cwd=tmp_path, env=env)
         assert r.returncode == 0 and f"approved {name} (" in r.stdout, (name, r.stdout, r.stderr)
@@ -427,6 +440,7 @@ def test_mcp_in_a_subdirectory_refuses_to_create_a_second_store(tmp_path, monkey
     write(tmp_path / "tests" / "test_a.py", 'def test_a(behavior):\n    behavior("a", 1)\n')
     cli("init", cwd=tmp_path)
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", cwd=tmp_path)
     monkeypatch.chdir(tmp_path / "tests")
     for call in (mcp_server.status_tool, mcp_server.run_tool):
@@ -504,8 +518,10 @@ def test_run_names_an_outdated_gitignore(tmp_path):
     r = cli("run", ".", cwd=tmp_path)
     assert "rejections (.nightward/rejected/) are git-ignored" in r.stderr, r.stderr
     assert "reviewed.json" in r.stderr and ".lock" in r.stderr
+    cli("review", cwd=tmp_path)  # D26: only review marks
     cli("approve", "--all", cwd=tmp_path)
     cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    cli("review", cwd=tmp_path)  # D26: only review marks
     r = cli("reject", "fee", cwd=tmp_path)
     assert r.returncode == 0 and "rejections" in r.stderr and "commit" not in r.stdout
     # init migrates the lines it owns; then run is quiet

@@ -103,6 +103,7 @@ def test_p8_monorepo_blast_isolation(tmp_path):
     tw = tmp_path / ".tw"
 
     assert cli("run", "test_many.py", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
 
     changed = (body.replace('"v": 0}', '"v": 999}')

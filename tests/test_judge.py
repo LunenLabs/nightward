@@ -223,6 +223,7 @@ def test_cli_run_with_persona_judge_keeps_boundary_intact(tmp_path):
         textwrap.dedent(TEST_FILE.replace("{SUMMARY!r}", repr("market went up today"))),
         encoding="utf-8")
     assert _cli("run", ".", cwd=tmp_path).returncode == 0
+    _cli("review", cwd=tmp_path)   # D26: only review marks
     assert _cli("approve", "--all", cwd=tmp_path).returncode == 0
 
     # reworded AI output, code/facts identical

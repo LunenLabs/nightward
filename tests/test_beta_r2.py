@@ -43,6 +43,7 @@ def approved_app(tmp_path):
     write(tmp_path / "test_app.py", TEST_APP)
     tw = tmp_path / ".tw"
     assert cli("run", ".", "--dir", str(tw), cwd=tmp_path).returncode == 0
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", "--dir", str(tw), cwd=tmp_path).returncode == 0
     assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 0
     return tmp_path, tw
@@ -138,6 +139,7 @@ def test_concurrent_runs_never_report_clobbered_removals(tmp_path):
     write(tmp_path / "test_c.py", PARAMS)
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     procs = [subprocess.Popen([sys.executable, "-m", "nightward", "run", ".", "--dir", str(tw)],
                               cwd=str(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -167,6 +169,7 @@ def reviewed_then_agent_ran(tmp_path, monkeypatch):
     write(tmp_path / "test_shop.py", TEST_SHOP)
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     monkeypatch.chdir(tmp_path)
     write(tmp_path / "shop.py", SHOP.replace('"Total"', '"Order total"'))
@@ -227,10 +230,12 @@ def test_moved_capture_is_not_proven_removed_by_its_old_test(tmp_path):
     write(tmp_path / "test_a.py", MOVED_V1)
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     write(tmp_path / "test_a.py", MOVED_V2)
     assert cli("run", ".", "--dir", str(tw), cwd=tmp_path).returncode == 0   # intact
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"CI_NO_K8S": "1"})
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "render.dev.approved.json").exists()
@@ -241,9 +246,11 @@ def test_approve_all_backfills_sources_of_unchanged_behaviors(tmp_path):
     write(tmp_path / "test_a.py", MOVED_V1)
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     write(tmp_path / "test_a.py", MOVED_V2)
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "refreshed" in r.stdout
@@ -263,6 +270,7 @@ def legacy_store(tmp_path):
         write(tmp_path / name, body)
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     for f in (tw / "baseline").glob("*.json"):
         data = json.loads(f.read_text("utf-8"))
@@ -276,6 +284,7 @@ def legacy_store(tmp_path):
 def test_legacy_partial_path_proves_no_removal(legacy_store, path):
     tmp_path, tw = legacy_store
     cli("run", path, "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert len(list((tw / "baseline").glob("*.json"))) == 3
@@ -320,9 +329,11 @@ def test_rejection_protects_a_fresh_clone(tmp_path):
     subprocess.run(["git", "init", "-q"], cwd=origin, check=True)
     assert cli("init", cwd=origin).returncode == 0
     cli("run", ".", cwd=origin)
+    cli("review", cwd=origin)   # D26: only review marks
     cli("approve", "--all", cwd=origin)
     write(origin / "app.py", APP.replace('"dev": 1', '"dev": 0'))     # regression
     cli("run", ".", cwd=origin)
+    cli("review", cwd=origin)  # D26: only review marks
     assert cli("reject", "replicas", cwd=origin).returncode == 0
     subprocess.run(["git", "add", "-A"], cwd=origin, check=True)
     subprocess.run([*git, "commit", "-qm", "reject"], cwd=origin, check=True)
@@ -331,6 +342,7 @@ def test_rejection_protects_a_fresh_clone(tmp_path):
     subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
     assert (clone / ".nightward" / "rejected" / "replicas.rejected.json").exists()
     cli("run", ".", cwd=clone)
+    cli("review", cwd=clone)   # D26: only review marks
     r = cli("approve", "--all", cwd=clone)
     assert "kept (rejected)" in r.stdout
     assert cli("gate", cwd=clone).returncode == 1
@@ -348,6 +360,7 @@ def test_incomplete_run_summary_says_incomplete(tmp_path):
           '        behavior("segment_mean", {"mean": float("nan")}, group="billing")\n')
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     r = cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"PR": "1"})
     assert r.returncode == 1
@@ -374,6 +387,7 @@ def approved_x(tmp_path):
     write(tmp_path / "pytest.ini", "[pytest]\nmarkers =\n    slow: slow\n")
     tw = tmp_path / ".tw"
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     return tmp_path, tw
 
@@ -393,6 +407,7 @@ def test_report_turns_a_plugin_capture_into_a_verdict(approved_x):
     assert "breached" in r.stdout and "x" in r.stdout
     gate = cli("gate", "--dir", str(tw), cwd=tmp_path)
     assert gate.returncode == 1 and "breached" in gate.stdout     # a verdict, not "stale"
+    cli("review", "--dir", str(tw), cwd=tmp_path)  # D26: only review marks
     assert cli("approve", "x", "--dir", str(tw), cwd=tmp_path).returncode == 0
 
 

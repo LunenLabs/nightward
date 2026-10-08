@@ -184,6 +184,7 @@ def test_cli_doctor_prints_every_new_finding_kind(tmp_path):
                               capture_output=True, text=True, encoding="utf-8",
                               env={**os.environ, **env})
     nw("run", ".")
+    nw("review")   # D26: only review marks
     nw("approve", "--all")
     nw("run", ".", A='{"b":2,"a":1}')
     r = nw("doctor")

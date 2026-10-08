@@ -72,6 +72,7 @@ def test_cli_typo_judge_does_not_break_approve(tmp_path):
     r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 2 and "no report" in r.stderr
     assert cli("run", ".", cwd=tmp_path).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
 
 
@@ -97,6 +98,7 @@ def test_cli_run_warns_when_the_judge_is_unavailable(tmp_path):
     import os
     _project(tmp_path)
     assert cli("run", ".", cwd=tmp_path).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     env["REPLY"] = REWORDED
@@ -300,6 +302,7 @@ def test_cli_run_uses_project_judge_and_override_is_not_inherited(tmp_path):
     import os
     _project(tmp_path)
     assert cli("run", ".", cwd=tmp_path).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
     _pyproject(tmp_path, "persona:editor")
     env = {k: v for k, v in os.environ.items() if k != "NIGHTWARD_JUDGE"}

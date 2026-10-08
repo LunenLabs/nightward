@@ -53,6 +53,7 @@ def test_full_capture_approve_gate_cycle(project):
     assert report["counts"]["new"] == 2
 
     # 2. approve all -> intact, baseline written
+    _cli("review", "--dir", str(tw), cwd=project)  # D26: only review marks
     r = _cli("approve", "--all", "--dir", str(tw), cwd=project)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "alpha.approved.json").exists()
@@ -68,6 +69,7 @@ def test_full_capture_approve_gate_cycle(project):
 def test_change_breaches_boundary_and_gate(project):
     tw = project / ".nightward"
     _cli("run", "test_sample.py", "--dir", str(tw), cwd=project)
+    _cli("review", "--dir", str(tw), cwd=project)   # D26: only review marks
     _cli("approve", "--all", "--dir", str(tw), cwd=project)
 
     # introduce a side effect
@@ -123,6 +125,7 @@ def test_nonascii_payload_review_survives_legacy_encoding(tmp_path):
     env = dict(os.environ, PYTHONIOENCODING="cp949")
 
     assert _cli("run", "test_kor.py", "--dir", str(tw), cwd=tmp_path, env=env).returncode == 0
+    _cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     _cli("approve", "--all", "--dir", str(tw), cwd=tmp_path, env=env)
 
     # change the Hangul value so review must print a diff containing Hangul

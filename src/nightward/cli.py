@@ -218,9 +218,10 @@ def _mark_reviewed(store: Store, report: dict | None, via: str,
     """Record the changes a human was just shown, so approve and reject act on
     exactly those (D10, D19). names: what was displayed (None: everything).
 
-    Only human surfaces call this (run/report/review/view) - never MCP: an
-    agent's run between review and approve must not choose what an approval
-    covers.
+    Only the surfaces that display diffs call this: `review` (what it printed)
+    and `view` (the dashboard) - never `run`/`report`, which list names only
+    (D26), and never MCP: an agent's run between review and approve must not
+    choose what an approval covers.
     """
     if not report or not report.get("pending_digest"):
         return
@@ -257,7 +258,7 @@ def _check_reviewed(store: Store, names: list[str], baseline, pending, verb: str
     seen = store.load_reviewed().get("seen")
     if seen is None:
         raise NightwardError(f"no human has reviewed this capture yet - run `nightward "
-                             f"review` (or `nightward run` / `nightward view`), then {verb}")
+                             f"review` (or `nightward view`), then {verb}")
     changed = [n for n in names
                if n in seen and seen[n] != change_token(baseline.get(n), pending.get(n))]
     unseen = [n for n in names if n not in seen]
@@ -557,7 +558,8 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                       "baseline, then `nightward review` what moved.")
     else:
         console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
-                      "then `nightward run <path>` and `nightward approve --all`.")
+                      "then `nightward run <path>`, `nightward review` and "
+                      "`nightward approve --all`.")
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -628,8 +630,10 @@ def run(ctx: typer.Context,
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
-    _mark_reviewed(_store(dir), result["report"], "run", _blast_names(result["report"]))
-    # A committed report.json lets a CI `gate` without `run` pass on an old verdict.
+    # run lists names, not diffs, so it marks nothing reviewed (D26).
+    if result["report"].get("blast_radius"):
+        console.print("[dim]next: `nightward review` shows the diffs; approve what it "
+                      "shows[/dim]")
     # A committed report.json lets a CI `gate` pass on an old verdict; an
     # ignored baseline or rejected/ never reaches CI or teammates.
     _warn_ignore_problems(dir)
@@ -655,7 +659,6 @@ def report_cmd(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"
     store = _existing_store(dir)
     report = recompute_capture(store)
     _print_summary(report)
-    _mark_reviewed(store, report, "report", _blast_names(report))
     _exit_if_incomplete(report)
 
 

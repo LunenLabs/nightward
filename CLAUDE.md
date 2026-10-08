@@ -38,7 +38,8 @@ pytest tests/test_view.py::test_build_site_intact
 pytest -k timestamp
 
 # dogfooding
-nightward run example            # README quickstart fixture
+nightward run example            # README quickstart fixture (names only)
+nightward review                 # shows the diffs - the only CLI step that marks them reviewed (D26)
 nightward approve --all          # NEW/CHANGED only; REMOVED needs --remove NAME/--remove-group or --include-removed
 nightward approve --group G      # --all limited to group G (any size; the dashboard's group chip)
 cd examples/petshop && nightward run .   # cascade demo (baseline committed)
@@ -161,9 +162,9 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   Not checked is never done (D23): such a report's boundary is `partial`; `gate`
   exits 1 on it unless `--allow-not-run` (a CI-yaml opt-in); MCP can't waive it.
 - **Decisions bind to what the human saw (D19).** Each report item carries a
-  `token` (`baseline.change_token`: old state -> new state). `run`/`report`/`review`/
-  `view` record the tokens they displayed in `reviewed.json` (a scoped review =
-  scoped mark); `approve` and `reject` refuse a name whose current token isn't
+  `token` (`baseline.change_token`: old state -> new state). `review` and `view`
+  record the tokens whose diffs they displayed in `reviewed.json` (a scoped review =
+  scoped mark; `run`/`report` print names only and mark nothing, D26); `approve` and `reject` refuse a name whose current token isn't
   there, and refuse a missing or stale report. `reject` only takes a name in the
   report (blast radius or judged-SAME). Any refused run (judge config, ledger, busy
   lock) invalidates report.json (`runner.refused_run_invalidates`).

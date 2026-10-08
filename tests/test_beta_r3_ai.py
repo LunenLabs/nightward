@@ -43,6 +43,7 @@ def _approved(tmp_path, judge="persona:editor"):
     if judge:
         _pyproject(tmp_path, judge)
     assert cli("run", ".", cwd=tmp_path, env=_env()).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path, env=_env()).returncode == 0
 
 
@@ -164,6 +165,7 @@ def test_two_branches_rulings_merge_without_conflict(tmp_path):
     assert sh("init", "-q", "-b", "main").returncode == 0
     assert sh("nw", "init").returncode == 0
     assert sh("nw", "run", ".").returncode == 0
+    assert sh("nw", "review").returncode == 0  # D26: only review marks
     assert sh("nw", "approve", "--all").returncode == 0
     sh("add", "-A")
     assert sh("commit", "-qm", "base").returncode == 0
@@ -224,6 +226,7 @@ def _monorepo(tmp_path):
         "'Your refund was approved.'\n"
         "    behavior('chat.reply', text, group='chat', semantic=True)\n", encoding="utf-8")
     assert cli("run", ".", cwd=tmp_path, env=_env()).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path, env=_env()).returncode == 0
 
 

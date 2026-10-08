@@ -222,3 +222,38 @@ def test_ignore_check_reads_a_non_ascii_store_path(tmp_path):
     r = cli("run", ".", "--dir", "저장소", cwd=tmp_path, env={"PYTHONUTF8": "0"})
     assert r.returncode == 0, r.stderr
     assert "not git-ignored" not in r.stderr and "warning" not in r.stderr, r.stderr
+
+
+# ---- R4-WEB-02 (D26): only displaying a diff counts as reviewing it ------------
+
+SHOP = ('import os\n'
+        'E = os.environ.get\n'
+        'def checkout(qty):\n'
+        '    return {"qty": qty, "total": qty * int(E("UNIT", "10"))}\n'
+        'def banner():\n'
+        '    return {"label": E("LABEL", "Total")}\n')
+TEST_SHOP = ('from shop import banner, checkout\n'
+             'def test_checkout(behavior):\n'
+             '    behavior("checkout.3", checkout(3), group="billing")\n'
+             'def test_ui(behavior):\n'
+             '    behavior("ui.banner", banner(), group="ui")\n')
+
+
+def test_run_alone_is_not_a_review(tmp_path):
+    write(tmp_path / "shop.py", SHOP)
+    write(tmp_path / "test_shop.py", TEST_SHOP)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    r = cli("approve", "--all", cwd=tmp_path)            # quickstart: run -> review -> approve
+    assert r.returncode == 2 and "nightward review" in r.stderr, r.stdout
+    cli("review", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    env = {"UNIT": "12", "LABEL": "Order total"}
+    cli("run", ".", cwd=tmp_path, env=env)
+    r = cli("review", "--group", "ui", cwd=tmp_path)
+    assert "not reviewed: checkout.3" in r.stdout
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 2 and "checkout.3" in r.stderr, r.stdout
+    tw = tmp_path / ".nightward"
+    assert json.loads((tw / "baseline" / "checkout.3.approved.json")
+                      .read_text("utf-8"))["payload"]["total"] == 30

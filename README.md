@@ -29,14 +29,15 @@ pip install -e .
 #    state (pending/, report.json, run_meta.json) and the dashboard (nightward-site/)
 nightward init
 
-# 1. capture current behavior and approve it as the baseline
-nightward run example
+# 1. capture current behavior, review it, and approve it as the baseline
+nightward run example       # lists what moved (names only)
+nightward review            # shows each diff - approve only covers what review showed
 nightward approve --all
 git add .gitignore .nightward/baseline   # commit the approved baseline (= the boundary)
 
 # 2. change the code, then re-run — the blast radius shows what moved
 nightward run example
-nightward review
+nightward review            # then `nightward approve --all` (intended) or fix the code
 
 # 3. gate it (exit 1 on any unapproved change) — wire this into CI / a ralph loop
 nightward gate
@@ -71,7 +72,8 @@ nightward approve promote pending behavior(s) into the baseline
                   `--remove-group G` drop exactly those REMOVED behaviors, no run proof
                   needed - an explicit human removal of what review showed).
                   It promotes only changes a human was shown, exactly as shown,
-                  through `run`, `review` or `view`: a scoped `review --group G`
+                  with its diff by `review` or `view` (`run` lists names only, so it
+                  counts as no review): a scoped `review --group G`
                   covers only G, and a change captured again since (e.g. by an
                   agent's nightward_run) or a stale report (a `git pull` moved
                   the baseline) is refused until you run/review again
