@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from typing import Any
 
 from .core.behavior import canonical_json
@@ -66,6 +67,18 @@ def _mask_fields(value: Any) -> Any:
     return value
 
 
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict:
+    out = dict(pairs)
+    if len(out) != len(pairs):
+        dupes = sorted(k for k, n in Counter(k for k, _ in pairs).items() if n > 1)
+        raise NightwardError(
+            f"scrubbing collapsed distinct dict keys into {dupes}: the values behind "
+            f"them would silently overwrite each other and hide changes. Don't key "
+            f"dicts by volatile values (timestamps/uuids) - use a list of records."
+        )
+    return out
+
+
 def scrub(payload: Any) -> Any:
     if _custom_fields:
         payload = _mask_fields(payload)
@@ -73,7 +86,7 @@ def scrub(payload: Any) -> Any:
     for pat, repl in (*_DEFAULT_SCRUBBERS, *_custom):
         text = pat.sub(repl, text)
     try:
-        return json.loads(text)
+        return json.loads(text, object_pairs_hook=_unique_keys)
     except json.JSONDecodeError as exc:
         raise NightwardError(
             "a scrubber produced invalid JSON. Replacement tokens must stay inside "

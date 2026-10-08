@@ -110,10 +110,15 @@ def from_xlsx(path: str | Path) -> dict:
     workbook = load_workbook(str(path), read_only=True, data_only=True)
     sheets = {}
     h = hashlib.sha256()
-    for ws in workbook.worksheets:
-        rows = 0
-        for row in ws.iter_rows(values_only=True):
-            rows += 1
-            h.update(repr(row).encode("utf-8"))
-        sheets[ws.title] = {"rows": rows, "cols": ws.max_column}
+    try:
+        for ws in workbook.worksheets:
+            rows = 0
+            for row in ws.iter_rows(values_only=True):
+                rows += 1
+                h.update(repr(row).encode("utf-8"))
+            sheets[ws.title] = {"rows": rows, "cols": ws.max_column}
+    finally:
+        # read_only workbooks hold the file open until closed — on Windows
+        # that locks the file against the next write/rename.
+        workbook.close()
     return {"sheets": sheets, "content_sha256": h.hexdigest()}

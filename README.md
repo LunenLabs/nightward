@@ -48,11 +48,18 @@ nightward run     re-run tests → capture → compute blast radius
 nightward review  show changed behaviors with diffs
 nightward doctor  name the volatile fields behind CHANGED behaviors, suggest scrub rules
 nightward approve promote pending behavior(s) into the baseline
+                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed)
 nightward reject  confirm a change as a real regression (boundary stays breached)
-nightward gate    exit 0/1 for CI and agent loops
+nightward gate    exit 0/1 for CI and agent loops (1 also if the report is stale)
 nightward status  machine-readable boundary signal (--json)
 nightward view    build a static, read-only dashboard and view it in a browser
 ```
+
+A skipped test or a partial path (`nightward run tests/test_a.py`) captures nothing for
+the behaviors it didn't reach, so they read as REMOVED. That is why `approve --all`
+leaves removals alone, and `--include-removed` refuses after a run with skipped or
+failed tests. Capture runs in a single process: `nightward run` forces `-n 0` if
+pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
 
 ## Semantic judge (v0.2) — gate nondeterministic AI text
 

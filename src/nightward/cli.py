@@ -8,11 +8,12 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from .core.baseline import Store
-from .core.diff import UNCHANGED, compare
+from .core.diff import REMOVED, UNCHANGED, compare
 from .errors import NightwardError
-from .runner import execute_run, judge_from_meta, recompute
+from .runner import execute_run, is_stale, judge_from_meta, recompute
 from .signal import status_payload
 from .view import build_site
 
@@ -36,15 +37,16 @@ err_console = Console(stderr=True, legacy_windows=False)
 
 DEFAULT_DIR = ".nightward"
 
-# judge_verdicts.json is deliberately NOT ignored: it is the committed ledger
-# that keeps judged-SAME boundaries deterministic on fresh clones / CI.
-GITIGNORE_LINES = [
-    "# nightward: approved baseline IS committed; transient state is not",
-    ".nightward/pending/",
-    ".nightward/rejected/",
-    ".nightward/report.json",
-    ".nightward/run_meta.json",
-]
+# Store entries that are per-run state, relative to the store dir.
+# judge_verdicts.json is deliberately NOT here: it is the committed ledger that
+# keeps judged-SAME boundaries deterministic on fresh clones / CI.
+TRANSIENT_ENTRIES = ("pending/", "rejected/", "report.json", "run_meta.json",
+                     "pending.tmp/", "**/*.tmp")
+GITIGNORE_HEADER = "# nightward: approved baseline IS committed; transient state is not"
+
+# Everything rich prints is parsed as markup, so captured data (names, groups,
+# diffs, payload keys) must go through escape() - a name like "total[eur]" would
+# otherwise vanish from the output and a payload containing "[/x]" would crash it.
 
 
 def handle_errors(fn):
@@ -54,7 +56,7 @@ def handle_errors(fn):
         try:
             return fn(*args, **kwargs)
         except NightwardError as exc:
-            err_console.print(f"[red]error:[/red] {exc}")
+            err_console.print(f"[red]error:[/red] {escape(str(exc))}")
             raise typer.Exit(2) from None
     return wrapper
 
@@ -67,6 +69,28 @@ def _check_dir(dir_: str) -> None:
     p = Path(dir_)
     if p.exists() and not p.is_dir():
         raise NightwardError(f"--dir {dir_!r} exists but is not a directory")
+
+
+def _require_report(store: Store) -> dict:
+    report = store.load_report()
+    if report is None:
+        raise NightwardError("no report yet - run `nightward run` first")
+    return report
+
+
+def _gitignore_lines(dir_: str) -> list[str] | None:
+    """Ignore rules for the store's transient entries, or None when the store
+    lives outside the current directory (a .gitignore here can't name it)."""
+    p = Path(dir_)
+    if p.is_absolute():
+        try:
+            p = p.relative_to(Path.cwd())
+        except ValueError:
+            return None
+    prefix = p.as_posix()
+    if prefix == ".." or prefix.startswith("../"):
+        return None
+    return [GITIGNORE_HEADER, *(f"{prefix}/{entry}" for entry in TRANSIENT_ENTRIES)]
 
 
 def _print_summary(report: dict) -> None:
@@ -82,11 +106,11 @@ def _print_summary(report: dict) -> None:
         console.print(f"[dim]{c['judged_same']} fingerprint mismatch(es) ruled "
                       f"semantically SAME by the judge[/dim]")
     for group, items in report.get("blast_radius", {}).items():
-        console.print(f"\n[yellow]group: {group}[/yellow]")
+        console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
         for it in items:
-            judged = (f" [dim](judged DIFFERENT by {it['judge_model']})[/dim]"
+            judged = (f" [dim](judged DIFFERENT by {escape(it['judge_model'])})[/dim]"
                       if it.get("judged") else "")
-            console.print(f"  - [[cyan]{it['kind']}[/cyan]] {it['name']}{judged}")
+            console.print(f"  - [[cyan]{it['kind']}[/cyan]] {escape(it['name'])}{judged}")
 
 
 @app.command()
@@ -96,11 +120,17 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
     _check_dir(dir)
     store = _store(dir)
     store.ensure()
-    console.print(f"[green]created[/green] {store.root}/ (baseline, pending)")
+    console.print(f"[green]created[/green] {escape(str(store.root))}/ (baseline, pending)")
 
+    lines = _gitignore_lines(dir)
+    if lines is None:
+        console.print(f"[yellow]note:[/yellow] {escape(dir)} is outside this directory - "
+                      "add ignore rules for its transient entries "
+                      f"({', '.join(TRANSIENT_ENTRIES)}) to the right .gitignore yourself")
+        lines = []
     gi = Path(".gitignore")
     existing = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
-    missing = [ln for ln in GITIGNORE_LINES if ln not in existing]
+    missing = [ln for ln in lines if ln not in existing]
     if missing:
         with gi.open("a", encoding="utf-8") as fh:
             if existing and existing[-1].strip():
@@ -121,7 +151,8 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
                        "Default: $NIGHTWARD_JUDGE")):
     """Re-run tests, capture behaviors, compute the blast radius."""
     _check_dir(dir)
-    console.print(f"[dim]$ pytest {path} --nightward-record --nightward-dir {dir}[/dim]")
+    console.print(f"[dim]$ pytest {escape(path)} --nightward-record "
+                  f"--nightward-dir {escape(dir)}[/dim]")
     result = execute_run(path, dir, judge_spec=judge)
     if result["pytest_returncode"] == 1:
         err_console.print("[yellow]warning:[/yellow] some tests failed - captured "
@@ -137,17 +168,16 @@ def run(path: str = typer.Argument(".", help="Path passed to pytest"),
 @handle_errors
 def review(dir: str = typer.Option(DEFAULT_DIR)):
     """Show the blast radius with full diffs."""
-    report = _store(dir).load_report()
-    if not report:
-        raise NightwardError("no report yet - run `nightward run` first")
-    if report["boundary"] == "intact":
+    report = _require_report(_store(dir))
+    if report.get("boundary") == "intact":
         console.print("[green]boundary intact - nothing to review[/green]")
         return
     for group, items in report.get("blast_radius", {}).items():
-        console.print(f"\n[yellow]group: {group}[/yellow]")
+        console.print(f"\n[yellow]group: {escape(group)}[/yellow]")
         for it in items:
-            console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {it['name']}[/bold]")
-            console.print(it.get("diff", "") or "[dim](no text diff)[/dim]")
+            console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]")
+            diff = it.get("diff", "")
+            console.print(escape(diff) if diff else "[dim](no text diff)[/dim]")
 
 
 def _approve_one(store: Store, name: str, baseline, pending) -> str:
@@ -163,29 +193,58 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
 @app.command()
 @handle_errors
 def approve(name: str | None = typer.Argument(None),
-            all_: bool = typer.Option(False, "--all", help="Approve every pending change"),
+            all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
+            include_removed: bool = typer.Option(
+                False, "--include-removed",
+                help="With --all, also accept REMOVED behaviors (drops them from the baseline)"),
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
+    if all_ and name:
+        raise NightwardError("give a behavior name or --all, not both")
     store = _store(dir)
     baseline = store.load_baseline()
     pending = store.load_pending()
+    # Reuse the last run's judge (cached verdicts): --all then approves exactly
+    # what the report lists as unapproved, and judged-SAME behaviors don't flip
+    # back to CHANGED the moment something else is approved. Approving a
+    # judged-SAME rewording explicitly by name still re-anchors it.
+    judge = judge_from_meta(store)
 
+    held: list[str] = []
     if all_:
-        targets = [c.name for c in compare(baseline, pending) if c.kind != UNCHANGED]
+        changes = [c for c in compare(baseline, pending, judge=judge) if c.kind != UNCHANGED]
+        removed = [c.name for c in changes if c.kind == REMOVED]
+        if removed and include_removed:
+            # A skipped/failed test captures nothing and looks REMOVED; approving
+            # that would silently shrink the boundary. Demand a complete run.
+            meta = store.load_run_meta()
+            if meta.get("skipped") or meta.get("failed"):
+                raise NightwardError(
+                    f"refusing --include-removed: the last run had "
+                    f"{meta.get('skipped', 0)} skipped and {meta.get('failed', 0)} failed "
+                    f"test(s), so REMOVED may be false. Re-run cleanly, or approve "
+                    f"removals one by name."
+                )
+        if not include_removed:
+            held = removed
+        targets = [c.name for c in changes if c.name not in held]
     elif name:
         targets = [name]
     else:
         raise NightwardError("specify a behavior name or --all")
-    if not targets:
+    if not targets and not held:
         console.print("nothing to approve - boundary already intact")
         return
 
     for n in targets:
         verb = _approve_one(store, n, baseline, pending)
-        console.print(f"[green]{verb}[/green] {n}")
-    # Reuse the last run's judge (cached verdicts) so judged-SAME behaviors
-    # don't flip back to CHANGED the moment something else is approved.
-    _print_summary(recompute(store, judge=judge_from_meta(store)))
+        console.print(f"[green]{verb}[/green] {escape(n)}")
+    if held:
+        console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
+                      f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
+                      f"a partial path. Accept them with `nightward approve <name>` or "
+                      f"`--all --include-removed`.", soft_wrap=True)
+    _print_summary(recompute(store, judge=judge))
 
 
 @app.command()
@@ -194,7 +253,7 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
     """Confirm a change as a real regression. Boundary stays breached."""
     store = _store(dir)
     store.mark_rejected(name)
-    console.print(f"[red]rejected[/red] {name} - boundary stays breached. "
+    console.print(f"[red]rejected[/red] {escape(name)} - boundary stays breached. "
                   f"Fix the code and re-run `nightward run`.")
 
 
@@ -212,17 +271,17 @@ def doctor(dir: str = typer.Option(DEFAULT_DIR)):
         console.print("[green]no CHANGED behaviors - nothing to diagnose[/green]")
         return
     for name, info in diag["behaviors"].items():
-        console.print(f"\n[bold]{name}[/bold]")
+        console.print(f"\n[bold]{escape(name)}[/bold]")
         for p in info["volatile"]:
-            console.print(f"  ~ {p}")
+            console.print(f"  ~ {escape(p)}")
         for p in info["structural"]:
-            console.print(f"  ! {p} [dim](structural - scrub cannot hide this)[/dim]")
+            console.print(f"  ! {escape(p)} [dim](structural - scrub cannot hide this)[/dim]")
     if diag["suggestions"]:
         console.print("\n[bold]if these fields are noise, not regressions[/bold] "
                       "(volatile by design), tame them in conftest.py:")
         console.print("  [cyan]from nightward import scrub[/cyan]")
         for line in diag["suggestions"]:
-            console.print(f"  [cyan]{line}[/cyan]")
+            console.print(f"  [cyan]{escape(line)}[/cyan]")
         console.print("then re-run [cyan]nightward run[/cyan]. If they are real "
                       "changes, approve or fix instead - never scrub a regression.")
         console.print("[yellow]caution:[/yellow] register_field masks that key in "
@@ -237,9 +296,12 @@ def doctor(dir: str = typer.Option(DEFAULT_DIR)):
 @handle_errors
 def gate(dir: str = typer.Option(DEFAULT_DIR)):
     """Exit 0 if the boundary is intact, 1 otherwise (for CI / agent loops)."""
-    report = _store(dir).load_report()
-    if report is None:
-        raise NightwardError("no report yet - run `nightward run` first")
+    store = _store(dir)
+    report = _require_report(store)
+    if is_stale(store, report):
+        console.print("[red]report is stale[/red] - the baseline changed since the last run; "
+                      "re-run `nightward run`")
+        raise typer.Exit(1)
     if report.get("boundary") == "intact":
         console.print("[green]boundary intact[/green]")
         raise typer.Exit(0)
@@ -259,12 +321,14 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
     """Build a static, read-only blast-radius dashboard (view it in a browser)."""
     _check_dir(dir)
     out_path = build_site(Path(dir), Path(out))
-    console.print(f"[green]built[/green] {out_path}/ (index.html, app.js, style.css, data.json)")
+    console.print(f"[green]built[/green] {escape(str(out_path))}/ "
+                  "(index.html, app.js, style.css, data.json)")
     if serve:
         from .view.serve import serve as _serve
         _serve(out_path, port=port, open_browser=open_browser)
     else:
-        console.print(f"open it with:  [cyan]python -m http.server -d {out_path} {port}[/cyan]  "
+        console.print(f"open it with:  [cyan]python -m http.server -d "
+                      f"{escape(str(out_path))} {port}[/cyan]  "
                       "(fetch needs http, not file://)")
 
 
@@ -273,7 +337,9 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
 def status(dir: str = typer.Option(DEFAULT_DIR),
            json_: bool = typer.Option(False, "--json", help="Machine-readable output")):
     """Print boundary status - the stop-condition signal for agent loops."""
-    payload = status_payload(_store(dir).load_report())
+    store = _store(dir)
+    report = store.load_report()
+    payload = status_payload(report, stale=is_stale(store, report))
     if json_:
         print(json.dumps(payload, ensure_ascii=False))
     else:

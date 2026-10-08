@@ -5,7 +5,7 @@ This is the layer that sets nightward apart from a plain snapshot library:
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from .diff import CHANGED, NEW, REMOVED, UNCHANGED, Change
 
@@ -17,12 +17,13 @@ def aggregate(changes: list[Change]) -> dict:
     for c in unapproved:
         by_group[c.group or "(ungrouped)"].append(c.to_dict() | {"diff": c.diff_text})
 
+    by_kind = Counter(c.kind for c in changes)
     counts = {
         "total": len(changes),
-        "unchanged": sum(1 for c in changes if c.kind == UNCHANGED),
-        "new": sum(1 for c in changes if c.kind == NEW),
-        "changed": sum(1 for c in changes if c.kind == CHANGED),
-        "removed": sum(1 for c in changes if c.kind == REMOVED),
+        "unchanged": by_kind[UNCHANGED],
+        "new": by_kind[NEW],
+        "changed": by_kind[CHANGED],
+        "removed": by_kind[REMOVED],
         # fingerprint mismatches an LLM judge ruled equivalent (audit visibility)
         "judged_same": sum(1 for c in changes if c.kind == UNCHANGED and c.judged),
     }

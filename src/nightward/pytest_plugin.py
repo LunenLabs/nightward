@@ -19,16 +19,24 @@ from .scrub import scrub
 class Recorder:
     def __init__(self) -> None:
         self.behaviors: list[Behavior] = []
-        self._seen: set[str] = set()
+        self._seen: dict[str, str] = {}  # casefolded name -> name as captured
 
     def add(self, name: str, value, group: str | None = None,
             semantic: bool = False) -> None:
         validate_name(name)
-        if name in self._seen:
+        # Names are filenames: "Total" and "total" are the same file on
+        # Windows/macOS, so one would silently overwrite the other.
+        prior = self._seen.get(name.casefold())
+        if prior == name:
             raise NightwardError(
                 f"duplicate behavior name {name!r}: each captured behavior must be unique"
             )
-        self._seen.add(name)
+        if prior is not None:
+            raise NightwardError(
+                f"behavior name {name!r} collides with {prior!r}: names differing only "
+                f"in case map to the same file on case-insensitive filesystems"
+            )
+        self._seen[name.casefold()] = name
         # scrub() -> canonical_json may raise NightwardError on bad payloads;
         # let it surface so the offending test fails loudly.
         self.behaviors.append(
@@ -45,6 +53,12 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
+    # xdist splits tests across workers, each with its own Recorder; the
+    # controller would flush an empty set and every behavior would read REMOVED.
+    if config.getoption("--nightward-record") and getattr(config.option, "numprocesses", None):
+        raise pytest.UsageError(
+            "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
+        )
     config._nightward_recorder = Recorder()
 
 
@@ -65,18 +79,24 @@ def behavior(request):
     return capture
 
 
+# Only a session that actually ran its tests produces a capture worth keeping.
+# An interrupted / errored / empty session must leave the previous pending set
+# alone: flushing its (partial or empty) capture would turn every missing
+# behavior into REMOVED, and `approve --all` would then wipe them from the
+# baseline.
+_COMPLETE = (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED)
+
+
 def pytest_sessionfinish(session, exitstatus):
     config = session.config
-    if not config.getoption("--nightward-record"):
+    if not config.getoption("--nightward-record") or exitstatus not in _COMPLETE:
         return
     rec = getattr(config, "_nightward_recorder", None)
     if rec is None:
         return
     store = Store(Path(config.getoption("--nightward-dir")))
     store.ensure()
-    store.clear_pending()
-    for b in rec.behaviors:
-        store.write_pending(b)
+    store.replace_pending(rec.behaviors)
 
     # Skipped tests don't capture their behavior -> it shows up as a false
     # REMOVED. Record the counts so `nightward run` can warn about it.

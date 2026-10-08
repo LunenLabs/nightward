@@ -6,14 +6,45 @@ Layout (git-native, approvaltests-style):
       pending/<name>.received.json     # gitignored — this run's observed behavior
       rejected/<name>.rejected.json    # audit trail of confirmed regressions
       report.json                      # last blast radius
+      run_meta.json                    # last run's skipped/failed counts + judge spec
+
+Every name-to-path mapping goes through `_file`, which validates the name, so
+no CLI argument can address a file outside the store.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
+from collections.abc import Iterable
 from pathlib import Path
 
 from ..errors import NightwardError
-from .behavior import Behavior, canonical_json
+from .behavior import Behavior, canonical_json, validate_name
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a sibling temp file + os.replace, so readers never see a torn file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def baseline_digest(baseline: dict[str, Behavior]) -> str:
+    """Identity of an approved boundary: changes iff any approved behavior does."""
+    h = hashlib.sha256()
+    for name, b in sorted(baseline.items()):
+        h.update(canonical_json([name, b.group, b.fingerprint()]).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _read_json(path: Path) -> object:
+    """Parse a store file; any unreadable content becomes a NightwardError."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise NightwardError(f"corrupt file {path}: {exc}") from exc
 
 
 class Store:
@@ -31,7 +62,7 @@ class Store:
 
     @staticmethod
     def _file(dir_: Path, name: str, suffix: str) -> Path:
-        return dir_ / f"{name}.{suffix}.json"
+        return dir_ / f"{validate_name(name)}.{suffix}.json"
 
     # ---- pending (this run) --------------------------------------------
     def write_pending(self, b: Behavior) -> None:
@@ -45,16 +76,34 @@ class Store:
             for f in self.pending_dir.glob("*.received.json"):
                 f.unlink()
 
+    def replace_pending(self, behaviors: Iterable[Behavior]) -> None:
+        """Swap in a complete new capture: build it aside, then replace pending/.
+
+        A crash mid-write leaves the previous capture intact instead of a partial
+        one (which would surface as mass false REMOVED).
+        """
+        staging = self.root / "pending.tmp"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+        for b in behaviors:
+            self._file(staging, b.name, "received").write_text(
+                canonical_json(b.to_dict()), encoding="utf-8"
+            )
+        if self.pending_dir.exists():
+            shutil.rmtree(self.pending_dir)
+        staging.rename(self.pending_dir)
+
     # ---- loading -------------------------------------------------------
     def _load_dir(self, dir_: Path, suffix: str) -> dict[str, Behavior]:
         out: dict[str, Behavior] = {}
         if not dir_.exists():
             return out
         for f in sorted(dir_.glob(f"*.{suffix}.json")):
+            data = _read_json(f)  # its error already names the file
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
                 b = Behavior.from_dict(data)
-            except (json.JSONDecodeError, KeyError) as exc:
+            except NightwardError as exc:
                 raise NightwardError(f"corrupt behavior file {f}: {exc}") from exc
             out[b.name] = b
         return out
@@ -72,9 +121,8 @@ class Store:
         if not src.exists():
             raise NightwardError(f"no pending behavior named {name!r} to approve")
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
-        self._file(self.baseline_dir, name, "approved").write_text(
-            src.read_text(encoding="utf-8"), encoding="utf-8"
-        )
+        _atomic_write(self._file(self.baseline_dir, name, "approved"),
+                      src.read_text(encoding="utf-8"))
 
     def approve_removal(self, name: str) -> None:
         """Accept that a behavior is gone: drop it from the baseline."""
@@ -84,35 +132,44 @@ class Store:
         dst.unlink()
 
     def mark_rejected(self, name: str) -> None:
+        """Record a confirmed regression. Audit only — the baseline is untouched.
+
+        The recorded snapshot is the received behavior, or (for a regression
+        that *removed* a behavior) the approved one that went missing.
+        """
         src = self._file(self.pending_dir, name, "received")
+        if not src.exists():
+            src = self._file(self.baseline_dir, name, "approved")
+        if not src.exists():
+            raise NightwardError(f"no pending or baseline behavior named {name!r} to reject")
         self.rejected_dir.mkdir(parents=True, exist_ok=True)
-        payload = src.read_text(encoding="utf-8") if src.exists() else "{}"
-        self._file(self.rejected_dir, name, "rejected").write_text(payload, encoding="utf-8")
+        _atomic_write(self._file(self.rejected_dir, name, "rejected"),
+                      src.read_text(encoding="utf-8"))
 
     # ---- report --------------------------------------------------------
     def write_report(self, report: dict) -> None:
         self.report_path.parent.mkdir(parents=True, exist_ok=True)
-        self.report_path.write_text(
-            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _atomic_write(self.report_path, json.dumps(report, indent=2, ensure_ascii=False))
 
     def load_report(self) -> dict | None:
         if not self.report_path.exists():
             return None
-        try:
-            return json.loads(self.report_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise NightwardError(f"corrupt report file {self.report_path}: {exc}") from exc
+        report = _read_json(self.report_path)
+        if not isinstance(report, dict):
+            raise NightwardError(f"corrupt file {self.report_path}: expected a JSON object")
+        return report
 
     # ---- run metadata (skipped/failed counts from the last run) ---------
     def write_run_meta(self, meta: dict) -> None:
         self.meta_path.parent.mkdir(parents=True, exist_ok=True)
-        self.meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        _atomic_write(self.meta_path, json.dumps(meta))
 
     def load_run_meta(self) -> dict:
+        # Advisory only (warning counts, judge spec): unreadable -> treat as absent.
         if not self.meta_path.exists():
             return {}
         try:
-            return json.loads(self.meta_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            meta = _read_json(self.meta_path)
+        except NightwardError:
             return {}
+        return meta if isinstance(meta, dict) else {}

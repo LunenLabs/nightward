@@ -30,9 +30,9 @@ from pathlib import Path
 from typing import Any
 
 from .core.behavior import canonical_json
+from .core.diff import SAME
 from .errors import NightwardError
 
-SAME = "SAME"
 DIFFERENT = "DIFFERENT"
 
 _PROMPT = (
@@ -163,12 +163,23 @@ class Judge:
         self._cache: dict[str, dict] = self._load_cache()
 
     def _load_cache(self) -> dict[str, dict]:
-        if self.cache_path and self.cache_path.exists():
-            try:
-                return json.loads(self.cache_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                return {}
-        return {}
+        # The ledger is committed, so it can be corrupted by e.g. a merge
+        # conflict. Fail loudly: silently starting empty would overwrite the
+        # recorded rulings on the next save.
+        if not (self.cache_path and self.cache_path.exists()):
+            return {}
+        try:
+            ledger = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise NightwardError(
+                f"corrupt judge verdict ledger {self.cache_path}: {exc} "
+                f"(resolve it by hand, or delete it to re-judge from scratch)"
+            ) from exc
+        if not isinstance(ledger, dict):
+            raise NightwardError(
+                f"corrupt judge verdict ledger {self.cache_path}: expected a JSON object"
+            )
+        return ledger
 
     def _save_cache(self) -> None:
         if self.cache_path:
@@ -190,8 +201,8 @@ class Judge:
         """
         key = f"{old_fp}:{new_fp}:{self.spec}"
         hit = self._cache.get(key)
-        if hit:
-            return Verdict(hit["verdict"], hit["reason"], self.spec, cached=True)
+        if isinstance(hit, dict) and hit.get("verdict") in (SAME, DIFFERENT):
+            return Verdict(hit["verdict"], str(hit.get("reason", "")), self.spec, cached=True)
         try:
             verdict, reason = _BACKENDS[self.provider](
                 self.model, _as_text(old_payload), _as_text(new_payload)

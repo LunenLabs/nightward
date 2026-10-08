@@ -13,12 +13,21 @@ import socketserver
 import webbrowser
 from pathlib import Path
 
+from ..errors import NightwardError
+
 
 def serve(directory: Path | str, port: int = 8000, open_browser: bool = True) -> None:
     directory = str(Path(directory))
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
     # Bind loopback only — this is a personal dashboard, never a public listener.
-    with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
+    try:
+        httpd = socketserver.TCPServer(("127.0.0.1", port), handler)
+    except OSError as exc:  # port taken, privileged port, ...
+        raise NightwardError(
+            f"cannot serve on 127.0.0.1:{port} ({exc.strerror or exc}); "
+            f"pick another with --port, or build only with --no-serve"
+        ) from exc
+    with httpd:
         url = f"http://127.0.0.1:{port}/"
         if open_browser:
             try:
