@@ -177,7 +177,7 @@ function noReportState(meta) {
 const UNTRUSTED = {
   stale: {
     title: "Report is stale",
-    explain: "The approved baseline or the captured behavior changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius, " + REBUILD + " (`nightward gate` exits 1.)",
+    explain: "The approved baseline, the captured behavior or a rejection changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius, " + REBUILD + " (`nightward gate` exits 1.)",
   },
   unknown: {
     title: "No verdict",

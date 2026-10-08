@@ -94,7 +94,7 @@ nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
                   "done"; "breached", "partial" (approved behaviors not checked:
                   their test was deselected), "incomplete" (capture tests failed/errored),
-                  "stale" (baseline or capture changed since the last report -
+                  "stale" (baseline, capture or rejections changed since the last report -
                   re-run) and "unknown" (no report) are not
 nightward view    build a static, read-only dashboard and view it in a browser
 nightward mcp     stdio MCP server for AI agents: run + status, never approve
@@ -112,7 +112,7 @@ the report records `incomplete: {"failed": n, "errors": m}`, and `gate` exits 1 
 a clean run.
 
 `gate` and `status` read the report of the **last run**; they don't notice code
-edited since then. "stale" only covers a baseline or capture that changed after the
+edited since then. "stale" only covers a baseline, capture or rejection that changed after the
 run, never your source code. Both print `(as of the last run, <generated_at>; re-run
 nightward run after code edits)` next to the verdict, and `status --json` and MCP
 carry `generated_at`. Run `nightward run` again after every edit before trusting the
@@ -480,7 +480,7 @@ absolute path of the store the verdict comes from). `nightward_run` also returns
 | `breached` | unapproved changes | fix the code, or stop and ask a human to approve |
 | `partial` | nothing unapproved among what ran, but approved behaviors were not checked (deselected, see `not_run`) | run them: remove the `-k`/`-m` selection (it can't be waived over MCP) |
 | `incomplete` | nothing unapproved, but capture tests failed or errored | fix the failing tests (see `incomplete` and `pytest_output_tail`) |
-| `stale` | the baseline or capture moved since the report | call `nightward_run` again |
+| `stale` | the baseline, capture or rejections moved since the report | call `nightward_run` again |
 | `unknown` | no report yet | call `nightward_run` |
 
 `nightward_run` adds `warnings`: `skipped`, `failed`, `errors`, `deselected`,

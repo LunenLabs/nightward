@@ -5,14 +5,14 @@ promise when {"boundary": "intact"}. Any other value means "not done":
 "breached" (unapproved changes), "partial" (nothing unapproved among what ran,
 but approved behaviors were not checked: their test was deselected), "incomplete"
 (nothing unapproved, but capture tests failed or errored - fix them), "stale"
-(the baseline or capture moved since the last report - re-run), or "unknown" (no
+(the baseline, capture or rejections moved since the last report - re-run), or "unknown" (no
 report yet).
 """
 from __future__ import annotations
 
 
 def status_payload(report: dict | None, *, stale: bool = False) -> dict:
-    """stale=True means the baseline or capture changed since this report; its
+    """stale=True means the baseline, capture or rejections changed since this report; its
     verdict no longer applies, so boundary reads "stale" instead of intact/breached."""
     if report is None:
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],

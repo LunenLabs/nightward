@@ -181,7 +181,26 @@ class Store:
         return self._load_dir(self.pending_dir, "received")
 
     def load_rejected(self) -> dict[str, Behavior]:
-        return self._load_dir(self.rejected_dir, "rejected")
+        """Binding rejections: records that name who rejected them (D19 and later)."""
+        return {n: b for n, (b, binding) in self._rejections().items() if binding}
+
+    def legacy_rejections(self) -> list[str]:
+        """Records written before rejections became binding (no reviewer or token):
+        audit-only, they never breach or block (D27)."""
+        return sorted(n for n, (_, binding) in self._rejections().items() if not binding)
+
+    def _rejections(self) -> dict[str, tuple[Behavior, bool]]:
+        out: dict[str, tuple[Behavior, bool]] = {}
+        if not self.rejected_dir.exists():
+            return out
+        for f in sorted(self.rejected_dir.glob("*.rejected.json")):
+            data = _read_json(f)  # its error already names the file
+            try:
+                b = Behavior.from_dict(data)
+            except NightwardError as exc:
+                raise NightwardError(f"corrupt behavior file {f}: {exc}") from exc
+            out[b.name] = (b, "rejected_by" in data or "token" in data)
+        return out
 
     # ---- decisions -----------------------------------------------------
     def approve(self, name: str) -> None:
@@ -209,7 +228,7 @@ class Store:
             raise NightwardError(f"no baseline behavior named {name!r} to remove")
         dst.unlink()
 
-    def mark_rejected(self, name: str, by: str | None = None) -> None:
+    def mark_rejected(self, name: str, by: str | None = None, token: str | None = None) -> None:
         """Record a confirmed regression. The baseline is untouched.
 
         The recorded snapshot is the received behavior, or (for a regression
@@ -222,8 +241,10 @@ class Store:
         if not src.exists():
             raise NightwardError(f"no pending or baseline behavior named {name!r} to reject")
         record = Behavior.from_dict(_read_json(src)).to_dict()
-        if by:
-            record["rejected_by"] = by
+        # Who, and the reviewed change token: what makes a record binding (D27).
+        record["rejected_by"] = by or "unknown"
+        if token:
+            record["token"] = token
         self.rejected_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(self._file(self.rejected_dir, name, "rejected"),
                       canonical_json(record) + "\n")

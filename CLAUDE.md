@@ -161,6 +161,12 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   removal proof. Skips/xfails and source-less baselines stay REMOVED (fail closed).
   Not checked is never done (D23): such a report's boundary is `partial`; `gate`
   exits 1 on it unless `--allow-not-run` (a CI-yaml opt-in); MCP can't waive it.
+- **Later team decisions win (D27).** The report records `rejected_digest` (binding
+  rejections only); a rejection pulled in after the review makes the report stale,
+  so approve/reject refuse until the next run + review. Binding = the record has
+  `rejected_by` or `token` (reject writes both). Older audit-only records
+  (`Store.legacy_rejections`) never breach or block; `run` (when that set changes)
+  and `init` say so.
 - **Decisions bind to what the human saw (D19).** Each report item carries a
   `token` (`baseline.change_token`: old state -> new state). `review` and `view`
   record the tokens whose diffs they displayed in `reviewed.json` (a scoped review =

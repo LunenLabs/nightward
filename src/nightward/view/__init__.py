@@ -67,7 +67,7 @@ def collect_data(nightward_dir: Path | str) -> dict:
             "judge": run_meta.get("judge"),
             "baseline_count": len(baseline),
             "pending_count": len(pending),
-            # baseline or capture moved since the report: its verdict is void
+            # baseline, capture or rejections moved since the report: its verdict is void
             "stale": is_stale(store, report),
             "source": str(src),
             "run_command": run_command(src),

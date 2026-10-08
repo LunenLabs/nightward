@@ -198,9 +198,9 @@ def _incomplete_short(incomplete: dict) -> str:
     return ", ".join(parts)
 
 
-STALE_MESSAGE = ("[red]report is stale[/red] - the baseline or the capture changed since "
-                 "the last report; re-run `nightward run` (or `nightward report` after "
-                 "`pytest --nightward-record`)")
+STALE_MESSAGE = ("[red]report is stale[/red] - the baseline, the capture or a rejection "
+                 "changed since the last report; re-run `nightward run` (or `nightward "
+                 "report` after `pytest --nightward-record`)")
 
 
 def _report_items(report: dict) -> list[dict]:
@@ -238,11 +238,12 @@ def _fresh_report(store: Store, verb: str) -> dict:
         raise NightwardError(f"no report - run `nightward run` (a run that aborted or was "
                              f"refused invalidates the last report), review it, then {verb}")
     if is_stale(store, report):
-        # e.g. a `git pull` brought a teammate's baseline: the changes the human
-        # reviewed are not the changes on disk any more (R3-OPS-03).
-        raise NightwardError(f"the baseline or the capture changed since the last report (a "
-                             f"`git pull`/checkout, or another run) - run `nightward run`, "
-                             f"review again, then {verb}")
+        # e.g. a `git pull` brought a teammate's baseline or rejection: the
+        # human decided on a report that no longer describes the store
+        # (R3-OPS-03, R4-FIN-03).
+        raise NightwardError(f"the baseline, the capture or a rejection changed since the last "
+                             f"report (a `git pull`/checkout, or another run) - run `nightward "
+                             f"run`, review again, then {verb}")
     return report
 
 
@@ -300,6 +301,15 @@ def _who() -> str:
         return getpass.getuser()
     except Exception:  # no login name is not an error
         return ""
+
+
+def _legacy_rejection_note(names: list[str]) -> None:
+    if names:
+        err_console.print(
+            f"[yellow]note:[/yellow] {len(names)} rejection record(s) predate binding "
+            f"rejections (no reviewer recorded) and are audit-only - they never breach or "
+            f"block: {escape(_shown(names))}. Delete them, or `nightward reject` again to "
+            f"make a rejection binding", soft_wrap=True)
 
 
 def _rejected_note(it: dict) -> str:
@@ -552,6 +562,8 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
     for problem in _ignore_problems(dir):
         if not problem.startswith("per-run files"):
             err_console.print(f"[yellow]warning:[/yellow] {escape(problem)}", soft_wrap=True)
+    # Records older versions wrote as audit notes: say so before they get committed.
+    _legacy_rejection_note(store.legacy_rejections())
     if approved:
         # Approving everything would bury whatever moved since the baseline.
         console.print("\nNext: `nightward run <path>` to gate the code against the approved "
@@ -630,6 +642,7 @@ def run(ctx: typer.Context,
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
+    _legacy_rejection_note(result.get("legacy_rejections") or [])
     # run lists names, not diffs, so it marks nothing reviewed (D26).
     if result["report"].get("blast_radius"):
         console.print("[dim]next: `nightward review` shows the diffs; approve what it "
@@ -1065,7 +1078,8 @@ def reject(name: str, dir: str = typer.Option(DEFAULT_DIR)):
         baseline, pending = store.load_baseline(), store.load_pending()
         # Reject the capture the human saw, not whatever is pending now (R3-FIN-02).
         _check_reviewed(store, [name], baseline, pending, "reject")
-        store.mark_rejected(name, by=_who())
+        store.mark_rejected(name, by=_who(),
+                            token=change_token(baseline.get(name), pending.get(name)))
         report = recompute(store, judge=judge_from_meta(store), baseline=baseline,
                            pending=pending)
     console.print(f"[red]rejected[/red] {escape(name)} - the boundary is "
@@ -1162,7 +1176,7 @@ def gate(dir: str = typer.Option(DEFAULT_DIR),
     """Exit with the verdict of the last run (for CI / agent loops).
 
     0: boundary intact (or partial, with --allow-not-run). 1: breached, partial
-    (behaviors not checked), stale (baseline or capture changed since the
+    (behaviors not checked), stale (baseline, capture or rejections changed since the
     report) or incomplete (capture tests failed). 2: no store, no report (no
     run yet, or the last run aborted) or another error. Only 0 is a pass.
     """
@@ -1275,7 +1289,7 @@ def _print_status(payload: dict) -> None:
         head += f" ({payload['unapproved']} unapproved)"
     console.print(head)
     if boundary == "stale":
-        console.print("the baseline or the capture changed since the last report; "
+        console.print("the baseline, the capture or a rejection changed since the last report; "
                       "re-run `nightward run`")
     if payload.get("incomplete"):
         console.print(f"capture incomplete: {_incomplete_text(payload['incomplete'])}")

@@ -257,3 +257,71 @@ def test_run_alone_is_not_a_review(tmp_path):
     tw = tmp_path / ".nightward"
     assert json.loads((tw / "baseline" / "checkout.3.approved.json")
                       .read_text("utf-8"))["payload"]["total"] == 30
+
+
+# ---- R4-FIN-03, R4-FIN-01 (D27): team decisions that arrive later win ----------
+
+FEE = ('import os\ndef test_fee(behavior):\n'
+       '    behavior("fee", {"rate": os.environ.get("FEE", "2.9")}, group="billing")\n')
+
+
+@pytest.fixture
+def fee(tmp_path):
+    write(tmp_path / "test_fee.py", FEE)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    return tmp_path, tmp_path / ".nightward"
+
+
+def _rejection(tw, rate, **meta):
+    (tw / "rejected").mkdir(exist_ok=True)
+    rec = {"group": "billing", "name": "fee", "payload": {"rate": rate}, **meta}
+    write(tw / "rejected" / "fee.rejected.json", json.dumps(rec, indent=2) + "\n")
+
+
+def test_a_rejection_pulled_in_after_the_review_stops_approve(fee):
+    # R4-FIN-03: a teammate's rejection arrives with `git pull` after B's review.
+    tmp_path, tw = fee
+    cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    cli("review", cwd=tmp_path)
+    _rejection(tw, "3.9", rejected_by="dev-A")                  # git pull
+    assert status_json(tmp_path)["boundary"] == "stale"
+    r = cli("approve", "fee", cwd=tmp_path)
+    assert r.returncode == 2 and "nightward run" in r.stderr, r.stdout
+    assert (tw / "rejected" / "fee.rejected.json").exists()
+    cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    assert "rejected by dev-A" in cli("review", cwd=tmp_path).stdout
+    r = cli("approve", "fee", cwd=tmp_path)                     # now an informed override
+    assert r.returncode == 0 and "overrides the rejection by dev-A" in r.stdout
+
+
+def test_a_legacy_rejection_record_is_audit_only(fee):
+    # R4-FIN-01: a record from before rejections became binding (no reviewer).
+    tmp_path, tw = fee
+    _rejection(tw, "2.9")                                        # == the approved baseline
+    r = cli("run", ".", cwd=tmp_path)
+    assert "Boundary: intact" in r.stdout, r.stdout
+    assert "audit-only" in r.stderr and "fee" in r.stderr
+    assert cli("gate", cwd=tmp_path).returncode == 0
+    again = cli("run", ".", cwd=tmp_path)
+    assert "audit-only" not in again.stderr                      # said once
+    assert "audit-only" in cli("init", cwd=tmp_path).stderr
+    # nor does it block a bulk approval
+    _rejection(tw, "3.9")
+    cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    cli("review", cwd=tmp_path)
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 0 and "approved fee" in r.stdout, r.stdout
+
+
+def test_new_rejections_record_reviewer_and_token(fee):
+    tmp_path, tw = fee
+    cli("run", ".", cwd=tmp_path, env={"FEE": "3.9"})
+    cli("review", cwd=tmp_path)
+    assert cli("reject", "fee", cwd=tmp_path).returncode == 0
+    rec = json.loads((tw / "rejected" / "fee.rejected.json").read_text("utf-8"))
+    assert rec["rejected_by"] and rec["token"]
+    assert cli("gate", cwd=tmp_path).returncode == 1            # binding: breached, not stale
+    assert status_json(tmp_path)["boundary"] == "breached"

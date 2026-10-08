@@ -129,6 +129,8 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)
     report["pending_digest"] = digest(pending)
+    # A rejection pulled in after the review changes what approve may do (D27).
+    report["rejected_digest"] = digest(store.load_rejected())
     if judge is not None:
         report["judge"] = judge.summary()
     elif unjudged := [c.name for c in changes if c.kind == CHANGED
@@ -143,7 +145,8 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
 
 
 def is_stale(store: Store, report: dict | None) -> bool:
-    """True when the baseline or the capture changed after `report` was computed.
+    """True when the baseline, the capture or the binding rejections changed
+    after `report` was computed.
 
     Covers `git pull` bringing a new baseline, a direct `pytest --nightward-record`,
     and a run interrupted between capture and report. A report without digests
@@ -153,7 +156,13 @@ def is_stale(store: Store, report: dict | None) -> bool:
     if report is None:
         return False
     return (report.get("baseline_digest") != digest(store.load_baseline())
-            or report.get("pending_digest") != digest(store.load_pending()))
+            or report.get("pending_digest") != digest(store.load_pending())
+            # a report from before D27 has no rejected digest: fine while there
+            # is no binding rejection
+            or report.get("rejected_digest", _NO_REJECTIONS) != digest(store.load_rejected()))
+
+
+_NO_REJECTIONS = digest({})
 
 
 def recompute_capture(store: Store) -> dict:
@@ -313,6 +322,7 @@ def _execute_run(path: str, dir: str, *, capture_output: bool, judge_spec: str |
 
 def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None, judge,
                 extra: list[str], *, capture_output: bool, timeout: float | None) -> dict:
+    noted = store.load_run_meta().get("legacy_rejections")
     try:
         # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
         # child inheriting it hangs on Windows while the server reads it.
@@ -341,9 +351,13 @@ def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None
         meta["judge"] = spec
     else:
         meta.pop("judge", None)
+    legacy = store.legacy_rejections()
+    meta["legacy_rejections"] = legacy
     store.write_run_meta(meta)
     return {
         "report": report,
+        # audit-only rejection records, when that set changed since the last run (D27)
+        "legacy_rejections": legacy if legacy != noted else [],
         "skipped": meta.get("skipped", 0),
         "failed": meta.get("failed", 0),
         "errors": meta.get("errors", 0),
