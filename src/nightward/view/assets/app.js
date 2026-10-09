@@ -189,33 +189,59 @@ const UNTRUSTED = {
   },
 };
 
+// What the banner says for a state: {cls, title, explain, count}. Only "intact"
+// is done. "partial" (approved behaviors not checked, D23) and any boundary
+// value this page predates are "not done", with the raw value shown as text.
+function bannerText(report, state) {
+  const untrusted = UNTRUSTED[state];
+  if (untrusted) return { cls: "untrusted " + state, title: untrusted.title, explain: untrusted.explain, count: null };
+  const unapproved = (report && report.unapproved) || 0;
+  if (state === "intact") {
+    return { cls: "intact", title: "Boundary intact", count: null,
+      explain: "No behavior has moved since the approved baseline. (`nightward gate` passes in CI — exit 0.)" };
+  }
+  if (state === "breached") {
+    return { cls: "breached", title: "Boundary breached", count: unapproved + " unapproved",
+      explain: "There are " + unapproved + " unapproved change(s). Review each one: approve it if it was intended, fix the code if it is a regression. (`nightward gate` exits 1.)" };
+  }
+  if (state === "partial") {
+    const notRun = ((report && report.not_run) || []).length;
+    return { cls: "untrusted partial", title: "Partial - not every behavior was checked", count: null,
+      explain: (unapproved ? "There are " + unapproved + " unapproved change(s), and " : "Nothing checked is unapproved, but ") +
+        notRun + " approved behavior(s) were not checked in this run (their tests were deselected), so this is not done. Run the whole suite. (`nightward gate` exits 1 unless the CI job opts in with --allow-not-run.)" };
+  }
+  const raw = String(report && report.boundary);
+  return { cls: "untrusted other", title: "Boundary: " + raw, count: null,
+    explain: "This dashboard does not know the boundary value \"" + raw + "\", so treat it as not done. Check `nightward status` and `nightward gate`." };
+}
+
 function renderBanner(report, state) {
   const b = $("banner");
   clear(b);
-  const intact = state === "intact";
-  const untrusted = UNTRUSTED[state];
-  b.className = "banner " + (untrusted ? "untrusted " + state : state);
+  const t = bannerText(report, state);
+  b.className = "banner " + t.cls;
   const head = el("div", { cls: "banner-head" });
   head.appendChild(el("span", { cls: "status-dot", attrs: { "aria-hidden": "true" } }));
-  head.appendChild(el("span", {
-    cls: "banner-state",
-    text: untrusted ? untrusted.title : intact ? "Boundary intact" : "Boundary breached",
-  }));
-  if (state === "breached") head.appendChild(el("span", { cls: "banner-count", text: (report.unapproved || 0) + " unapproved" }));
+  head.appendChild(el("span", { cls: "banner-state", text: t.title }));
+  if (t.count) head.appendChild(el("span", { cls: "banner-count", text: t.count }));
   b.appendChild(head);
-  b.appendChild(el("p", {
-    cls: "banner-explain",
-    text: untrusted ? untrusted.explain : intact
-      ? "No behavior has moved since the approved baseline. (`nightward gate` passes in CI — exit 0.)"
-      : "There are " + (report.unapproved || 0) + " unapproved change(s). Review each one: approve it if it was intended, fix the code if it is a regression. (`nightward gate` exits 1.)",
-  }));
+  b.appendChild(el("p", { cls: "banner-explain", text: t.explain }));
 }
 
 function bannerState(report, meta) {
   if (!report) return "unknown";
   if (meta && meta.stale) return "stale";
   if (report.boundary === "intact") return report.incomplete ? "incomplete" : "intact";
-  return "breached";
+  if (report.boundary === "breached" || report.boundary === "partial") return report.boundary;
+  return "other";
+}
+
+// The empty state when no change is listed: only an intact boundary is done.
+function noChangeText(state) {
+  if (state === "intact") return "Everything matches the last approved baseline. This is a safe place to stop.";
+  if (state === "incomplete") return "Everything captured matches the baseline, but the capture is incomplete. This is NOT a safe place to stop.";
+  if (state === "partial") return "Everything checked matches the baseline, but some approved behaviors were not checked. This is NOT a safe place to stop.";
+  return "No change is listed, but the boundary is not intact. This is NOT a safe place to stop.";
 }
 
 function renderWarnings(report, meta) {
@@ -262,6 +288,26 @@ function countItems(counts) {
   ];
   if (counts.judged_same) items.push(["judged", "of them judged same", counts.judged_same]);
   return items;
+}
+
+// A model ruling read back from the committed ledger (judge_replayed) was not
+// made this run: a reviewer auditing it should know it is a recorded decision.
+function replayedNote(it) {
+  return it && it.judge_replayed ? "replayed from the committed ledger, not ruled this run" : null;
+}
+
+function appendReplayed(head, it) {
+  const note = replayedNote(it);
+  if (note) head.appendChild(el("span", { cls: "badge badge-replayed", text: "replayed", title: note }));
+}
+
+function judgeNote(it, fallback) {
+  const j = el("p", { cls: "judge-note" });
+  j.appendChild(el("strong", { text: (it.judge_model || "judge") + ": " }));
+  j.appendChild(document.createTextNode(it.judge_reason || fallback));
+  const note = replayedNote(it);
+  if (note) j.appendChild(el("span", { cls: "judge-replayed", text: " (" + note + ")" }));
+  return j;
 }
 
 // persona:* judges are deterministic rules, not an AI model.
@@ -373,6 +419,7 @@ function renderCard(it) {
       text: judgeBadge(it.judge_model),
       title: "A judge ruled this fingerprint mismatch semantically DIFFERENT — verdict by " + (it.judge_model || "unknown judge"),
     }));
+    appendReplayed(head, it);
   }
   if (it.rejected) {
     head.appendChild(el("span", {
@@ -384,12 +431,7 @@ function renderCard(it) {
   head.appendChild(el("span", { cls: "card-name", text: it.name }));
   card.appendChild(head);
 
-  if (it.judged) {
-    const j = el("p", { cls: "judge-note" });
-    j.appendChild(el("strong", { text: (it.judge_model || "judge") + ": " }));
-    j.appendChild(document.createTextNode(it.judge_reason || "ruled DIFFERENT"));
-    card.appendChild(j);
-  }
+  if (it.judged) card.appendChild(judgeNote(it, "ruled DIFFERENT"));
 
   renderDiff(card, it.diff);
 
@@ -490,12 +532,10 @@ function renderJudgedSame(report) {
       text: "judged SAME",
       title: "Not in the boundary: a judge ruled this fingerprint mismatch semantically SAME — verdict by " + (it.judge_model || "unknown judge"),
     }));
+    appendReplayed(head, it);
     head.appendChild(el("span", { cls: "card-name", text: it.name }));
     card.appendChild(head);
-    const j = el("p", { cls: "judge-note" });
-    j.appendChild(el("strong", { text: (it.judge_model || "judge") + ": " }));
-    j.appendChild(document.createTextNode(it.judge_reason || "ruled SAME"));
-    card.appendChild(j);
+    card.appendChild(judgeNote(it, "ruled SAME"));
     renderDiff(card, it.diff);
     // A wrong SAME is overruled by rejecting it: it becomes unapproved again.
     const actions = el("div", { cls: "card-actions" });
@@ -539,10 +579,7 @@ function render(data) {
   }
 
   if (report.boundary === "intact" || !changes.length) {
-    showEmpty("No behavior changed",
-      state === "incomplete"
-        ? "Everything captured matches the baseline, but the capture is incomplete. This is NOT a safe place to stop."
-        : "Everything matches the last approved baseline. This is a safe place to stop.", null);
+    showEmpty("No behavior changed", noChangeText(state), null);
     renderCounts(report.counts || {});
     return;
   }

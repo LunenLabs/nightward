@@ -107,3 +107,47 @@ def test_init_next_step_names_everything_to_commit(tmp_path, with_baseline):
     out = " ".join(r.stdout.split())
     for part in ("baseline/", "rejected/", "judge/"):
         assert part in out, out
+
+
+# ---- round 3 follow-up: replayed rulings and boundary values this page predates --
+
+REPLAYED = "replayed from the committed ledger, not ruled this run"
+
+
+def test_replayed_ruling_is_marked():
+    assert node_eval("replayedNote({judged: true, judge_replayed: true})") == REPLAYED
+    assert node_eval("replayedNote({judged: true})") is None
+
+
+def banner(report, meta=None):
+    return node_eval(f"bannerText({json.dumps(report)}, "
+                     f"bannerState({json.dumps(report)}, {json.dumps(meta or {})}))")
+
+
+def test_partial_boundary_is_not_done():
+    b = banner({"boundary": "partial", "unapproved": 0,
+                "not_run": [{"name": "a", "group": None}, {"name": "b", "group": None}]})
+    assert b["cls"] == "untrusted partial"
+    assert "not checked" in b["title"].lower() or "partial" in b["title"].lower()
+    assert "2" in b["explain"] and "--allow-not-run" in b["explain"]
+    assert "passes" not in b["explain"]
+
+
+def test_unknown_boundary_value_is_shown_raw_and_not_done():
+    b = banner({"boundary": "<b>wobbly</b>", "unapproved": 0})
+    assert b["cls"] == "untrusted other"
+    assert "<b>wobbly</b>" in b["title"]
+    assert "not done" in b["explain"]
+
+
+def test_only_intact_is_a_safe_place_to_stop():
+    for state in ("partial", "other", "incomplete"):
+        assert "NOT a safe place to stop" in node_eval(f"noChangeText({json.dumps(state)})")
+    assert "safe place to stop" in node_eval("noChangeText('intact')")
+    assert "NOT" not in node_eval("noChangeText('intact')")
+
+
+def test_known_states_keep_their_banner():
+    assert banner({"boundary": "intact", "unapproved": 0})["cls"] == "intact"
+    b = banner({"boundary": "breached", "unapproved": 3})
+    assert b["cls"] == "breached" and b["count"] == "3 unapproved"
