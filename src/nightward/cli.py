@@ -555,7 +555,13 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                       "baseline, then `nightward review` what moved.")
     else:
         console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
-                      "then `nightward run <path>` and `nightward approve --all`.")
+                      "then `nightward run <path>`, `nightward review` and `nightward "
+                      "approve --all`.")
+    # Rejections and judge rulings are decisions too: without them a clone or
+    # CI gates differently from the machine that made them (R4-FIN-05).
+    ignored = " (the per-run files are git-ignored)" if _gitignore_lines(dir) else ""
+    console.print(f"Commit {escape(store.root.as_posix())}/ with your code: baseline/, "
+                  f"rejected/ and judge/ are the team's decisions{ignored}.", soft_wrap=True)
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})

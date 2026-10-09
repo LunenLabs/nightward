@@ -32,7 +32,7 @@ nightward init
 # 1. capture current behavior and approve it as the baseline
 nightward run example
 nightward approve --all
-git add .gitignore .nightward/baseline   # commit the approved baseline (= the boundary)
+git add .gitignore .nightward   # commit baseline/, rejected/, judge/ (init ignores per-run files)
 
 # 2. change the code, then re-run — the blast radius shows what moved
 nightward run example
@@ -525,7 +525,7 @@ deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered 
 `textContent` only — captured output never touches an HTML parser. The page is a
 snapshot of the store when it was built: after a new `run` or `approve`, rebuild it
 with `nightward view` (refreshing the browser shows the old build). The header shows
-the verdict's own time ("verdict as of", UTC) next to the build time.
+the verdict's own time ("verdict as of", UTC) next to the build time. Only "intact" reads as done: "partial" (approved behaviors not checked), stale, incomplete and any boundary value the page does not know are shown as not done. A judge ruling read back from the committed ledger carries a "replayed" badge (not ruled this run).
 
 The copy-paste commands quote every behavior name for the shell picked in
 "commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on
