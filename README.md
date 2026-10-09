@@ -136,11 +136,15 @@ so they read as REMOVED. That is why `approve --all` leaves removals alone. Each
 behavior records the test that captured it (`source`, never compared), and
 `--include-removed` only drops a removal after a **clean whole-suite run**: the
 default path (the rootdir or your configured `testpaths`), no extra pytest arguments
-(nothing after `--`, no `PYTEST_ADDOPTS`, no `--collect-only`), no test left out at
-collection (`collect_ignore`, `--ignore` even from `addopts`, a hook that drops items),
-pytest exit 0 with every collected test passing and nothing skipped, xfailed,
-deselected or errored, and the behavior's recorded test was collected and passed under
-that exact id. Baselines from before sources existed have no recorded test, so they are
+(nothing after `--`, no `PYTEST_ADDOPTS`, no `--collect-only`), every test file
+under the rootdir collected (a `test_*.py`/`*_test.py` or `python_files` match that the
+run left out - by `norecursedirs`, `collect_ignore`, `--ignore` even from `addopts`,
+`testpaths`, a hook or a plugin - may hold a capture that moved there; only
+virtualenvs, hidden directories and pytest's default `build`/`dist`/`node_modules`/...
+are never looked at), no item dropped by a hook, pytest exit 0 with every collected
+test passing and nothing skipped, xfailed, deselected or errored, and the behavior's
+recorded test was collected and passed under that exact id. Baselines from before
+sources existed have no recorded test, so they are
 never removed in bulk. Anything else keeps every removal and says why. A removal you
 intend is an explicit decision instead: review it, then `nightward approve --remove
 NAME...` or `--remove-group G` (one `nightward approve <name>` also works).

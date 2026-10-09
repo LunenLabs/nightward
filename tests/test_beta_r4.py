@@ -121,6 +121,94 @@ def test_capture_moved_into_an_excluded_test_is_kept(render, conftest, moved):
     assert "excluded at collection" in r.stdout
 
 
+DEV = 'def test_dev(behavior):\n    behavior("render.dev", "dev", group="render")\n'
+
+
+def _kept_after_bulk_removal(tmp_path, tw):
+    cli("review", cwd=tmp_path)
+    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    assert "render.dev" in baseline_names(tw), r.stdout
+    assert "excluded at collection" in r.stdout and "integration" in r.stdout, r.stdout
+
+
+# R4-OPS-01 (round 5): proof must not depend on which exclusion mechanism was
+# used. None of these is special-cased: a test file on disk that this run did
+# not collect means "not the whole suite", whatever left it out.
+@pytest.mark.parametrize("ini, conftest", [
+    ("[pytest]\nnorecursedirs = integration .git .nightward\n", None),
+    (None, 'def pytest_ignore_collect(collection_path, config):\n'
+           '    if collection_path.name == "integration":\n'
+           '        return True\n'),
+])
+def test_capture_moved_into_an_uncollected_directory_is_kept(render, ini, conftest):
+    tmp_path, tw = render
+    if ini:
+        write(tmp_path / "pytest.ini", ini)
+    if conftest:
+        write(tmp_path / "conftest.py", conftest)
+    (tmp_path / "integration").mkdir()
+    write(tmp_path / "integration" / "test_dev.py", DEV)
+    r = cli("run", ".", cwd=tmp_path)
+    assert "render.dev" in r.stdout
+    _kept_after_bulk_removal(tmp_path, tw)
+
+
+def test_capture_moved_outside_testpaths_is_kept(tmp_path):
+    # A bare `pytest --nightward-record` collects only testpaths: the moved
+    # capture in integration/ is never visited, so no hook ever sees it.
+    (tmp_path / "tests").mkdir()
+    write(tmp_path / "pytest.ini", "[pytest]\ntestpaths = tests\n")
+    write(tmp_path / "tests" / "test_render.py", RENDER_V1)
+    cli("init", cwd=tmp_path)
+    cli("run", "tests", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    write(tmp_path / "tests" / "test_render.py",
+          'def test_one(behavior):\n    behavior("render.meta", 1, group="render")\n')
+    (tmp_path / "integration").mkdir()
+    write(tmp_path / "integration" / "test_dev.py", DEV)
+    subprocess.run([sys.executable, "-m", "pytest", "-q",
+                    "--nightward-record"], cwd=str(tmp_path), capture_output=True)
+    assert "render.dev" in cli("report", cwd=tmp_path).stdout     # REMOVED
+    _kept_after_bulk_removal(tmp_path, tmp_path / ".nightward")
+
+
+def test_narrowed_python_files_is_not_a_clean_run(render):
+    tmp_path, tw = render
+    write(tmp_path / "pytest.ini", "[pytest]\npython_files = test_*.py\n")
+    (tmp_path / "integration").mkdir()
+    write(tmp_path / "integration" / "dev_test.py", DEV)
+    cli("run", ".", cwd=tmp_path)
+    _kept_after_bulk_removal(tmp_path, tw)
+
+
+def test_whole_suite_with_every_file_collected_still_proves_removal(render):
+    # The disk check must not make every run unclean: virtualenvs, hidden and
+    # build directories are never the project's suite.
+    tmp_path, tw = render
+    for d in (".venv/lib", "build", "node_modules/pkg"):
+        (tmp_path / d).mkdir(parents=True)
+        write(tmp_path / d / "test_vendored.py", "def test_x():\n    assert False\n")
+    write(tmp_path / ".venv" / "pyvenv.cfg", "home = x\n")
+    cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
+    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    assert baseline_names(tw) == ["render.meta"], r.stdout
+
+
+def test_source_check_holds_even_if_the_run_claims_clean(render):
+    # Defense in depth (D24): even a run (wrongly) counted clean proves nothing
+    # for a behavior whose recorded test was not collected, or has no record.
+    from nightward.cli import _removal_doubt
+    from nightward.core.behavior import Behavior
+    meta = {"clean": True, "completed": ["test_render.py::test_one"]}
+    gone = Behavior(name="x", payload=1, source="integration/test_dev.py::test_dev")
+    assert "not collected" in _removal_doubt("x", gone, meta)
+    assert "approve --remove" in _removal_doubt("x", Behavior(name="x", payload=1), meta)
+    moved = Behavior(name="x", payload=1, source="test_render.py::test_one")
+    assert _removal_doubt("x", moved, meta) is None
+
+
 def test_legacy_behavior_is_never_bulk_removed(render):
     # D24: no recorded test, no bulk proof - even after a clean run.
     tmp_path, tw = render

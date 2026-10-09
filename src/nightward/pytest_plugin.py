@@ -54,9 +54,9 @@ class Recorder:
         self._broken: set[str] = set()
         # Deselected (-k/-m) tests: their behaviors were not checked (D21).
         self.deselected: set[str] = set()
-        # Tests left out at collection without being reported (D24):
-        # collect_ignore/--ignore paths, and items a hook dropped silently.
-        self.excluded: set[str] = set()
+        # Test files pytest collected, and items a hook dropped without a
+        # pytest_deselected report: the suite left out at collection (D24).
+        self.collected_files: set[str] = set()
         self.filtered = 0
 
     def begin(self, source: str) -> None:
@@ -81,11 +81,11 @@ class Recorder:
         self.deselected.update(item.nodeid for item in items)
 
     @pytest.hookimpl(wrapper=True)
-    def pytest_ignore_collect(self, collection_path, config):
-        ignored = yield
-        if ignored and _user_excluded(Path(collection_path), config):
-            self.excluded.add(Path(collection_path).name)
-        return ignored
+    def pytest_collect_file(self, file_path, parent):
+        collectors = yield
+        if collectors:
+            self.collected_files.add(_key(Path(file_path)))
+        return collectors
 
     @pytest.hookimpl(wrapper=True)
     def pytest_collection_modifyitems(self, session, config, items):
@@ -269,15 +269,58 @@ def _extra_args(config) -> list[str]:
     return extra
 
 
-def _user_excluded(path: Path, config) -> bool:
-    """Was `path` left out by the project (collect_ignore, --ignore, a hook),
-    rather than by pytest's own defaults (virtualenvs, norecursedirs)?"""
-    if path.is_dir():
-        if (path / "pyvenv.cfg").exists() or path.name == "__pycache__":
-            return False
-        return not any(fnmatch.fnmatch(path.name, pat)
-                       for pat in config.getini("norecursedirs"))
-    return path.suffix == ".py"
+# Directories pytest never recurses into by default (its own norecursedirs
+# default, plus virtualenvs): never the project's suite. A project's own
+# norecursedirs is deliberately NOT honored - it is one more way to leave
+# tests out (R4-OPS-01).
+_NEVER_SUITE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv",
+                "{arch}", "__pycache__")
+_DEFAULT_PYTHON_FILES = ("test_*.py", "*_test.py")
+
+
+def _key(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
+
+
+def _matches(path: Path, pattern: str) -> bool:
+    # pytest's fnmatch_ex: a pattern without a separator matches the file name
+    if "/" not in pattern and os.sep not in pattern:
+        return fnmatch.fnmatch(path.name, pattern)
+    return fnmatch.fnmatch(path.as_posix(), "*/" + pattern.replace(os.sep, "/").lstrip("/"))
+
+
+def _test_files_on_disk(root: Path, patterns: list[str], skip: Path) -> list[Path]:
+    """Every file under `root` that looks like a test module, wherever pytest's
+    configuration (norecursedirs, testpaths, collect_ignore, --ignore, hooks,
+    plugins) would or wouldn't look."""
+    found = []
+    for here, dirs, files in os.walk(root):
+        base = Path(here)
+        dirs[:] = [d for d in dirs
+                   if not any(fnmatch.fnmatch(d, pat) for pat in _NEVER_SUITE)
+                   and not (base / d / "pyvenv.cfg").exists()
+                   and not (base / d / "conda-meta").is_dir()
+                   and _key(base / d) != _key(skip)]
+        found += [base / f for f in files
+                  if any(_matches(base / f, pat) for pat in patterns)]
+    return found
+
+
+def _uncollected(config, rec: Recorder) -> list[str]:
+    """Test files on disk that this run did not collect (D24, R4-OPS-01).
+
+    Detecting each exclusion mechanism leaked one mechanism at a time
+    (collect_ignore, hooks, --ignore, norecursedirs ...), so compare with the
+    disk instead: a test module that wasn't collected may hold a capture that
+    moved there, whatever left it out. python_files counts the defaults too,
+    so narrowing it can't hide a file either.
+    """
+    root = Path(config.rootpath).resolve()
+    patterns = list(dict.fromkeys([*config.getini("python_files"), *_DEFAULT_PYTHON_FILES]))
+    skip = Path(config.invocation_params.dir) / config.getoption("--nightward-dir")
+    return sorted(p.relative_to(root).as_posix()
+                  for p in _test_files_on_disk(root, patterns, skip)
+                  if _key(p) not in rec.collected_files)
 
 
 def _scope(session, exitstatus, counts: dict, completed: list[str],
@@ -288,7 +331,8 @@ def _scope(session, exitstatus, counts: dict, completed: list[str],
     clean: a removal can be proven only by a clean whole-suite run: the
     rootdir or the configured testpaths, no extra pytest arguments (nor
     PYTEST_ADDOPTS), exit 0, every collected test passed, nothing skipped,
-    xfailed, deselected or errored. clean_doubt says why not.
+    xfailed, deselected or errored, and every test file on disk collected
+    (_uncollected). clean_doubt says why not.
     """
     config = session.config
     args = [str(a) for a in config.args]
@@ -319,12 +363,13 @@ def _scope(session, exitstatus, counts: dict, completed: list[str],
     if len(completed) != len(session.items):
         doubts.append(f"only {len(completed)} of {len(session.items)} collected test(s) "
                       f"ran and passed")
-    if rec is not None and (rec.excluded or rec.filtered > 0):
-        # collect_ignore, --ignore (also from addopts), a filtering hook: such a
-        # test never ran, and no counter says so (R4-OPS-01).
-        what = sorted(rec.excluded)
-        parts = ([f"collect_ignore/--ignore: {', '.join(what[:3])}"
-                  f"{' ...' if len(what) > 3 else ''}"] if what else [])
+    what = _uncollected(config, rec) if rec is not None else []
+    if what or (rec is not None and rec.filtered > 0):
+        # A test file left out (collect_ignore, --ignore, norecursedirs, testpaths,
+        # a hook ...) or items a hook dropped: such a test never ran, and no
+        # counter says so (R4-OPS-01).
+        parts = ([f"not collected: {', '.join(what[:3])}"
+                  f"{f' and {len(what) - 3} more' if len(what) > 3 else ''}"] if what else [])
         parts += [f"{rec.filtered} test(s) dropped by a hook"] if rec.filtered > 0 else []
         doubts.append(f"tests were excluded at collection ({'; '.join(parts)})")
     return {"narrowed": narrowed, "clean": not doubts,

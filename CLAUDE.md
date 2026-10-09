@@ -142,9 +142,11 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   from partial runs kept leaking): run_meta `clean` is true (the plugin's `_scope`:
   rootdir/testpaths only, no passthrough args or PYTEST_ADDOPTS, exit 0, every
   collected test passed, zero skipped/xfailed/deselected/errors; `clean_doubt` says
-  why not; tests excluded at collection - collect_ignore/--ignore/a filtering hook,
-  seen by Recorder hook wrappers - also make a run unclean) and the baseline `source`
-  is in `completed` (D24). Legacy source-less baselines are never bulk-removable.
+  why not; a test file on disk under the rootdir that the run did not collect -
+  whatever left it out: norecursedirs, collect_ignore, --ignore, testpaths, a hook -
+  or items a hook dropped also make a run unclean; `_uncollected` compares the disk
+  with the Recorder's collected files instead of detecting each mechanism, which
+  leaked one at a time) and the baseline `source` is in `completed` (D24). Legacy source-less baselines are never bulk-removable.
   Explicit removal is `approve --remove NAME...` / `--remove-group G` (D25: no run
   proof, but only names REMOVED in a fresh, reviewed report). `approve --all` backfills `source`
   into unchanged baselines (`Store.refresh_source`; never fingerprinted).
