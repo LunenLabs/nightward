@@ -102,10 +102,11 @@ class JudgeUnavailable(Exception):
 # persona lets through in prose:
 #   editor   collapses case, whitespace within a line, and sentence punctuation
 #            (. , ; : ! followed by a space or the end; the CJK marks 。、，．；：！
-#            anywhere), but never a mark between two numbers. Every word must
-#            match. Case is compared with lower() AND
-#            upper(), never casefold(): "Maßen"/"Massen" and "ﬁ"/"fi" fold
-#            together but are different spellings (R3-LLM-04). Japanese and
+#            anywhere), but never anything between two digits: the marks and
+#            spaces there are compared exactly. Every word must match. Case
+#            is compared with lower() AND upper(), never casefold():
+#            "Maßen"/"Massen" and "ﬁ"/"fi" fold together but are different
+#            spellings (R3-LLM-04). Japanese and
 #            Chinese text has no spaces between words, so a string with kana or
 #            Han characters is prose even without whitespace (R3-LLM-05).
 #   lenient  also lets ordinary words change ("went up" -> "rose"), so it can
@@ -118,21 +119,21 @@ class JudgeUnavailable(Exception):
 # recorded with each entry so the ledger says which rules ruled. Bump it when
 # these rules change.
 
-_PERSONA_RULES = 5
+_PERSONA_RULES = 6
 
-# One token per match: a number keeps every separator between its digits, in any
-# script and width ("120.00" != "120,00"; full-width 1.5 != full-width 1,5
-# != ASCII 1.5; "10:30"),
-# a word is letters only, sentence punctuation counts only before a space or the
-# end ("." in "a.b" and "!" in "!=" stay significant; the CJK marks anywhere),
-# and every other non-space character (sign, currency, %, operator, quote,
-# emoji) is a token of its own. A mark right after a digit and before another
-# number ("1, 5" vs "1. 5") is never punctuation: it is part of the numbers'
-# meaning (R4-LLM-01).
+# One token per match: a number keeps everything between its digits that is not
+# a letter, exactly - marks and spaces of any script and width ("120.00" !=
+# "120,00"; full-width 1.5 != full-width 1,5 != ASCII 1.5; "10:30" != "10 : 30";
+# "1 000" != "1\u2009000" != "1000"), within a line. Whatever separates two digits
+# is part of the numbers' meaning, so it is never punctuation or collapsible
+# whitespace (R4-LLM-01). A word is letters only, sentence punctuation counts
+# only before a space or the end ("." in "a.b" and "!" in "!=" stay significant;
+# the CJK marks anywhere), and every other non-space character (sign, currency,
+# %, operator, quote, emoji) is a token of its own.
 _TOKEN_RE = re.compile(
-    r"(?P<num>\d+(?:[^\s\w]\d+)*)|(?P<word>[^\W\d_]+)"
-    r"|(?P<punct>(?:[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])"
-    r"(?!(?<=\d.)\s*\d))|(?P<sym>\S)"
+    r"(?P<num>\d+(?:(?:[^\w\n]|_)+\d+)*)|(?P<word>[^\W\d_]+)"
+    r"|(?P<punct>[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])"
+    r"|(?P<sym>\S)"
 )
 _NEGATIONS = frozenset({"not", "no", "never", "none", "nobody", "nothing", "neither",
                         "nor", "nowhere", "cannot", "without", "안", "못"})
