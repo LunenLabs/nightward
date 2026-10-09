@@ -33,7 +33,7 @@ nightward init
 nightward run example       # lists what moved (names only)
 nightward review            # shows each diff - approve only covers what review showed
 nightward approve --all
-git add .gitignore .nightward/baseline   # commit the approved baseline (= the boundary)
+git add .gitignore .nightward   # commit baseline/, rejected/, judge/ (init ignores per-run files)
 
 # 2. change the code, then re-run — the blast radius shows what moved
 nightward run example
@@ -126,7 +126,8 @@ command then stops with `... has unresolved merge conflict markers`. Keep one si
 Judge rulings are stored one file per ruling (`.nightward/judge/`), so two branches
 that each record a ruling merge cleanly. A conflict there means both branches ruled
 on the same pair differently: read both sides and keep one. The single-file
-`judge_verdicts.json` that older versions wrote is still read; if it conflicts, keep
+`judge_verdicts.json` that older versions wrote is still read (its entries replay only
+when they describe the pair, see below); if it conflicts, keep
 both sides' entries (each entry is an independent ruling).
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
@@ -263,15 +264,25 @@ scrub.register_field("request_id")                 # mask this key at any depth
 scrub.register(r'"ord_\d+"', '"<ORDER_ID>"')       # regex over the JSON text
 ```
 
-**Scope follows the conftest.py, like its fixtures.** A rule registered in a
-`conftest.py` (also through a helper that conftest calls) applies only to behaviors
-captured by tests under that conftest's directory. Rules in the root `conftest.py`
-cover the whole suite; `scrub.register_field("token")` in `services/orders/conftest.py`
-masks orders' tokens but never a `token` field in `services/billing`. The scope also
-doesn't depend on which directories a run collected, so `nightward run services/billing`
-captures exactly what the whole-suite run does. `scrub.disable_defaults()` is scoped
-the same way. Rules registered anywhere else (a test module, a plugin) are global.
+**Rules are test-owned, and their scope follows the file that registers them.** Call
+`scrub.register`, `register_field` and `disable_defaults` directly in a `conftest.py`
+or a test module (pytest's `python_files`). The rule applies only to behaviors
+captured by tests under that file's directory, like a conftest's fixtures. Rules in
+the root `conftest.py` cover the whole suite; `scrub.register_field("token")` in
+`services/orders/conftest.py` or `services/orders/test_orders.py` masks orders' tokens
+but never a `token` field in `services/billing`. The scope doesn't depend on which
+directories a run collected, so `nightward run services/billing` captures exactly what
+the whole-suite run does. A call from any other file (product code, a shared helper,
+a plugin) is refused with an error naming the file and line: a rule there could
+rewrite a regressed value back into the approved one with nothing in the test diff.
 `nightward doctor` names the conftest.py each suggested rule belongs in.
+
+**What custom rules replaced is reported.** `nightward run` prints, per custom rule,
+how many values it replaced and in which behaviors whenever that count changes since
+the last run (`note: scrub rule register(r'...') in conftest.py replaced 1 value(s)
+this run (was 0) in route`). A replacement that is not a `<PLACEHOLDER>` is called
+out as a rewrite, not a mask. MCP `warnings.scrub_rules` carries the same data
+(`rule`, `values`, `behaviors`, `was`, `changed`, `placeholder`).
 
 `register()` patterns run over the payload's **canonical JSON text**, not over the
 decoded strings: pretty-printed (`"key": "value"`, keys sorted), and inside a string
@@ -302,8 +313,11 @@ change first:
 | a date-time, HTTP date or Unix timestamp (also as a string, e.g. `X-RateLimit-Reset`) | `*` looks like a real change | only *if it is not part of the contract*: `scrub.register_field(key)` for that key, or a pattern anchored on the text before it; for a date in a list, "mask it at capture time" (no global date pattern) |
 | several dates that all moved by the same amount | `*` looks like a real change ("all 2 values moved by -1 day") | nothing |
 | a list with the same elements in a new order | `*` looks like a real change | only *if it is not part of the contract* (e.g. a set): sort it before capturing |
-| the same rows in a new order with float noise in some values (an unordered `GROUP BY` on a parallel engine) | `*` looks like a real change, naming the columns with noise (`$[*][2]`) | only *if order is not part of the contract*: sort (`ORDER BY` a key) and round to the number of digits it names, checked to make both samples equal |
-| a float within a few ULPs: float64, or float32 values such as embeddings | `~` float noise | round before capturing, to the most significant digits (at most 12, or 6 for float32) that make every drifted value in that path equal, e.g. `float(f"{x:.4g}")`; no mask. Rounding lowers the odds of a flip but can't rule it out: a value near a rounding boundary can still flip on another machine. For vectors, capture what the product uses (top-k ids, a ranking). Integral floats and deltas of 1 or more are never noise |
+| the same rows in a new order with float noise in some values (an unordered `GROUP BY` on a parallel engine) | `*` looks like a real change, naming the columns with noise (`$[*][2]`) and the largest drift (`up to 15 ULP`) | only *if order is not part of the contract*: sort (`ORDER BY` a key) and round to the number of digits it names, checked to make both samples equal |
+| the columns of one frame (`df.to_dict("list")`: sibling lists of one length) in a new order, every row intact | `*` looks like a real change, one finding for the frame | only *if row order is not part of the contract*: sort the **rows** by a key (`df.sort_values(...)`) or capture records; never sort the columns independently |
+| one column's values permuted while the others stayed (values moved between rows) | `*` looks like a real change ("values moved between rows (2 of 12; cust unchanged)") | nothing: it is a real change |
+| a list that grew or shrank | `!` names each element added or removed with its index (`1 element added at [2]: {...}`) and whether the rest kept its order | nothing: review it |
+| a float within a few ULPs (float32 values such as embeddings), or a float64 that drifted by up to 1e-11 relative and under 1e-6 absolute (a sum in another order) | `~` float noise | round before capturing, to the most significant digits (at most 12, or 6 for float32) that make every drifted value in that path equal, e.g. `float(f"{x:.4g}")`; no mask. Rounding lowers the odds of a flip but can't rule it out: a value near a rounding boundary can still flip on another machine. For vectors, capture what the product uses (top-k ids, a ranking). Integral floats and deltas of 1 or more are never noise |
 | rounded floats (5+ significant digits, 4+ decimals) that differ by 1 in the last digit | `*` looks like a real change | *if the capture rounds float noise*, these are rounding-boundary flips: fewer digits (checked on these values), or capture what the product uses |
 | a string holding JSON (a tool call's `arguments`) whose parsed value is unchanged | `~` formatting only | capture `json.loads(...)` of it; when the parsed value did change, doctor names the inner path (`arguments<json>.invoice_id`) |
 | the same text in another Unicode normalization form (NFC -> NFD) | `*` looks like a real change, named as such | only *if the form is not part of the contract*: `unicodedata.normalize("NFC", s)` before capturing |
@@ -387,7 +401,9 @@ folding is not used, so `Maßen`/`Massen` ("in moderation"/"in masses"), `ﬁ`/`
 the KELVIN SIGN/`K` stay different. Japanese and Chinese are written without spaces,
 so text with kana or Han characters counts as prose even without whitespace. Its
 `。、，．；：！` marks count as sentence punctuation and full-width spaces as spaces;
-every other character must match. A change in Unicode normalization only (NFC vs NFD,
+every other character must match. A mark between digits, or between a digit and the
+next number (`1, 5` vs `1. 5`), is part of the number in any script and width:
+`１．５` vs `１，５` vs `1.5`, or `10：30` vs `10．30`, is DIFFERENT. A change in Unicode normalization only (NFC vs NFD,
 e.g. Hangul from a macOS file name) is DIFFERENT. `review` and `doctor` name it
 ("same text in another Unicode normalization form (NFC -> NFD)") and suggest
 `unicodedata.normalize("NFC", s)` before capturing.
@@ -396,7 +412,7 @@ they are prose.
 
 | persona | rules prose SAME when... | use it for |
 |---|---|---|
-| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end; `。、，．；：！` anywhere) differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
+| `persona:editor` | only letter case, spaces within a line, or sentence punctuation (`. , ; : !` before a space or the end; `。、，．；：！` anywhere), never between digits, differ. Every word must match; a unit after a number keeps its case (`5 mW` vs `5 MW`). | CI without a key: collapses cosmetic rewording only |
 | `persona:lenient` | as editor, and ordinary words may also change (`went up` vs `rose`). Can pass `approved` vs `denied`. | tests and demos only, **never real gating** |
 | `persona:strict` | never | forcing every mismatch to stay breached |
 
@@ -412,7 +428,14 @@ green.
   fresh clones and CI replay verdicts without a key. A replayed ruling is marked
   `(replayed from the committed ledger, not ruled this run)` in `review`, and
   `"judge_replayed": true` in `status --json` and MCP: whoever last edited the
-  ledger made that ruling.
+  ledger made that ruling. An entry is replayed only when it describes exactly the
+  pair being judged: its file is named by the hash of its key (the two fingerprints
+  and the judge), and its `behavior`, `model`, `old` and `new` fields match the
+  behavior and wording being judged. So the fields a reviewer reads are the ones that
+  decide. Any other entry is not replayed (`warning: judge ledger entry <file> (...)
+  - not replayed`): the pair is ruled again, or compared exactly when the judge is
+  unavailable. A legacy `judge_verdicts.json` entry follows the same rule and is
+  moved into `judge/` when it is used.
 - A persona is deterministic and free, so it rules again on every run and its
   ledger entries are a record only. A hand-edited persona entry (`DIFFERENT` ->
   `SAME`) never changes the verdict: `run` warns that the ledger entry did not match
@@ -485,7 +508,9 @@ absolute path of the store the verdict comes from). `nightward_run` also returns
 
 `nightward_run` adds `warnings`: `skipped`, `failed`, `errors`, `deselected`,
 `xfailed`, `scrubbed` (values the default scrubbers masked), `scrub_unmatched`
-(custom scrub rules that matched nothing), `pytest_returncode`, and
+(custom scrub rules that matched nothing), `scrub_rules` (per custom rule: values and
+behaviors it replaced this run, whether that changed, and whether its replacement is a
+`<PLACEHOLDER>`), `pytest_returncode`, and
 `pytest_output_tail` (pytest's last lines, so the agent can see why tests failed).
 The agent is done when `boundary` is `"intact"` and `stale` is false.
 
@@ -515,7 +540,7 @@ deploys to GitHub Pages. Data is loaded via `fetch('./data.json')` and rendered 
 `textContent` only — captured output never touches an HTML parser. The page is a
 snapshot of the store when it was built: after a new `run` or `approve`, rebuild it
 with `nightward view` (refreshing the browser shows the old build). The header shows
-the verdict's own time ("verdict as of", UTC) next to the build time.
+the verdict's own time ("verdict as of", UTC) next to the build time. Only "intact" reads as done: "partial" (approved behaviors not checked), stale, incomplete and any boundary value the page does not know are shown as not done. A judge ruling read back from the committed ledger carries a "replayed" badge (not ruled this run).
 
 The copy-paste commands quote every behavior name for the shell picked in
 "commands for:" (bash/zsh/sh, PowerShell, or cmd.exe; PowerShell is the default on

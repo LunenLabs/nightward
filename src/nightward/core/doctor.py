@@ -60,6 +60,13 @@ _HASH_LENGTHS = {32, 40, 64, 128}
 _CONTEXT = 16      # chars of literal context that anchor a substring rule
 _ULPS = 4          # float noise: at most this many units in the last place
 _ZERO_FLOOR = 1e-12  # ...or this close to zero (cancellation residue)
+# ...or, for float64, a relative drift this small with an absolute one below
+# _F64_ABS. A float64 sum of N terms in another order drifts by up to ~N ulps
+# (measured: a parallel GROUP BY over 400-row groups drifted 7-15 ULP, R3-DATA-04);
+# 1e-11 covers groups of ~45,000 terms. The absolute cap keeps every human-scale
+# change real: a cent on a billion (1e-11 relative) is 0.01, never "noise".
+_F64_REL = 1e-11
+_F64_ABS = 1e-6
 _IF_NOT_CONTRACT = "if it is not part of the contract"
 _REAL = "looks like a real change"
 _ROUND_FLOOR = 3     # rounding advice never goes below this many significant digits
@@ -267,6 +274,8 @@ def _float_noise(a: float, b: float) -> str | None:
         return None          # a large absolute delta is never noise
     if diff <= _ULPS * math.ulp(big) or diff <= _ZERO_FLOOR:
         return "float64"
+    if diff <= _F64_REL * big and diff < _F64_ABS:
+        return "float64"     # e.g. sums from a parallel engine, in another order
     if _is_f32(a) and _is_f32(b) and diff <= _ULPS * _ulp32(big):
         return "float32"     # e.g. embeddings via .tolist(), another machine's BLAS
     return None
@@ -401,6 +410,12 @@ _BOUNDARY = ("a value near a rounding boundary can still flip on another run; fo
              "vectors, capture what the product uses (top-k ids, a ranking)")
 
 
+def _max_ulps(pairs: list[tuple]) -> int:
+    """The largest drift in the evidence, in units in the last place."""
+    return max((round(abs(a - b) / math.ulp(max(abs(a), abs(b)))) for a, b in pairs
+                if isinstance(a, float) and isinstance(b, float) and (a or b)), default=0)
+
+
 def _round_advice(found: list[dict]) -> None:
     """Write the rounding notes, per path group, with a digit count verified to
     equalize every drifted value in the group (R3-LLM-01)."""
@@ -428,7 +443,8 @@ def _round_advice(found: list[dict]) -> None:
                f"rounding to {_ROUND_FLOOR} significant digits still leaves these {n} "
                f"apart - capture what the product uses instead (top-k ids, a ranking)")
         if kind == "noise":
-            note = f"{width} noise in the last digits: {fix} - don't mask it"
+            drift = f" (up to {_max_ulps(pairs)} ULP)" if width == "float64" else ""
+            note = f"{width} noise in the last digits{drift}: {fix} - don't mask it"
         else:
             note = (f"{_REAL}: differs by 1 in the last of {had} significant digits; if "
                     f"this capture rounds float noise, it is a rounding-boundary flip "
@@ -464,9 +480,11 @@ def _noise_equal(a: Any, b: Any) -> bool:
     return a == b
 
 
-def _noisy_reorder(old: list, new: list, prefix: str) -> dict | None:
+def _noisy_reorder(old: list, new: list, prefix: str,
+                   columns: list[str] | None = None) -> dict | None:
     """One ORDER finding when `new` is `old` in another order with float noise
-    in some values (a parallel engine's unordered GROUP BY, R3-DATA-04)."""
+    in some values (a parallel engine's unordered GROUP BY, R3-DATA-04).
+    columns: the rows were zipped from these sibling columns (R4-DATA-03)."""
     buckets: dict[str, list[int]] = {}
     for j, v in enumerate(new):
         buckets.setdefault(_sortable(_shape(v)), []).append(j)
@@ -491,23 +509,119 @@ def _noisy_reorder(old: list, new: list, prefix: str) -> dict | None:
     for i, j in pairs:   # the row moved (i -> j), so its paths read "[*]"; columns stay
         _walk(old[i], new[j], f"{prefix or ROOT}[*]", None, inner)
     paths = sorted({f["path"] for f in inner})
+    if columns:   # "$[*][2]" -> "revenue": name the column, not the zipped index
+        at = len(f"{prefix or ROOT}[*][")
+        paths = sorted({columns[int(p[at:].split("]", 1)[0])] for p in paths})
     width = ("float32" if any(f["_rounding"] == ("noise", "float32") for f in inner)
              else "float64")
+    ulps = _max_ulps([f["_values"] for f in inner if f["_values"]])
+    drift = f" (up to {ulps} ULP)" if width == "float64" and ulps else ""
+    how = ("sort the rows by a key before capturing (e.g. df.sort_values(...) or "
+           "to_dict(\"records\") sorted by a key; never sort the columns independently)"
+           if columns else "sort it before capturing (ORDER BY a key, or sorted(rows))")
     digits = _equalizing_digits(
         6 if width == "float32" else 12,
         lambda d: sorted(map(_sortable, _rounded(old, d)))
         == sorted(map(_sortable, _rounded(new, d))))
-    fix = (f'sort it before capturing (ORDER BY a key, or sorted(rows)) and round its '
-           f'floats to {digits} significant digits, e.g. float(f"{{x:.{digits}g}}") '
-           f"(equalizes both samples here; a value near a rounding boundary can still "
-           f"flip)" if digits else
-           f"sort it before capturing (ORDER BY a key, or sorted(rows)); its floats still "
-           f"differ at {_ROUND_FLOOR} significant digits, so capture what the product uses "
-           f"(rounded totals, an aggregate)")
-    return _finding(prefix or ROOT, ORDER, f"same elements in a new order, with {width} noise in "
+    fix = (f'{how} and round its floats to {digits} significant digits, e.g. '
+           f'float(f"{{x:.{digits}g}}") (equalizes both samples here; a value near a '
+           f"rounding boundary can still flip)" if digits else
+           f"{how}; its floats still differ at {_ROUND_FLOOR} significant digits, so "
+           f"capture what the product uses (rounded totals, an aggregate)")
+    what = (f"the rows of {len(columns)} columns moved together" if columns
+            else "same elements in a new order")
+    return _finding(prefix or ROOT, ORDER, f"{what}, with {width} noise{drift} in "
                     f"{len(inner)} value(s) at {', '.join(paths)} - {_REAL} (event, ledger "
                     f"or ranking order); {_IF_NOT_CONTRACT} (e.g. an unordered query "
                     f"result), {fix}")
+
+
+# ---- columnar frames: sibling lists are the columns of one table ----------------
+
+
+def _columns(old: dict, new: dict) -> list[str]:
+    """Keys whose values are lists of one common length (>= 2) on both sides:
+    df.to_dict("list"), Polars/Arrow to_dict() (R4-DATA-03)."""
+    keys = [k for k in old if k in new and isinstance(old[k], list)
+            and isinstance(new[k], list)]
+    lengths = {len(old[k]) for k in keys} | {len(new[k]) for k in keys}
+    return sorted(keys) if len(keys) >= 2 and len(lengths) == 1 and lengths.pop() >= 2 else []
+
+
+def _columnar(old: dict, new: dict, prefix: str, cols: list[str], out: list[dict]) -> set[str]:
+    """Findings for a columnar frame; returns the columns it explained.
+
+    Its rows only exist across the columns, so a reorder is judged on whole
+    rows, and doctor never suggests sorting one column: that would let values
+    move between rows unseen."""
+    rows_old = [list(r) for r in zip(*(old[k] for k in cols), strict=True)]
+    rows_new = [list(r) for r in zip(*(new[k] for k in cols), strict=True)]
+    if rows_old == rows_new:
+        return set()
+    path = prefix or ROOT
+    names = ", ".join(cols)
+    if sorted(map(_sortable, rows_old)) == sorted(map(_sortable, rows_new)):
+        out.append(_finding(path, ORDER, f"rows reordered: the {len(cols)} columns ({names}) "
+                            f"moved together, every row intact - {_REAL} (event, ledger or "
+                            f"ranking order); {_IF_NOT_CONTRACT}, sort the rows by a key "
+                            f"before capturing (e.g. df.sort_values(...)), or capture records "
+                            f"(to_dict(\"records\")); never sort the columns independently - "
+                            f"that would hide values moving between rows"))
+        return set(cols)
+    noisy = _noisy_reorder(rows_old, rows_new, prefix, columns=cols)
+    if noisy:
+        out.append(noisy)
+        return set(cols)
+    done = set()
+    same = [k for k in cols if old[k] == new[k]]
+    for k in cols:
+        if old[k] != new[k] and sorted(map(_sortable, old[k])) == sorted(map(_sortable, new[k])):
+            moved = sum(a != b for a, b in zip(old[k], new[k], strict=True))
+            rest = (f"{', '.join(same)} unchanged" if same
+                    else "the other columns changed too")
+            out.append(_finding(f"{prefix}.{k}" if prefix else k, REAL,
+                                f"values moved between rows ({moved} of {len(old[k])}; "
+                                f"{rest}) - {_REAL}"))
+            done.add(k)
+    return done
+
+
+# ---- lists that grew or shrank ---------------------------------------------------
+
+
+def _length_finding(path: str, old: list, new: list) -> dict:
+    """Name the elements added or removed, matched by content (R4-DATA-04)."""
+    note = f"list length {len(old)} -> {len(new)}"
+    o, n = [_sortable(v) for v in old], [_sortable(v) for v in new]
+    added, removed = Counter(n) - Counter(o), Counter(o) - Counter(n)
+    parts: list[str] = []
+    for label, side, values, extra in (("added at", n, new, added),
+                                       ("removed (was", o, old, removed)):
+        left, shown = Counter(extra), []
+        for i, s in enumerate(side):
+            if left[s]:
+                left[s] -= 1
+                shown.append(f"1 element {label} [{i}]{')' if '(' in label else ''}: "
+                             f"{_short(values[i], 80)}")
+        parts += shown[:3] + ([f"and {len(shown) - 3} more {label.split()[0]}"]
+                              if len(shown) > 3 else [])
+    rest_o = _without(o, removed)
+    rest_n = _without(n, added)
+    if rest_o and rest_o == rest_n:
+        parts.append(f"other {len(rest_o)} element(s) unchanged, in the same order")
+    elif rest_o and sorted(rest_o) == sorted(rest_n):
+        parts.append(f"other {len(rest_o)} element(s) the same, in a new order")
+    return _finding(path, STRUCTURAL, note + (": " + "; ".join(parts) if parts else ""))
+
+
+def _without(items: list[str], drop: Counter) -> list[str]:
+    left, out = Counter(drop), []
+    for s in items:
+        if left[s]:
+            left[s] -= 1
+        else:
+            out.append(s)
+    return out
 
 
 def _clip(escaped: str, limit: int = 60) -> str:
@@ -529,7 +643,11 @@ def _walk(old: Any, new: Any, prefix: str, key: str | None, out: list[dict]) -> 
     # the list or record that contains the drift (R1-WEB-02).
     path = prefix or ROOT
     if isinstance(old, dict) and isinstance(new, dict):
+        cols = _columns(old, new)
+        explained = _columnar(old, new, prefix, cols, out) if cols else set()
         for k in sorted(set(old) | set(new)):
+            if k in explained:
+                continue
             child = f"{prefix}.{k}" if prefix else k
             if k not in old or k not in new:
                 out.append(_finding(child, STRUCTURAL,
@@ -539,8 +657,7 @@ def _walk(old: Any, new: Any, prefix: str, key: str | None, out: list[dict]) -> 
         return
     if isinstance(old, list) and isinstance(new, list):
         if len(old) != len(new):
-            out.append(_finding(f"{path}[]", STRUCTURAL,
-                                f"list length {len(old)} -> {len(new)}"))
+            out.append(_length_finding(path, old, new))
             return
         if old != new and sorted(map(_sortable, old)) == sorted(map(_sortable, new)):
             # Order can be the contract (event or ledger order, rankings): one

@@ -16,15 +16,20 @@ with `disable_defaults()` in conftest.py (built-ins off, custom rules kept). The
 plugin counts default masks and `nightward run` reports them, so the masking is
 never silent.
 
-Scope (D20): a rule (or `disable_defaults()`) called from a conftest.py - also
-through a helper it calls - applies only to behaviors captured by tests under
-that conftest's directory, like the conftest's own fixtures. So a rule in the
-root conftest.py covers the whole suite, while one in `services/orders/conftest.py`
-can't mask a field of `services/billing`, and a capture never depends on which
-directories a run collected. Rules registered anywhere else are global.
+Scope (D20, D28): a rule (or `disable_defaults()`) must be called directly from
+a conftest.py or a test module, and applies only to behaviors captured by tests
+under that file's directory, like a conftest's own fixtures. So a rule in the
+root conftest.py covers the whole suite, while one in `services/orders/` can't
+mask a field of `services/billing`, and a capture never depends on which
+directories a run collected. A call from any other file (product code, a helper,
+a plugin) is refused: a rule there could rewrite a regression back into the
+approved value with nothing in the test diff. The plugin counts every custom
+rule's replacements per behavior and `nightward run` reports them when they
+change.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import sys
@@ -40,33 +45,47 @@ _DEFAULT_SCRUBBERS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "<UUID>"),  # noqa: E501
 ]
 
-# Each rule carries its scope: the conftest.py that registered it, or None (global).
+# Each rule carries its scope: the conftest.py or test module that registered it.
 _custom: list[tuple[re.Pattern, str, Path | None]] = []
 _custom_fields: list[tuple[str, Any, Path | None]] = []
 _defaults_off: list[Path | None] = []   # where disable_defaults() was called
+# pytest's python_files (the plugin sets them from the ini): what a test module is.
+_test_files: list[str] = ["test_*.py", "*_test.py"]
 # Matches per custom rule in this process, so a rule that never fires is
 # reported instead of silently leaving the noise in place (R1-WEB-03).
 _hits: Counter = Counter()
 
 
-def _caller_conftest() -> Path | None:
-    """The conftest.py on the call stack nearest the caller, or None."""
+def set_test_files(patterns: list[str]) -> None:
+    """Which file names are test modules (pytest's python_files)."""
+    _test_files[:] = list(patterns) or ["test_*.py", "*_test.py"]
+
+
+def _caller_scope(what: str) -> Path:
+    """The conftest.py or test module that called scrub.<what>() directly.
+
+    Anything else is refused (D28): a rule in product code or a shared helper
+    is not test-owned, and could silently rewrite captured values."""
     frame = sys._getframe(2)
-    while frame is not None:
-        path = Path(frame.f_code.co_filename)
-        if path.name == "conftest.py":
-            path = path.resolve()
-            _shown(path)   # name it relative to where it was registered
-            return path
-        frame = frame.f_back
-    return None
+    path = Path(frame.f_code.co_filename)
+    if path.name == "conftest.py" or any(fnmatch.fnmatch(path.name, p) for p in _test_files):
+        path = path.resolve()
+        _shown(path)   # name it relative to where it was registered
+        return path
+    raise NightwardError(
+        f"scrub.{what}() was called from {path}:{frame.f_lineno}, which is neither a "
+        f"conftest.py nor a test module. Register scrub rules directly in a conftest.py "
+        f"(or a test module): they apply to the tests under its directory, and a "
+        f"reviewer sees them as test configuration. A rule in product code could "
+        f"silently rewrite what the gate captures.")
 
 
 def _applies(scope: Path | None, path: Path | None) -> bool:
-    """Whether a rule registered from `scope` covers the test file `path`."""
-    if scope is None:
+    """Whether a rule registered from `scope` covers the test file `path`
+    (None: not captured by a test - library use - every rule applies)."""
+    if scope is None or path is None:
         return True
-    return path is not None and Path(path).resolve().is_relative_to(scope.parent)
+    return Path(path).resolve().is_relative_to(scope.parent)
 
 
 def register(pattern: str, replacement: str) -> None:
@@ -81,10 +100,11 @@ def register(pattern: str, replacement: str) -> None:
     quoted string values, and quote your placeholder tokens. Prefer
     `register_field` when the volatile value lives under a stable key, or mask
     the value in the test before capturing it. `nightward run` reports a rule
-    that matched nothing. Called from a conftest.py, the rule covers only tests
-    under that conftest's directory.
+    that matched nothing, and how many values a rule replaced when that count
+    changes. Call it directly in a conftest.py or a test module: the rule covers
+    only tests under that file's directory; any other caller is refused.
     """
-    _custom.append((re.compile(pattern), replacement, _caller_conftest()))
+    _custom.append((re.compile(pattern), replacement, _caller_scope("register")))
 
 
 def register_field(field: str, replacement: Any = "<SCRUBBED>") -> None:
@@ -92,10 +112,11 @@ def register_field(field: str, replacement: Any = "<SCRUBBED>") -> None:
 
     e.g. register_field("created_at") or register_field("attempts", 0).
     The replacement is a JSON value, not regex text — it cannot corrupt the
-    payload and never touches look-alike literals in other fields. Called from
-    a conftest.py, the rule covers only tests under that conftest's directory.
+    payload and never touches look-alike literals in other fields. Call it
+    directly in a conftest.py or a test module: the rule covers only tests under
+    that file's directory; any other caller is refused.
     """
-    _register_field_scoped(field, replacement, _caller_conftest())
+    _register_field_scoped(field, replacement, _caller_scope("register_field"))
 
 
 def _register_field_scoped(field: str, replacement: Any, scope: Path | None) -> None:
@@ -107,10 +128,11 @@ def disable_defaults() -> None:
 
     Call it in conftest.py when datetimes/uuids are your *output* (deadlines,
     event times, deterministic ids). Custom `register`/`register_field` rules
-    still apply. For a single behavior use `behavior(..., scrub=False)`. Called
-    from a conftest.py, it covers only tests under that conftest's directory.
+    still apply. For a single behavior use `behavior(..., scrub=False)`. Call
+    it directly in a conftest.py or a test module: it covers only tests under
+    that file's directory.
     """
-    _defaults_off.append(_caller_conftest())
+    _defaults_off.append(_caller_scope("disable_defaults"))
 
 
 def _reset() -> None:
@@ -139,6 +161,25 @@ def _shown(path: Path) -> str:
         except ValueError:
             _SHOWN[path] = str(path)
     return _SHOWN[path]
+
+
+def _placeholder(replacement: Any) -> bool:
+    """A mask writes a visible <TOKEN>; anything else rewrites the value."""
+    if not isinstance(replacement, str):
+        return False
+    text = re.sub(r"\\(?:\d+|g<\w+>)", "", replacement)
+    return bool(re.search(r"<[^<>]+>", text))
+
+
+def rules() -> list[tuple[str, bool]]:
+    """(rule text, replacement is a <PLACEHOLDER>) for every custom rule."""
+    return [*((_rule_text(p, s), _placeholder(r)) for p, r, s in _custom),
+            *((_rule_text(f, s), _placeholder(r)) for f, r, s in _custom_fields)]
+
+
+def hits() -> Counter:
+    """Replacements per custom rule text so far in this process (a copy)."""
+    return Counter(_hits)
 
 
 def unmatched_rules() -> list[str]:

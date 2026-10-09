@@ -367,6 +367,8 @@ def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None
         "scrubbed": meta.get("scrubbed") or {"values": 0, "behaviors": 0},
         # custom scrub.register/register_field rules that matched nothing
         "scrub_unmatched": meta.get("scrub_unmatched") or [],
+        # per custom rule: {rule, values, behaviors, was, changed, placeholder} (D28)
+        "scrub_rules": meta.get("scrub_rules") or [],
         "pytest_returncode": result.returncode,
         "output_tail": _output_tail(result),
     }

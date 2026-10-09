@@ -206,8 +206,11 @@ def test_conflicted_ruling_file_is_named_a_merge_conflict(tmp_path):
 def test_legacy_ledger_api_rulings_still_replay(tmp_path):
     spec = "anthropic:claude-haiku-4-5"
     (tmp_path / "judge_verdicts.json").write_text(
-        json.dumps({f"f1:f2:{spec}": {"verdict": "SAME", "reason": "r"}}), encoding="utf-8")
-    v = Judge(spec, cache_path=tmp_path / "judge_verdicts.json").equivalent("a", "b", "f1", "f2")
+        json.dumps({f"f1:f2:{spec}": {"verdict": "SAME", "reason": "r", "behavior": "x",
+                                      "model": spec, "old": "a", "new": "b"}}),
+        encoding="utf-8")
+    v = Judge(spec, cache_path=tmp_path / "judge_verdicts.json").equivalent(
+        "a", "b", "f1", "f2", name="x")
     assert v.verdict == SAME and v.cached
 
 

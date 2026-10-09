@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from . import scrub as _scrub
 from .core.baseline import Store, digest
 from .core.behavior import Behavior, validate_name
 from .core.lock import acquire, read_lock, release
@@ -45,6 +46,8 @@ class Recorder:
         self.behaviors: list[Behavior] = []
         self._seen: dict[str, str] = {}  # casefolded name -> name as captured
         self.masked: dict[str, int] = {}  # name -> values the default scrubbers masked
+        # name -> {custom rule text: values it replaced in that behavior} (D28)
+        self.rule_hits: dict[str, dict[str, int]] = {}
         # Removal evidence: tests whose every phase passed this run. Only such a
         # test proves that a behavior it no longer captures is really gone.
         self._passed: set[str] = set()
@@ -69,6 +72,7 @@ class Recorder:
         for b in stale:
             self._seen.pop(b.name.casefold(), None)
             self.masked.pop(b.name, None)
+            self.rule_hits.pop(b.name, None)
 
     def completed(self) -> list[str]:
         return sorted(self._passed - self._broken)
@@ -123,7 +127,11 @@ class Recorder:
         # let it surface (naming the behavior) so the offending test fails loudly.
         try:
             # path: the capturing test's file - scopes conftest rules (D20)
+            before = _scrub.hits()
             payload, masked = scrub_counted(value, enabled=scrub, path=path)
+            replaced = _scrub.hits() - before
+            if replaced:
+                self.rule_hits[name] = dict(replaced)
         except NightwardError as exc:
             raise NightwardError(f"behavior {name!r}: {exc}") from exc
         if masked:
@@ -152,6 +160,8 @@ def pytest_configure(config):
         raise pytest.UsageError(
             "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
         )
+    # Which files may register scrub rules (D28): pytest's own notion of a test module.
+    _scrub.set_test_files(config.getini("python_files"))
     recording = config.getoption("--nightward-record")
     config._nightward_lock = None
     if recording:
@@ -321,6 +331,21 @@ def _scope(session, exitstatus, counts: dict, completed: list[str],
             "clean_doubt": "; ".join(dict.fromkeys(doubts)) or None}
 
 
+def _rule_report(rec: Recorder, previous) -> list[dict]:
+    """Per custom rule: values and behaviors it replaced this run, whether that
+    count changed since the last run, and whether its replacement is a visible
+    <PLACEHOLDER> or a plausible value (a rewrite) - D28, R4-LLM-02."""
+    was = {r.get("rule"): r.get("values") for r in previous or () if isinstance(r, dict)}
+    out = []
+    for text, placeholder in _scrub.rules():
+        behaviors = sorted(n for n, hit in rec.rule_hits.items() if hit.get(text))
+        values = sum(rec.rule_hits[n][text] for n in behaviors)
+        out.append({"rule": text, "values": values, "behaviors": behaviors,
+                    "was": was.get(text), "changed": was.get(text) != values,
+                    "placeholder": placeholder})
+    return out
+
+
 def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None) -> None:
     config = session.config
     try:
@@ -354,6 +379,7 @@ def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None)
                         "names": names, "changed": names != was}
     # A custom rule that never fired leaves the user believing noise is handled.
     meta["scrub_unmatched"] = unmatched_rules()
+    meta["scrub_rules"] = _rule_report(rec, last.get("scrub_rules"))
     # Written last: its presence proves to the runner that THIS run's flush landed.
     if run_id:
         meta["run_id"] = run_id

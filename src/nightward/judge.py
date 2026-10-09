@@ -102,7 +102,8 @@ class JudgeUnavailable(Exception):
 # persona lets through in prose:
 #   editor   collapses case, whitespace within a line, and sentence punctuation
 #            (. , ; : ! followed by a space or the end; the CJK marks 。、，．；：！
-#            anywhere). Every word must match. Case is compared with lower() AND
+#            anywhere), but never a mark between two numbers. Every word must
+#            match. Case is compared with lower() AND
 #            upper(), never casefold(): "Maßen"/"Massen" and "ﬁ"/"fi" fold
 #            together but are different spellings (R3-LLM-04). Japanese and
 #            Chinese text has no spaces between words, so a string with kana or
@@ -117,15 +118,21 @@ class JudgeUnavailable(Exception):
 # recorded with each entry so the ledger says which rules ruled. Bump it when
 # these rules change.
 
-_PERSONA_RULES = 4
+_PERSONA_RULES = 5
 
-# One token per match: a number keeps its separators ("120.00" != "120,00"), a
-# word is letters only, sentence punctuation counts only before a space or the
-# end ("." in "a.b" and "!" in "!=" stay significant), and every other non-space
-# character (sign, currency, %, operator, quote, emoji) is a token of its own.
+# One token per match: a number keeps every separator between its digits, in any
+# script and width ("120.00" != "120,00"; full-width 1.5 != full-width 1,5
+# != ASCII 1.5; "10:30"),
+# a word is letters only, sentence punctuation counts only before a space or the
+# end ("." in "a.b" and "!" in "!=" stay significant; the CJK marks anywhere),
+# and every other non-space character (sign, currency, %, operator, quote,
+# emoji) is a token of its own. A mark right after a digit and before another
+# number ("1, 5" vs "1. 5") is never punctuation: it is part of the numbers'
+# meaning (R4-LLM-01).
 _TOKEN_RE = re.compile(
-    r"(?P<num>\d+(?:[.,]\d+)*)|(?P<word>[^\W\d_]+)"
-    r"|(?P<punct>[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])|(?P<sym>\S)"
+    r"(?P<num>\d+(?:[^\s\w]\d+)*)|(?P<word>[^\W\d_]+)"
+    r"|(?P<punct>(?:[.,;:!](?=\s|$)|[\u3001\u3002\uff0c\uff0e\uff1b\uff1a\uff01])"
+    r"(?!(?<=\d.)\s*\d))|(?P<sym>\S)"
 )
 _NEGATIONS = frozenset({"not", "no", "never", "none", "nobody", "nothing", "neither",
                         "nor", "nowhere", "cannot", "without", "안", "못"})
@@ -378,7 +385,11 @@ class Judge:
 
     The ledger is one JSON file per ruling in `<store>/judge/` (cache_path's
     sibling dir; cache_path itself is the single-file ledger older versions
-    wrote, still read, never rewritten).
+    wrote, still read, never rewritten). A model ruling is replayed only when
+    the entry describes exactly the pair being judged - its file name, key,
+    behavior, model and old/new wording all match (R4-LLM-03) - so the part of
+    the ledger a reviewer reads is the part that decides. A legacy entry that
+    passes the same check is migrated into `judge/` when it is used.
     """
 
     def __init__(self, spec: str, cache_path: Path | None = None):
@@ -386,6 +397,8 @@ class Judge:
         self.spec = spec
         self.cache_path = Path(cache_path) if cache_path else None
         self.ledger_dir = self.cache_path.with_name("judge") if self.cache_path else None
+        # key -> (file it came from, legacy single-file ledger?)
+        self._origin: dict[str, tuple[Path, bool]] = {}
         self._cache: dict[str, dict] = self._load_cache()
         # Why the backend could not rule this run, and which behaviors fell back
         # to the exact comparison because of it - surfaced, never swallowed.
@@ -394,6 +407,9 @@ class Judge:
         # Persona rulings whose ledger entry said otherwise (hand-edited, or
         # recorded under older rules): re-judged and rewritten, and reported.
         self.ledger_mismatch: list[str] = []
+        # Model rulings not replayed because the entry describes another change
+        # (forged or hand-edited readable fields): "<file> (<why>)".
+        self.ledger_rejected: list[str] = []
 
     def _load_cache(self) -> dict[str, dict]:
         # The ledger is committed, so it can be corrupted by e.g. a merge
@@ -409,15 +425,37 @@ class Judge:
             if not isinstance(legacy, dict):
                 raise NightwardError(
                     f"corrupt judge verdict ledger {self.cache_path}: expected a JSON object")
-            ledger.update(legacy)
+            for key, entry in legacy.items():
+                if isinstance(entry, dict):
+                    ledger[key] = entry
+                    self._origin[key] = (self.cache_path, True)
         if self.ledger_dir and self.ledger_dir.is_dir():
             for f in sorted(self.ledger_dir.glob("*.json")):
                 entry = _read_ledger_file(
                     f, "both branches ruled on the same pair differently; keep one side "
                     f"(`git checkout --ours -- {f}` or `--theirs`) after reading both")
                 if isinstance(entry, dict) and isinstance(entry.get("key"), str):
-                    ledger[entry["key"]] = entry
+                    key = entry["key"]
+                    # A file named by its key's hash wins over a misnamed copy.
+                    if (key in ledger and not self._origin[key][1]
+                            and self._origin[key][0] == _ruling_file(self.ledger_dir, key)):
+                        continue
+                    ledger[key] = entry
+                    self._origin[key] = (f, False)
         return ledger
+
+    def _not_this_pair(self, key: str, entry: dict, name: str,
+                       old_payload: Any, new_payload: Any) -> str | None:
+        """Why `entry` is not a ruling on this exact pair, or None when it is."""
+        path, legacy = self._origin.get(key, (None, False))
+        if not legacy and path is not None and path != _ruling_file(self.ledger_dir, key):
+            return "its file name is not the hash of its key"
+        expected = {"behavior": name, "model": self.spec,
+                    "old": _excerpt(old_payload), "new": _excerpt(new_payload)}
+        wrong = [k for k, v in expected.items() if entry.get(k) != v]
+        if wrong:
+            return f"its {', '.join(wrong)} do not describe {name} as judged now"
+        return None
 
     def _save(self, key: str) -> None:
         if self.ledger_dir:
@@ -440,16 +478,26 @@ class Judge:
         """
         key = f"{old_fp}:{new_fp}:{self.spec}"
         hit = self._cache.get(key)
+        rejected = False
         if (self.provider != "persona" and isinstance(hit, dict)
                 and hit.get("verdict") in (SAME, DIFFERENT)):
-            return Verdict(hit["verdict"], str(hit.get("reason", "")), self.spec, cached=True)
+            why = self._not_this_pair(key, hit, name, old_payload, new_payload)
+            if why is None:
+                if self._origin.get(key, (None, False))[1]:
+                    self._cache[key] = hit | {"key": key}
+                    self._save(key)   # migrate a verified legacy entry into judge/
+                return Verdict(hit["verdict"], str(hit.get("reason", "")), self.spec,
+                               cached=True)
+            path = self._origin.get(key, (self.cache_path, True))[0]
+            self.ledger_rejected.append(f"{path.name if path else 'ledger'} ({why})")
+            rejected = True   # fail closed: rule again, or compare exactly
         try:
             verdict, reason = _BACKENDS[self.provider](self.model, old_payload, new_payload)
         except JudgeUnavailable as exc:
             self.unavailable = self.unavailable or str(exc)
             self.compared_exactly.append(name)
             return None
-        if isinstance(hit, dict) and hit.get("verdict") == verdict and (
+        if not rejected and isinstance(hit, dict) and hit.get("verdict") == verdict and (
                 self.provider != "persona" or hit.get("rules") == _PERSONA_RULES):
             return Verdict(verdict, reason, self.spec)   # already on record
         if isinstance(hit, dict) and hit.get("verdict") != verdict:
@@ -470,4 +518,6 @@ class Judge:
                "compared_exactly": sorted(self.compared_exactly)}
         if self.ledger_mismatch:
             out["ledger_mismatch"] = sorted(self.ledger_mismatch)
+        if self.ledger_rejected:
+            out["ledger_rejected"] = sorted(self.ledger_rejected)
         return out

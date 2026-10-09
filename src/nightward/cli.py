@@ -507,6 +507,12 @@ def _print_summary(report: dict) -> None:
             f"{escape(judge['spec'])} rules now (edited by hand, or recorded under older "
             f"rules); it was ruled again and rewritten - review the ledger diff",
             soft_wrap=True)
+    for why in judge.get("ledger_rejected") or ():
+        # A forged or hand-edited model ruling: never replayed (R4-LLM-03).
+        err_console.print(
+            f"[yellow]warning:[/yellow] judge ledger entry {escape(why)} - not replayed; "
+            f"ruled again, or compared exactly if the judge is unavailable. Review "
+            f"the ledger diff", soft_wrap=True)
     if judge.get("unavailable") and not judge.get("spec"):
         err_console.print(
             f"[yellow]note:[/yellow] {len(judge['compared_exactly'])} approved semantic "
@@ -578,8 +584,13 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
                       "baseline, then `nightward review` what moved.")
     else:
         console.print("\nNext: capture behaviors with the `behavior` pytest fixture, "
-                      "then `nightward run <path>`, `nightward review` and "
-                      "`nightward approve --all`.")
+                      "then `nightward run <path>`, `nightward review` and `nightward "
+                      "approve --all`.")
+    # Rejections and judge rulings are decisions too: without them a clone or
+    # CI gates differently from the machine that made them (R4-FIN-05).
+    ignored = " (the per-run files are git-ignored)" if _gitignore_lines(dir) else ""
+    console.print(f"Commit {escape(store.root.as_posix())}/ with your code: baseline/, "
+                  f"rejected/ and judge/ are the team's decisions{ignored}.", soft_wrap=True)
 
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -642,6 +653,20 @@ def run(ctx: typer.Context,
                           f"in {scrubbed['behaviors']} behavior(s) (timestamps/uuids)"
                           f"{': ' + escape(shown) if shown else ''} - opt out with "
                           f"scrub=False[/dim]", soft_wrap=True)
+    for rule in result["scrub_rules"]:
+        # What a custom rule replaced is part of what the gate saw (D28): say it
+        # whenever the count moves, e.g. a rule that starts rewriting a value.
+        if not (rule["values"] and rule["changed"]):
+            continue
+        names = _names_text(rule["behaviors"])
+        rewrite = ("" if rule["placeholder"] else
+                   " - its replacement is not a <PLACEHOLDER>: it writes a plausible value "
+                   "(a rewrite, not a mask), so review it")
+        err_console.print(
+            f"[{'dim' if rule['placeholder'] else 'yellow'}]note: scrub rule "
+            f"{escape(rule['rule'])} replaced {rule['values']} value(s) this run (was "
+            f"{rule['was'] if rule['was'] is not None else 'not registered'}) in "
+            f"{escape(names)}{escape(rewrite)}[/]", soft_wrap=True)
     for rule in result["scrub_unmatched"]:
         # The user believes this noise is handled; it isn't (R1-WEB-03).
         why = ("no captured dict has that key" if rule.startswith("register_field(") else

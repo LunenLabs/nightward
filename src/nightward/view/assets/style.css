@@ -265,6 +265,7 @@ code { font-family: var(--mono); }
 .badge-changed { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
 .badge-removed { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
 .badge-judged { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-border); }
+.badge-replayed { background: transparent; color: var(--blue); border-color: var(--blue-border); border-style: dashed; }
 
 /* judge verdict note */
 .judge-note {
