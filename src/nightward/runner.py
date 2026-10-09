@@ -285,7 +285,7 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     report.json. command names
     the holder in the store lock; a concurrent writer fails with NightwardError.
     pytest_args are passed to pytest as-is (-m, -p, --timeout ...); a narrowed
-    run is recorded as such and never proves a removal (D13).
+    run is recorded as such (its deselected behaviors are "not checked", D21).
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched, pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can

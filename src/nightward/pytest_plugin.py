@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import fnmatch
 import os
-import re
 from pathlib import Path
 
 import pytest
@@ -48,14 +47,14 @@ class Recorder:
         self.masked: dict[str, int] = {}  # name -> values the default scrubbers masked
         # name -> {custom rule text: values it replaced in that behavior} (D28)
         self.rule_hits: dict[str, dict[str, int]] = {}
-        # Removal evidence: tests whose every phase passed this run. Only such a
-        # test proves that a behavior it no longer captures is really gone.
+        # Tests whose every phase passed this run: tells the human whether a
+        # REMOVED behavior's test ran at all (a diagnostic, never proof - D29).
         self._passed: set[str] = set()
         self._broken: set[str] = set()
         # Deselected (-k/-m) tests: their behaviors were not checked (D21).
         self.deselected: set[str] = set()
-        # Test files pytest collected, and items a hook dropped without a
-        # pytest_deselected report: the suite left out at collection (D24).
+        # Test files tests were collected from, and items a hook dropped without a
+        # pytest_deselected report: what the run left out, for diagnostics.
         self.collected_files: set[str] = set()
         self.filtered = 0
 
@@ -81,14 +80,10 @@ class Recorder:
         self.deselected.update(item.nodeid for item in items)
 
     @pytest.hookimpl(wrapper=True)
-    def pytest_collect_file(self, file_path, parent):
-        collectors = yield
-        if collectors:
-            self.collected_files.add(_key(Path(file_path)))
-        return collectors
-
-    @pytest.hookimpl(wrapper=True)
     def pytest_collection_modifyitems(self, session, config, items):
+        # Files that yielded tests (pytest builds a collector for every file in
+        # a directory it visits, even when one file was asked for).
+        self.collected_files.update(_key(Path(i.path)) for i in items)
         before, reported = len(items), len(self.deselected)
         result = yield
         # Items gone without a pytest_deselected report: filtered by a hook.
@@ -240,39 +235,12 @@ def pytest_sessionfinish(session, exitstatus):
     store = Store(Path(config.getoption("--nightward-dir")))
     # The store lock is already held: by the runner, or by this session since
     # pytest_configure (see _lock_for_session).
-    _flush(session, exitstatus, rec, store, config.getoption("--nightward-run-id"))
-
-
-# Options `nightward run` adds itself; anything else on the command line is
-# the user's (passthrough) and makes the run unfit as removal proof (D18).
-_OWN_FLAGS = ("--nightward-record",)
-_OWN_VALUED = ("--nightward-dir", "--nightward-run-id")
-_VERBOSITY = re.compile(r"-[qv]+|--quiet|--verbose")
-
-
-def _extra_args(config) -> list[str]:
-    """Command-line arguments beyond the test paths and nightward's own options."""
-    args = [str(a) for a in config.invocation_params.args]
-    paths = {str(a) for a in config.args}
-    extra, i = [], 0
-    while i < len(args):
-        a = args[i]
-        i += 1
-        if a in _OWN_FLAGS or a in paths or _VERBOSITY.fullmatch(a):
-            continue
-        if a in _OWN_VALUED or (a == "-n" and i < len(args) and args[i] == "0"):
-            i += 1     # and its value
-            continue
-        if a.split("=", 1)[0] in _OWN_VALUED or a in ("-n0", "--numprocesses=0"):
-            continue
-        extra.append(a)
-    return extra
+    _flush(session, rec, store, config.getoption("--nightward-run-id"))
 
 
 # Directories pytest never recurses into by default (its own norecursedirs
 # default, plus virtualenvs): never the project's suite. A project's own
-# norecursedirs is deliberately NOT honored - it is one more way to leave
-# tests out (R4-OPS-01).
+# norecursedirs is NOT honored - it is one more way to leave tests out.
 _NEVER_SUITE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv",
                 "{arch}", "__pycache__")
 _DEFAULT_PYTHON_FILES = ("test_*.py", "*_test.py")
@@ -307,13 +275,10 @@ def _test_files_on_disk(root: Path, patterns: list[str], skip: Path) -> list[Pat
 
 
 def _uncollected(config, rec: Recorder) -> list[str]:
-    """Test files on disk that this run did not collect (D24, R4-OPS-01).
-
-    Detecting each exclusion mechanism leaked one mechanism at a time
-    (collect_ignore, hooks, --ignore, norecursedirs ...), so compare with the
-    disk instead: a test module that wasn't collected may hold a capture that
-    moved there, whatever left it out. python_files counts the defaults too,
-    so narrowing it can't hide a file either.
+    """Test files on disk that this run did not collect - a diagnostic for
+    REMOVED behaviors: a capture may have moved into one of them, whatever
+    left it out. It never authorizes a removal (D29): in-file exclusion
+    (__test__, pycollect hooks) can't be seen this way at all.
     """
     root = Path(config.rootpath).resolve()
     patterns = list(dict.fromkeys([*config.getini("python_files"), *_DEFAULT_PYTHON_FILES]))
@@ -323,57 +288,20 @@ def _uncollected(config, rec: Recorder) -> list[str]:
                   if _key(p) not in rec.collected_files)
 
 
-def _scope(session, exitstatus, counts: dict, completed: list[str],
-           rec: Recorder | None = None) -> dict:
-    """How much of the suite this run covered - removal evidence (D18).
+def _scope(session, counts: dict, rec: Recorder) -> dict:
+    """How much of the suite this run covered.
 
-    narrowed: -k/-m, deselection (incl. --lf) or a test-id argument.
-    clean: a removal can be proven only by a clean whole-suite run: the
-    rootdir or the configured testpaths, no extra pytest arguments (nor
-    PYTEST_ADDOPTS), exit 0, every collected test passed, nothing skipped,
-    xfailed, deselected or errored, and every test file on disk collected
-    (_uncollected). clean_doubt says why not.
+    narrowed: -k/-m, deselection (incl. --lf) or a test-id argument (D21/D23).
+    uncollected / filtered: test files on disk the run left out, and items a
+    hook dropped without reporting them - shown to the human who decides on a
+    REMOVED behavior, never proof of anything (D29).
     """
     config = session.config
     args = [str(a) for a in config.args]
     narrowed = bool(counts["deselected"] or config.option.keyword or config.option.markexpr
                     or any("::" in a for a in args))
-    root = Path(config.rootpath).resolve()
-    allowed = {root, *((root / t).resolve() for t in config.getini("testpaths"))}
-    here = Path(config.invocation_params.dir)
-    doubts = []
-    partial = [a for a in args if (here / a).resolve() not in allowed
-               and (here / a).resolve() not in root.parents]
-    if partial or narrowed:
-        doubts.append(f"it ran {' '.join(partial) or 'a narrowed selection'}, not the "
-                      f"whole suite")
-    extra = _extra_args(config)
-    if extra:
-        doubts.append(f"extra pytest arguments {' '.join(extra)}")
-    if os.environ.get("PYTEST_ADDOPTS", "").strip():
-        doubts.append("PYTEST_ADDOPTS was set")
-    if config.option.collectonly or config.option.setuponly or config.option.setupplan:
-        doubts.append("no test ran (--collect-only/--setup-only/--setup-plan)")
-    not_run = [f"{counts[k]} {k}" for k in ("failed", "errors", "skipped", "xfailed",
-                                             "deselected") if counts.get(k)]
-    if not_run:
-        doubts.append(", ".join(not_run))
-    elif exitstatus != pytest.ExitCode.OK:
-        doubts.append(f"pytest exited with {int(exitstatus)}")
-    if len(completed) != len(session.items):
-        doubts.append(f"only {len(completed)} of {len(session.items)} collected test(s) "
-                      f"ran and passed")
-    what = _uncollected(config, rec) if rec is not None else []
-    if what or (rec is not None and rec.filtered > 0):
-        # A test file left out (collect_ignore, --ignore, norecursedirs, testpaths,
-        # a hook ...) or items a hook dropped: such a test never ran, and no
-        # counter says so (R4-OPS-01).
-        parts = ([f"not collected: {', '.join(what[:3])}"
-                  f"{f' and {len(what) - 3} more' if len(what) > 3 else ''}"] if what else [])
-        parts += [f"{rec.filtered} test(s) dropped by a hook"] if rec.filtered > 0 else []
-        doubts.append(f"tests were excluded at collection ({'; '.join(parts)})")
-    return {"narrowed": narrowed, "clean": not doubts,
-            "clean_doubt": "; ".join(dict.fromkeys(doubts)) or None}
+    return {"narrowed": narrowed, "uncollected": _uncollected(config, rec),
+            "filtered": max(rec.filtered, 0)}
 
 
 def _rule_report(rec: Recorder, previous) -> list[dict]:
@@ -391,7 +319,7 @@ def _rule_report(rec: Recorder, previous) -> list[dict]:
     return out
 
 
-def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None) -> None:
+def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
     config = session.config
     try:
         store.ensure()
@@ -405,7 +333,7 @@ def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None)
     # Skipped/deselected/xfailed tests don't capture their behavior -> it shows
     # up as a false REMOVED; failed/errored tests make the capture incomplete
     # (the run and the gate fail on it). Record the counts so the runner can
-    # act on them, and the tests that completed as per-behavior removal evidence.
+    # act on them, and which tests completed (shown for REMOVED behaviors).
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     stats = reporter.stats if reporter else {}
     meta: dict = {key: len(stats.get(stat, [])) for key, stat in _COUNTS}
@@ -414,7 +342,7 @@ def _flush(session, exitstatus, rec: Recorder, store: Store, run_id: str | None)
     # Ties run_meta to exactly this flush: `nightward report` trusts pending/
     # only when it still matches (R2-DATA-04).
     meta["pending_digest"] = digest({b.name: b for b in rec.behaviors})
-    meta |= _scope(session, exitstatus, meta, meta["completed"], rec)
+    meta |= _scope(session, meta, rec)
     last = store.load_run_meta()
     # Which behaviors the default scrubbers touched; "changed" lets `run` show
     # its note when that set moves instead of on every run.

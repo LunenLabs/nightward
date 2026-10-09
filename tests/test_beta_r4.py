@@ -85,11 +85,15 @@ def test_gate_allow_not_run_is_an_explicit_opt_in(etl):
     assert cli("gate", "--allow-not-run", cwd=tmp_path).returncode == 1
 
 
-# ---- R4-OPS-01 (D24): collection-time exclusion never proves a removal ----------
+# ---- R4-OPS-01 (D29): removal is always an explicit human act -------------------
+# Proving a behavior gone leaked four times (collection-time exclusion,
+# norecursedirs, in-file exclusion, hidden dirs), so nothing infers it any more:
+# bulk approval never deletes, whatever the run looked like.
 
 RENDER_V1 = ('def test_one(behavior):\n'
              '    behavior("render.dev", "dev", group="render")\n'
              '    behavior("render.meta", 1, group="render")\n')
+DEV = 'def test_dev(behavior):\n    behavior("render.dev", "dev", group="render")\n'
 
 
 @pytest.fixture
@@ -104,134 +108,112 @@ def render(tmp_path):
     return tmp_path, tmp_path / ".nightward"
 
 
-@pytest.mark.parametrize("conftest, moved", [
-    ('collect_ignore_glob = ["*_integration.py"]\n', "test_render_integration.py"),
-    ('def pytest_collection_modifyitems(config, items):\n'
-     '    items[:] = [i for i in items if "slow" not in i.keywords]\n', "test_render_slow.py"),
-])
-def test_capture_moved_into_an_excluded_test_is_kept(render, conftest, moved):
-    tmp_path, tw = render
-    write(tmp_path / "conftest.py", conftest)
-    write(tmp_path / moved, 'import pytest\n@pytest.mark.slow\ndef test_dev(behavior):\n'
-                            '    behavior("render.dev", "dev", group="render")\n')
-    cli("run", ".", cwd=tmp_path)
+def _nothing_is_deleted(tmp_path, tw):
+    """Every bulk path keeps render.dev and names the explicit commands."""
     cli("review", cwd=tmp_path)
     r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
-    assert "render.dev" in baseline_names(tw), r.stdout
-    assert "excluded at collection" in r.stdout
+    assert r.returncode == 2 and "render.dev" in r.stderr, r.stdout + r.stderr
+    assert "approve --remove" in r.stderr and "--remove-group" in r.stderr
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert r.returncode == 0 and "kept 1 REMOVED" in r.stdout, r.stdout + r.stderr
+    assert "include-removed" not in r.stdout + r.stderr
+    assert "render.dev" in baseline_names(tw)
+    for bulk in (["render.dev", "render.meta"], ["--group", "render"]):
+        cli("approve", *bulk, cwd=tmp_path)
+        assert "render.dev" in baseline_names(tw), bulk
+    return r
 
 
-DEV = 'def test_dev(behavior):\n    behavior("render.dev", "dev", group="render")\n'
-
-
-def _kept_after_bulk_removal(tmp_path, tw):
-    cli("review", cwd=tmp_path)
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
-    assert "render.dev" in baseline_names(tw), r.stdout
-    assert "excluded at collection" in r.stdout and "integration" in r.stdout, r.stdout
-
-
-# R4-OPS-01 (round 5): proof must not depend on which exclusion mechanism was
-# used. None of these is special-cased: a test file on disk that this run did
-# not collect means "not the whole suite", whatever left it out.
-@pytest.mark.parametrize("ini, conftest", [
-    ("[pytest]\nnorecursedirs = integration .git .nightward\n", None),
-    (None, 'def pytest_ignore_collect(collection_path, config):\n'
-           '    if collection_path.name == "integration":\n'
-           '        return True\n'),
-])
-def test_capture_moved_into_an_uncollected_directory_is_kept(render, ini, conftest):
+# The four Round 5b repros (in-file exclusion and a hidden dir), and the earlier
+# variants: the moved capture never ran, and no bulk approval deletes it.
+@pytest.mark.parametrize("files", [
+    {"test_integration.py": 'import os\nclass TestIntegration:\n'
+                            '    __test__ = bool(os.environ.get("KUBECONFIG"))\n'
+                            '    def test_dev(self, behavior):\n'
+                            '        behavior("render.dev", "dev", group="render")\n'},
+    {"test_integration.py": "__test__ = False\n" + DEV},
+    {"conftest.py": 'def pytest_pycollect_makeitem(collector, name, obj):\n'
+                    '    if name.startswith("test_dev"):\n'
+                    '        return []\n',
+     "test_integration.py": DEV},
+    {".integration/test_dev.py": DEV},
+    {"conftest.py": 'collect_ignore_glob = ["*_integration.py"]\n',
+     "test_render_integration.py": DEV},
+    {"conftest.py": 'def pytest_collection_modifyitems(config, items):\n'
+                    '    items[:] = [i for i in items if "slow" not in i.keywords]\n',
+     "test_render_slow.py": 'import pytest\n@pytest.mark.slow\n' + DEV},
+    {"pytest.ini": "[pytest]\nnorecursedirs = integration .git .nightward\n",
+     "integration/test_dev.py": DEV},
+    {"pytest.ini": "[pytest]\npython_files = test_*.py\n", "integration/dev_test.py": DEV},
+], ids=["class __test__", "module __test__", "pycollect hook", "hidden dir",
+        "collect_ignore", "filtering hook", "norecursedirs", "python_files"])
+def test_a_moved_capture_is_never_deleted_in_bulk(render, files):
     tmp_path, tw = render
-    if ini:
-        write(tmp_path / "pytest.ini", ini)
-    if conftest:
-        write(tmp_path / "conftest.py", conftest)
-    (tmp_path / "integration").mkdir()
-    write(tmp_path / "integration" / "test_dev.py", DEV)
-    r = cli("run", ".", cwd=tmp_path)
-    assert "render.dev" in r.stdout
-    _kept_after_bulk_removal(tmp_path, tw)
+    for rel, body in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        write(tmp_path / rel, body)
+    assert "[REMOVED] render.dev" in cli("run", ".", cwd=tmp_path).stdout
+    _nothing_is_deleted(tmp_path, tw)
 
 
-def test_capture_moved_outside_testpaths_is_kept(tmp_path):
-    # A bare `pytest --nightward-record` collects only testpaths: the moved
-    # capture in integration/ is never visited, so no hook ever sees it.
-    (tmp_path / "tests").mkdir()
-    write(tmp_path / "pytest.ini", "[pytest]\ntestpaths = tests\n")
-    write(tmp_path / "tests" / "test_render.py", RENDER_V1)
-    cli("init", cwd=tmp_path)
-    cli("run", "tests", cwd=tmp_path)
-    cli("review", cwd=tmp_path)
-    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
-    write(tmp_path / "tests" / "test_render.py",
-          'def test_one(behavior):\n    behavior("render.meta", 1, group="render")\n')
-    (tmp_path / "integration").mkdir()
-    write(tmp_path / "integration" / "test_dev.py", DEV)
-    subprocess.run([sys.executable, "-m", "pytest", "-q",
-                    "--nightward-record"], cwd=str(tmp_path), capture_output=True)
-    assert "render.dev" in cli("report", cwd=tmp_path).stdout     # REMOVED
-    _kept_after_bulk_removal(tmp_path, tmp_path / ".nightward")
-
-
-def test_narrowed_python_files_is_not_a_clean_run(render):
+def test_a_real_removal_is_dropped_only_explicitly(render):
     tmp_path, tw = render
-    write(tmp_path / "pytest.ini", "[pytest]\npython_files = test_*.py\n")
-    (tmp_path / "integration").mkdir()
-    write(tmp_path / "integration" / "dev_test.py", DEV)
     cli("run", ".", cwd=tmp_path)
-    _kept_after_bulk_removal(tmp_path, tw)
+    r = _nothing_is_deleted(tmp_path, tw)
+    # the diagnostic explains, it does not authorize
+    assert "test_render.py::test_one ran and passed without capturing it" in r.stdout
+    cli("review", cwd=tmp_path)
+    r = cli("approve", "--remove", "render.dev", cwd=tmp_path)
+    assert r.returncode == 0 and baseline_names(tw) == ["render.meta"], r.stderr
 
 
-def test_whole_suite_with_every_file_collected_still_proves_removal(render):
-    # The disk check must not make every run unclean: virtualenvs, hidden and
-    # build directories are never the project's suite.
+def test_one_explicit_name_still_drops_a_removal(render):
     tmp_path, tw = render
-    for d in (".venv/lib", "build", "node_modules/pkg"):
-        (tmp_path / d).mkdir(parents=True)
-        write(tmp_path / d / "test_vendored.py", "def test_x():\n    assert False\n")
-    write(tmp_path / ".venv" / "pyvenv.cfg", "home = x\n")
     cli("run", ".", cwd=tmp_path)
     cli("review", cwd=tmp_path)
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
-    assert baseline_names(tw) == ["render.meta"], r.stdout
+    r = cli("approve", "render.dev", cwd=tmp_path)
+    assert r.returncode == 0 and "removed render.dev" in r.stdout, r.stderr
+    assert baseline_names(tw) == ["render.meta"]
 
 
-def test_source_check_holds_even_if_the_run_claims_clean(render):
-    # Defense in depth (D24): even a run (wrongly) counted clean proves nothing
-    # for a behavior whose recorded test was not collected, or has no record.
-    from nightward.cli import _removal_doubt
+def test_kept_removals_explain_why_they_read_removed(render):
+    tmp_path, tw = render
+    write(tmp_path / "pytest.ini", "[pytest]\naddopts = --ignore=test_e2e.py\n")
+    write(tmp_path / "test_e2e.py", DEV)
+    cli("run", ".", cwd=tmp_path)
+    meta = json.loads((tw / "run_meta.json").read_text("utf-8"))
+    assert meta["uncollected"] == ["test_e2e.py"] and "clean" not in meta
+    cli("review", cwd=tmp_path)
+    r = cli("approve", "--all", cwd=tmp_path)
+    assert "not collected: test_e2e.py" in r.stdout, r.stdout
+
+
+def test_removal_hints_never_claim_proof():
+    from nightward.cli import _why_removed
     from nightward.core.behavior import Behavior
-    meta = {"clean": True, "completed": ["test_render.py::test_one"]}
-    gone = Behavior(name="x", payload=1, source="integration/test_dev.py::test_dev")
-    assert "not collected" in _removal_doubt("x", gone, meta)
-    assert "approve --remove" in _removal_doubt("x", Behavior(name="x", payload=1), meta)
-    moved = Behavior(name="x", payload=1, source="test_render.py::test_one")
-    assert _removal_doubt("x", moved, meta) is None
+    meta = {"completed": ["test_render.py::test_one"]}
+    assert "did not run and pass" in _why_removed(
+        Behavior(name="x", payload=1, source="integration/test_dev.py::test_dev"), meta)
+    assert "no recorded test" in _why_removed(Behavior(name="x", payload=1), meta)
+    moved = _why_removed(Behavior(name="x", payload=1, source="test_render.py::test_one"),
+                         meta)
+    assert "passed without capturing it" in moved and "moved" in moved
+
+
+def test_no_command_suggests_include_removed(tmp_path):
+    for args in (["approve", "--help"], ["--help"]):
+        assert "include-removed" not in cli(*args, cwd=tmp_path).stdout
 
 
 def test_legacy_behavior_is_never_bulk_removed(render):
-    # D24: no recorded test, no bulk proof - even after a clean run.
     tmp_path, tw = render
     f = tw / "baseline" / "render.dev.approved.json"
     data = json.loads(f.read_text("utf-8"))
     data.pop("source")
     f.write_text(json.dumps(data), encoding="utf-8")
     cli("run", ".", cwd=tmp_path)
-    cli("review", cwd=tmp_path)
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
-    assert "render.dev" in baseline_names(tw), r.stdout
-    assert "approve --remove" in r.stdout
-
-
-def test_ignore_in_addopts_is_not_a_clean_run(tmp_path):
-    write(tmp_path / "test_unit.py", 'def test_u(behavior):\n    behavior("unit", 1)\n')
-    write(tmp_path / "test_e2e.py", 'def test_e(behavior):\n    behavior("e2e", 2)\n')
-    cli("init", cwd=tmp_path)
-    cli("run", ".", cwd=tmp_path)
-    write(tmp_path / "pytest.ini", "[pytest]\naddopts = --ignore=test_e2e.py\n")
-    cli("run", ".", cwd=tmp_path)
-    meta = json.loads((tmp_path / ".nightward" / "run_meta.json").read_text("utf-8"))
-    assert meta["clean"] is False and "excluded at collection" in meta["clean_doubt"]
+    r = _nothing_is_deleted(tmp_path, tw)
+    assert "no recorded test" in r.stdout
 
 
 # ---- R4-DATA-02 (D25): explicit human removal is cheap --------------------------
@@ -276,8 +258,8 @@ def test_remove_names_refuses_anything_not_removed(parts):
     r = cli("approve", "--remove", "hourly.d0", "hourly.d2", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "hourly.d0" not in baseline_names(tw) and "hourly.d1" in baseline_names(tw)
-    # the "kept" hint names the cheap override
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    # the "kept" hint names the explicit command
+    r = cli("approve", "--all", cwd=tmp_path)
     assert "approve --remove" in r.stdout
 
 

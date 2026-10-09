@@ -90,19 +90,21 @@ def test_approve_group_keeps_removals_and_rejections_like_all(tmp_path):
     assert base[parts[0]].payload == 1 and "kept (rejected)" in r.stdout
     assert base[parts[1]].payload == 2
     assert "part.gone" in base and "kept 1 REMOVED" in r.stdout
-    assert "--group ... --include-removed" in r.stdout
+    assert "approve --remove" in r.stdout and "include-removed" not in r.stdout
 
 
-def test_approve_group_include_removed_still_needs_proof(tmp_path):
-    store, _ = partition_store(tmp_path / ".tw", n=3)
+def test_approve_group_include_removed_refuses(tmp_path):
+    # D29: no bulk path drops a behavior; nothing is approved either.
+    store, parts = partition_store(tmp_path / ".tw", n=3)
     r = cli("approve", "--group", "partitions.kr", "--include-removed", "--dir",
             str(store.root), cwd=tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert "part.gone" in store.load_baseline() and "can't prove gone" in r.stdout
+    assert r.returncode == 2 and "part.gone" in r.stderr and "--remove-group" in r.stderr
+    base = store.load_baseline()
+    assert "part.gone" in base and base[parts[0]].payload == 1
 
 
 def test_approve_group_with_one_member_is_still_a_bulk_approval(tmp_path):
-    # One explicit name overrides proof; a group never does, whatever its size.
+    # One explicit name drops a removal; a group never does, whatever its size.
     store = Store(tmp_path / ".tw")
     store.ensure()
     store.write_pending(Behavior(name="solo", payload=1, group="g", source="t.py::gone"))
@@ -111,10 +113,9 @@ def test_approve_group_with_one_member_is_still_a_bulk_approval(tmp_path):
     store.write_run_meta({"completed": []})
     recompute(store)
     assert cli("review", "--dir", str(store.root), cwd=tmp_path).returncode == 0
-    r = cli("approve", "--group", "g", "--include-removed", "--dir", str(store.root),
-            cwd=tmp_path)
+    r = cli("approve", "--group", "g", "--dir", str(store.root), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "solo" in store.load_baseline() and "can't prove gone" in r.stdout
+    assert "solo" in store.load_baseline() and "kept 1 REMOVED" in r.stdout
 
 
 def test_approve_group_with_nothing_unapproved_says_so(tmp_path):

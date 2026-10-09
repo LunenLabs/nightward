@@ -27,8 +27,8 @@ def baseline_names(tw):
     return sorted(f.name.split(".approved.json")[0] for f in (tw / "baseline").glob("*.json"))
 
 
-# ---- R2-OPS-02 (reopened), R3-DATA-08 (D18): only a clean whole-suite run proves
-# a removal -------------------------------------------------------------------
+# ---- R2-OPS-02 (reopened), R3-DATA-08, D29: nothing proves a removal; bulk
+# approval keeps every REMOVED behavior and says why it reads REMOVED --------
 
 SVC_V1 = ('import pytest\n'
           'SERVICES = [{"name": "api", "replicas": 3}, {"name": "worker", "replicas": 2}]\n'
@@ -54,7 +54,7 @@ def test_shifted_parametrize_id_is_no_removal_proof(tmp_path):
     write(tmp_path / "test_svc.py", SVC_V2)
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"NO_QUEUE": "1"})
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert "svc.worker" in baseline_names(tw)
     assert "1 skipped" in r.stdout
@@ -78,7 +78,7 @@ def test_capture_moved_into_a_skipped_test_in_one_change_is_kept(tmp_path):
           '    behavior("render.dev", "dev", group="r")\n')
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert "render.dev" in baseline_names(tw), r.stdout
 
 
@@ -101,39 +101,41 @@ def legacy_pair(tmp_path):
     (["--ignore=test_b.py"], {}),
     ([], {"PYTEST_ADDOPTS": "--ignore=test_b.py"}),
 ])
-def test_run_that_did_not_run_everything_proves_no_removal(legacy_pair, pytest_args, env):
+def test_run_that_did_not_run_everything_removes_nothing(legacy_pair, pytest_args, env):
     tmp_path, tw = legacy_pair
     cli("run", ".", "--", *pytest_args, cwd=tmp_path, env=env)
     cli("review", cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert baseline_names(tw) == ["a", "b"], r.stdout
-    assert "clean whole-suite run" in r.stdout
+    assert "no recorded test" in r.stdout and "approve --remove" in r.stdout
+    assert cli("approve", "--all", "--include-removed", cwd=tmp_path).returncode == 2
+    assert baseline_names(tw) == ["a", "b"]
 
 
-def test_direct_collect_only_capture_proves_no_removal(legacy_pair):
+def test_direct_collect_only_capture_removes_nothing(legacy_pair):
     tmp_path, tw = legacy_pair
     subprocess.run([sys.executable, "-m", "pytest", "--co", "-q", "--nightward-record",
                     "-p", "no:cacheprovider"], cwd=tmp_path, capture_output=True)
     cli("report", cwd=tmp_path)
     cli("review", cwd=tmp_path)
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    r = cli("approve", "--all", cwd=tmp_path)
     assert baseline_names(tw) == ["a", "b"], r.stdout + r.stderr
 
 
 def test_clean_whole_suite_run_does_not_bulk_remove_a_legacy_behavior(legacy_pair):
-    # D24 superseded this round's rule: a legacy (source-less) removal is explicit.
+    # D29: every removal is explicit, legacy (source-less) ones included.
     tmp_path, tw = legacy_pair
     write(tmp_path / "test_b.py", "def test_b():\n    pass\n")
     cli("run", ".", cwd=tmp_path)
     cli("review", cwd=tmp_path)
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert baseline_names(tw) == ["a", "b"], r.stdout
     assert "approve --remove" in r.stdout
 
 
-def test_renamed_source_test_is_no_removal_proof(tmp_path):
+def test_renamed_source_test_is_named_in_the_kept_removal(tmp_path):
     write(tmp_path / "test_a.py", 'def test_a(behavior):\n    behavior("a", 1)\n'
                                   'def test_b(behavior):\n    behavior("b", 2)\n')
     tw = tmp_path / ".tw"
@@ -144,9 +146,9 @@ def test_renamed_source_test_is_no_removal_proof(tmp_path):
                                   'def test_b2():\n    pass\n')
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert "b" in baseline_names(tw)
-    assert "test_a.py::test_b was not collected and passed" in r.stdout
+    assert "its test test_a.py::test_b did not run and pass" in r.stdout
 
 
 # ---- D19: human decisions bind to exactly what the human saw -------------------
@@ -388,8 +390,8 @@ def test_deselected_behaviors_are_not_checked_not_removed(ml):
     status = json.loads(cli("status", "--json", cwd=tmp_path).stdout)
     assert status["boundary"] == "partial" and status["narrowed"] is True
     assert [n["name"] for n in status["not_run"]] == ["model_metrics"]
-    # never removal proof, and nothing to approve by name
-    r = cli("approve", "--all", "--include-removed", cwd=tmp_path)
+    # never REMOVED, and nothing to approve by name
+    r = cli("approve", "--all", cwd=tmp_path)
     assert "model_metrics" in baseline_names(tw)
     r = cli("approve", "model_metrics", cwd=tmp_path)
     assert r.returncode == 2 and "not checked" in r.stderr

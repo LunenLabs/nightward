@@ -64,13 +64,13 @@ nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules o
                   for values that are volatile by evidence (see below); takes the
                   same NAME... / --group scope as review
 nightward approve promote pending behavior(s) into the baseline
-                  (--all takes NEW/CHANGED; REMOVED needs a name or --include-removed;
-                  `approve A B C` works like --all --include-removed limited to those
-                  names, while one name always applies, even a removal or a rejection;
-                  `approve --group G` works like --all limited to group G, for groups
-                  too big to list on one command line; `approve --remove NAME...` and
-                  `--remove-group G` drop exactly those REMOVED behaviors, no run proof
-                  needed - an explicit human removal of what review showed).
+                  (--all takes NEW/CHANGED and never drops a REMOVED behavior;
+                  `approve A B C` works like --all limited to those names and refuses
+                  REMOVED ones, while one name always applies, even a removal or a
+                  rejection; `approve --group G` works like --all limited to group G,
+                  for groups too big to list on one command line; `approve --remove
+                  NAME...` and `--remove-group G` drop exactly those REMOVED behaviors -
+                  removal is always this explicit human act on what review showed).
                   It promotes only changes a human was shown, exactly as shown,
                   with its diff by `review` or `view` (`run` lists names only, so it
                   counts as no review): a scoped `review --group G`
@@ -132,22 +132,16 @@ both sides' entries (each entry is an independent ruling).
 
 A skipped, deselected (`-m`/`-k`), xfailed or errored test, or a partial path
 (`nightward run tests/test_a.py`), captures nothing for the behaviors it didn't reach,
-so they read as REMOVED. That is why `approve --all` leaves removals alone. Each
-behavior records the test that captured it (`source`, never compared), and
-`--include-removed` only drops a removal after a **clean whole-suite run**: the
-default path (the rootdir or your configured `testpaths`), no extra pytest arguments
-(nothing after `--`, no `PYTEST_ADDOPTS`, no `--collect-only`), every test file
-under the rootdir collected (a `test_*.py`/`*_test.py` or `python_files` match that the
-run left out - by `norecursedirs`, `collect_ignore`, `--ignore` even from `addopts`,
-`testpaths`, a hook or a plugin - may hold a capture that moved there; only
-virtualenvs, hidden directories and pytest's default `build`/`dist`/`node_modules`/...
-are never looked at), no item dropped by a hook, pytest exit 0 with every collected
-test passing and nothing skipped, xfailed, deselected or errored, and the behavior's
-recorded test was collected and passed under that exact id. Baselines from before
-sources existed have no recorded test, so they are
-never removed in bulk. Anything else keeps every removal and says why. A removal you
-intend is an explicit decision instead: review it, then `nightward approve --remove
-NAME...` or `--remove-group G` (one `nightward approve <name>` also works).
+so they read as REMOVED - and so does a capture that moved into a test this run
+left out (`collect_ignore`, `norecursedirs`, `__test__ = False`, a collection hook, a
+hidden directory ...). No run can tell those apart from a real removal, so **no bulk
+approval ever drops a behavior**: `approve --all` and `approve --group G` keep every
+REMOVED behavior and say why it reads REMOVED (its recorded test, `source`, did not
+run, or ran and passed without capturing it; tests the run skipped, deselected or did
+not collect). Those hints help you decide; they never authorize a deletion. A removal
+you intend is an explicit decision: review it, then `nightward approve --remove
+NAME...` or `--remove-group G` (one `nightward approve <name>` also works). The old
+`--include-removed` now refuses and points at those commands.
 `approve --all` backfills `source` into unchanged baselines whose capturing test moved.
 Capture runs in a single process: `nightward run` forces `-n 0` if
 pytest-xdist is installed, and `--nightward-record` with `-n` is a usage error.
@@ -181,8 +175,7 @@ the dashboard list it, and it doesn't count as unapproved. But "not checked" is 
 test in the baseline (`source`, written on approve): approve once from a full run.
 Baselines from before sources existed, and skipped or xfailed tests, still read as
 REMOVED (fail closed). Or let nightward drive pytest and pass the arguments through:
-`nightward run tests -- -m "not gpu" -p no:randomly`. Either way a run with extra
-pytest arguments never proves a removal.
+`nightward run tests -- -m "not gpu" -p no:randomly`.
 
 ## What nightward normalizes (what counts as "the same payload")
 

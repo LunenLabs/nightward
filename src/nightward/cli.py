@@ -606,8 +606,7 @@ def run(ctx: typer.Context,
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
-    (without a path, `nightward run -- -k clamp` runs "."; a run with extra pytest
-    arguments never proves a removal).
+    (without a path, `nightward run -- -k clamp` runs ".").
     """
     extra = [a for a in ctx.args if a != "--"]
     if path.startswith("-"):
@@ -818,31 +817,69 @@ def review(names: list[str] | None = NAMES_ARG,
 _REPLAYED = " (replayed from the committed ledger, not ruled this run)"
 
 
-def _removal_doubt(name: str, b, meta: dict) -> str | None:
-    """Why the last run can't prove a REMOVED behavior gone, or None (D18).
+def _why_removed(b, meta: dict) -> str:
+    """Why a REMOVED behavior reads REMOVED, from what the last run recorded.
 
-    Inferring proof from partial runs kept leaking (shifted parametrize ids,
-    captures moved into skipped tests, --collect-only, --ignore), so only a
-    clean whole-suite run proves a removal (see pytest_plugin._scope), and
-    then only if the behavior's recorded test ran and passed under that exact
-    id (D24) - so a test excluded at collection can't fake proof. Baselines
-    without a recorded test are never bulk-removable (approve --remove).
+    A diagnostic for the human who decides, never proof (D29): proving a
+    behavior gone leaked four times (exclusion at collection, norecursedirs,
+    __test__ / pycollect hooks, hidden dirs), so removal is always explicit.
     """
-    if "clean" not in meta:
-        return ("the last run recorded no removal evidence (an older nightward, or no "
-                "capture yet) - re-run `nightward run`")
-    if not meta["clean"]:
-        return (f"the last run was not a clean whole-suite run ({meta.get('clean_doubt')}) "
-                f"- only `nightward run` of the whole suite with no extra pytest arguments, "
-                f"and every test passing, proves a removal")
     if not b.source:
-        # No recorded test: nothing can show it ran without capturing (D24).
-        return ("no recorded test (a baseline from before sources existed) - only an "
-                "explicit `nightward approve --remove NAME` drops it")
-    if b.source not in set(meta.get("completed") or ()):
-        return (f"its recorded test {b.source} was not collected and passed under that "
-                f"id this run (renamed, re-parametrized, excluded or deleted?)")
-    return None
+        return "no recorded test (a baseline from before sources existed)"
+    if "completed" not in meta:
+        return "the last run did not record which tests ran (an older nightward)"
+    if b.source not in set(meta["completed"]):
+        return (f"its test {b.source} did not run and pass this run (skipped, xfailed, "
+                f"failing, renamed, re-parametrized or not collected?)")
+    return (f"its test {b.source} ran and passed without capturing it (gone, or moved "
+            f"into a test this run did not run)")
+
+
+def _run_gaps(meta: dict) -> list[str]:
+    """What the last run left out: tests whose behaviors may read REMOVED."""
+    gaps = [f"{meta[k]} {k}" for k in ("failed", "errors", "skipped", "xfailed", "deselected")
+            if meta.get(k)]
+    if meta.get("narrowed"):
+        gaps.append("narrowed by -k/-m or a test id")
+    files = meta.get("uncollected") or []
+    if files:
+        gaps.append(f"not collected: {', '.join(files[:3])}"
+                    f"{f' and {len(files) - 3} more' if len(files) > 3 else ''}")
+    if meta.get("filtered"):
+        gaps.append(f"{meta['filtered']} test(s) dropped by a hook")
+    return gaps
+
+
+_EXPLICIT_REMOVAL = ("drop intended ones with `nightward approve --remove NAME...` or "
+                     "`nightward approve --remove-group G` after `nightward review`")
+
+
+def _print_kept_removals(held: list[str], baseline, meta: dict) -> None:
+    console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline - "
+                  f"dropping one is always your explicit decision:", soft_wrap=True)
+    by_reason: dict[str, list[str]] = {}
+    for n in held:
+        by_reason.setdefault(_why_removed(baseline[n], meta), []).append(n)
+    for why, which in by_reason.items():
+        console.print(f"  - {escape(', '.join(which))}: {escape(why)}", soft_wrap=True)
+    gaps = _run_gaps(meta)
+    if gaps:
+        console.print(f"  the last run left tests out: {escape('; '.join(gaps))}",
+                      soft_wrap=True)
+    console.print(f"  {escape(_EXPLICIT_REMOVAL)}.", soft_wrap=True)
+
+
+def _refuse_include_removed(store: Store) -> None:
+    """--include-removed used to infer removal proof from the run; that leaked
+    four times, so it no longer removes anything (D29)."""
+    removed = [it["name"] for it in _report_items(_require_report(store))
+               if it.get("kind") == REMOVED]
+    now = (f"REMOVED in the last report: {_shown(removed)} - {_EXPLICIT_REMOVAL}" if removed
+           else "nothing is REMOVED in the last report")
+    raise NightwardError(f"--include-removed no longer drops anything: removing a behavior "
+                         f"from the baseline is always an explicit decision. {now}; "
+                         f"`nightward approve --all` approves the NEW/CHANGED ones. Nothing "
+                         f"was approved")
 
 
 def _backfill_sources(store: Store, baseline, pending) -> int:
@@ -868,11 +905,12 @@ def _approve_one(store: Store, name: str, baseline, pending) -> str:
 
 
 APPROVE_NAMES_ARG = typer.Argument(
-    None, help="Behavior(s) to approve. One name always applies; several are approved "
-               "like --all --include-removed limited to them", show_default=False)
+    None, help="Behavior(s) to approve. One name always applies (a REMOVED one is dropped); "
+               "several are approved like --all limited to them and refuse REMOVED ones "
+               "(use --remove)", show_default=False)
 APPROVE_GROUP_OPT = typer.Option(
     None, "--group", help="Approve the NEW/CHANGED behaviors of this group (repeatable): "
-                          "--all limited to the group, rejections kept",
+                          "--all limited to the group, rejections and removals kept",
     show_default=False)
 
 REMOVE_GROUP_OPT = typer.Option(
@@ -886,24 +924,22 @@ REMOVE_GROUP_OPT = typer.Option(
 def approve(names: list[str] | None = APPROVE_NAMES_ARG,
             group: list[str] | None = APPROVE_GROUP_OPT,
             all_: bool = typer.Option(False, "--all", help="Approve every NEW/CHANGED behavior"),
-            include_removed: bool = typer.Option(
-                False, "--include-removed",
-                help="With --all or --group, also accept REMOVED behaviors, but only after "
-                     "a clean whole-suite run (no extra pytest arguments, nothing skipped, "
-                     "deselected, xfailed or failing) in which their test passed "
-                     "(drops them from the baseline)"),
+            # Retired (D29): kept only to refuse with guidance, never shown.
+            include_removed: bool = typer.Option(False, "--include-removed", hidden=True),
             remove: bool = typer.Option(
                 False, "--remove",
-                help="Drop the named REMOVED behaviors from the baseline - your decision, "
-                     "no run proof needed. Refuses any name that isn't REMOVED in the last "
+                help="Drop the named REMOVED behaviors from the baseline - removal is always "
+                     "this explicit decision. Refuses any name that isn't REMOVED in the last "
                      "(reviewed) report"),
             remove_group: list[str] | None = REMOVE_GROUP_OPT,
             dir: str = typer.Option(DEFAULT_DIR)):
     """Promote pending behavior(s) into the approved baseline."""
+    if include_removed:
+        _refuse_include_removed(_existing_store(dir))
     if remove or remove_group:
-        if all_ or group or include_removed or (remove_group and names):
+        if all_ or group or (remove_group and names):
             raise NightwardError("--remove NAME... and --remove-group G stand alone: no "
-                                 "--all, --group or --include-removed")
+                                 "--all or --group")
         if remove and not names:
             raise NightwardError("--remove needs the behavior names to drop")
     elif sum(map(bool, (all_, names, group))) > 1:
@@ -913,7 +949,7 @@ def approve(names: list[str] | None = APPROVE_NAMES_ARG,
         if remove or remove_group:
             _remove(store, names or [], remove_group or [])
         else:
-            _approve(store, dir, names, all_, include_removed, groups=group)
+            _approve(store, dir, names, all_, groups=group)
 
 
 def _remove(store: Store, names: list[str], groups: list[str]) -> None:
@@ -946,13 +982,13 @@ def _remove(store: Store, names: list[str], groups: list[str]) -> None:
     _print_summary(recompute(store, judge=judge_from_meta(store)))
 
 
-def _group_names(store: Store, baseline, pending, judge, groups: list[str],
-                 include_removed: bool) -> tuple[list[str], list[str]]:
+def _group_names(store: Store, baseline, pending, judge,
+                 groups: list[str]) -> tuple[list[str], list[str]]:
     """(names to approve, REMOVED names left out) for `approve --group`.
 
     The group's unapproved behaviors, as `review --group` scopes them (standing
     rejections included, so they are kept; not-run ones excluded), minus
-    removals unless --include-removed (as with --all). The command line stays
+    removals (as with --all; --remove-group drops those). The command line stays
     short however big the group is (R3-DATA-06): 1,440 names don't fit in
     Windows' 32K command line, and neither does the dashboard's group chip.
     """
@@ -963,12 +999,12 @@ def _group_names(store: Store, baseline, pending, judge, groups: list[str],
                              f"nothing was approved")
     changes = [c for c in classify(store, baseline, pending, judge=judge, with_diff=False)
                if c.kind not in (UNCHANGED, NOT_RUN) and (c.group or "(ungrouped)") in groups]
-    left_out = [] if include_removed else [c.name for c in changes if c.kind == REMOVED]
+    left_out = [c.name for c in changes if c.kind == REMOVED]
     return [c.name for c in changes if c.name not in left_out], left_out
 
 
 def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
-             include_removed: bool, groups: list[str] | None = None) -> None:
+             groups: list[str] | None = None) -> None:
     baseline = store.load_baseline()
     pending = store.load_pending()
     if not baseline and not pending:
@@ -981,37 +1017,28 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
     # back to CHANGED the moment something else is approved. Approving a
     # judged-SAME rewording explicitly by name still re-anchors it.
     judge = judge_from_meta(store)
-    left_out: list[str] = []
+    held: list[str] = []
     if groups:
-        names, left_out = _group_names(store, baseline, pending, judge, groups,
-                                       include_removed)
+        names, held = _group_names(store, baseline, pending, judge, groups)
     # One explicit name is a human override; a group is a bulk approval at any size.
     single = bool(names) and len(names) == 1 and not groups
 
-    held: list[str] = []
-    doubts: dict[str, str] = {}
     kept_rejected: list[str] = []
     rejected = standing_rejections(store, baseline, pending)
     if all_:
         changes = [c for c in classify(store, baseline, pending, judge=judge, with_diff=False)
                    if c.kind not in (UNCHANGED, NOT_RUN)]
-        removed = [c.name for c in changes if c.kind == REMOVED]
-        if include_removed:
-            # A test that didn't run captures nothing and looks REMOVED; approving
-            # that would silently shrink the boundary. Only proven removals go.
-            meta = store.load_run_meta()
-            doubts = {n: why for n in removed
-                      if (why := _removal_doubt(n, baseline[n], meta))}
-            held = list(doubts)
-        else:
-            held = removed
+        # A bulk approval never drops a behavior (D29): a test that didn't run,
+        # or a capture that moved into one, reads REMOVED exactly like a real
+        # removal, and no run can tell them apart in general.
+        held = [c.name for c in changes if c.kind == REMOVED]
         # A confirmed regression must never ride along with a bulk approval.
         kept_rejected = [c.name for c in changes if c.name in rejected and c.name not in held]
         targets = [c.name for c in changes if c.name not in held and c.name not in rejected]
     elif names or groups:
         # Several names (or --group, the dashboard's group chip) are a bulk
-        # approval limited to them: unproven removals and standing rejections stay, as
-        # with --all --include-removed; one explicit name overrides (R2-WEB-03).
+        # approval limited to them: removals and standing rejections stay, as
+        # with --all; one explicit name overrides (R2-WEB-03).
         names = list(dict.fromkeys(names))
         unknown = [n for n in names if n not in pending and n not in baseline]
         if unknown:
@@ -1027,16 +1054,17 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         if unchanged:
             raise NightwardError(f"{_shown(unchanged)}: unchanged in the last report - "
                                  f"nothing to approve; nothing was approved")
+        removed = [n for n in names if n not in pending] if not single and not groups else []
+        if removed:
+            raise NightwardError(f"{_shown(removed)}: REMOVED - approving several names never "
+                                 f"drops a behavior from the baseline (removal is always an "
+                                 f"explicit decision); {_EXPLICIT_REMOVAL}, or approve one "
+                                 f"name on its own. Nothing was approved")
         if single:
             targets = names
         else:
-            meta = store.load_run_meta()
-            doubts = {n: why for n in names
-                      if n not in pending and (why := _removal_doubt(n, baseline[n], meta))}
-            held = list(doubts)
             kept_rejected = [n for n in names if n in rejected and n not in held]
             targets = [n for n in names if n not in held and n not in rejected]
-            held += left_out    # --group without --include-removed: removals stay
     else:
         raise NightwardError("specify a behavior name, --group or --all")
     _check_reviewed(store, targets, baseline, pending, "approve")
@@ -1044,7 +1072,7 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         refreshed = _backfill_sources(store, baseline, pending)
         if refreshed:
             console.print(f"[dim]refreshed the recorded test of {refreshed} unchanged "
-                          f"behavior(s) (removal evidence only)[/dim]")
+                          f"behavior(s)[/dim]")
     if not targets and not held and not kept_rejected:
         console.print("nothing to approve in that group" if groups
                       else "nothing to approve - boundary already intact")
@@ -1067,24 +1095,8 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) "
                       f"rejected as regressions: {escape(', '.join(kept_rejected))}\n  fix the "
                       f"code, or override with `nightward approve <name>`.", soft_wrap=True)
-    if doubts:
-        console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline "
-                      f"that this run can't prove gone:")
-        by_reason: dict[str, list[str]] = {}
-        for n, why in doubts.items():
-            by_reason.setdefault(why, []).append(n)
-        for why, which in by_reason.items():
-            console.print(f"  - {escape(', '.join(which))}: {escape(why)}", soft_wrap=True)
-        console.print("  if a removal is intended, drop it explicitly: `nightward approve "
-                      "--remove NAME...` or `--remove-group G` (after `nightward review`).",
-                      soft_wrap=True)
-    elif held:
-        console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline: "
-                      f"{escape(', '.join(held))}\n  removals may come from skipped tests or "
-                      f"a partial path. Drop intended ones with `nightward approve --remove "
-                      f"NAME...` / `--remove-group G`, or try "
-                      f"`{'--group ... ' if groups else '--all '}--include-removed`.",
-                      soft_wrap=True)
+    if held:
+        _print_kept_removals(held, baseline, store.load_run_meta())
     _print_summary(recompute(store, judge=judge))
 
 

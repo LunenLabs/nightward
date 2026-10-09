@@ -442,15 +442,23 @@ function renderCard(it) {
   renderDiff(card, it.diff);
 
   const actions = el("div", { cls: "card-actions" });
-  actions.appendChild(copyChip("approve (intended change)", cliCommand("approve", [it.name])));
-  actions.appendChild(copyChip("reject (regression)", cliCommand("reject", [it.name])));
+  cardCommands(it).forEach(function (c) { actions.appendChild(copyChip(c[0], c[1])); });
   card.appendChild(actions);
   return card;
 }
 
-// A REMOVED item may be a test that merely didn't run; dropping it from the
-// baseline is a per-card decision, never part of a group approval (R2-WEB-03):
-// `approve --group` leaves removals out, as `--all` does.
+// [label, command] chips of one card. Dropping a REMOVED behavior is always an
+// explicit decision (D29), so its card offers exactly that command.
+function cardCommands(it) {
+  const keep = it.kind === "REMOVED"
+    ? ["drop from the baseline (intended removal)", cliCommand("approve --remove", [it.name])]
+    : ["approve (intended change)", cliCommand("approve", [it.name])];
+  return [keep, ["reject (regression)", cliCommand("reject", [it.name])]];
+}
+
+// A REMOVED item may be a test that merely didn't run, or a capture that moved;
+// dropping it from the baseline is a per-card decision, never part of a group
+// approval (R2-WEB-03, D29): `approve --group` leaves removals out, as `--all` does.
 function groupApproveNames(items) {
   return items.filter(function (i) { return i.kind !== "REMOVED"; })
     .map(function (i) { return i.name; });
@@ -469,7 +477,7 @@ function groupHead(allItems, visible) {
     label = !hidden && !removals ? "approve this group"
       : "approve all " + names.length + " NEW/CHANGED in this group" +
         (hidden ? " (" + hidden + " hidden by your filters)" : "") +
-        (removals ? " - removals: approve each on its card" : "");
+        (removals ? " - removals: drop each on its card" : "");
   }
   const count = visible.length === allItems.length ? allItems.length + " item(s)"
     : visible.length + " of " + allItems.length + " item(s) shown";

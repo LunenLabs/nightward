@@ -40,7 +40,7 @@ pytest -k timestamp
 # dogfooding
 nightward run example            # README quickstart fixture (names only)
 nightward review                 # shows the diffs - the only CLI step that marks them reviewed (D26)
-nightward approve --all          # NEW/CHANGED only; REMOVED needs --remove NAME/--remove-group or --include-removed
+nightward approve --all          # NEW/CHANGED only; REMOVED needs --remove NAME... / --remove-group G
 nightward approve --group G      # --all limited to group G (any size; the dashboard's group chip)
 cd examples/petshop && nightward run .   # cascade demo (baseline committed)
 cd examples/newsroom && NEWSROOM_REWRITE=1 nightward run . --judge persona:lenient  # semantic judge demo (key-free)
@@ -135,21 +135,19 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   --all` would wipe the baseline. The runner deletes `report.json` on every
   unverified run (exit 2-5, timeout, run-token mismatch), so `gate` fails and
   `status`/MCP read "unknown" instead of the old "intact" (D12).
-- **`approve --all` never approves REMOVED.** Skips and partial paths
-  (`run tests/x.py`) produce fake REMOVED; bulk-approving them silently shrinks
-  the baseline. Removals need `approve <name>` or `--all --include-removed`,
-  which only drops a removal after a clean whole-suite run (D18 - inference
-  from partial runs kept leaking): run_meta `clean` is true (the plugin's `_scope`:
-  rootdir/testpaths only, no passthrough args or PYTEST_ADDOPTS, exit 0, every
-  collected test passed, zero skipped/xfailed/deselected/errors; `clean_doubt` says
-  why not; a test file on disk under the rootdir that the run did not collect -
-  whatever left it out: norecursedirs, collect_ignore, --ignore, testpaths, a hook -
-  or items a hook dropped also make a run unclean; `_uncollected` compares the disk
-  with the Recorder's collected files instead of detecting each mechanism, which
-  leaked one at a time) and the baseline `source` is in `completed` (D24). Legacy source-less baselines are never bulk-removable.
-  Explicit removal is `approve --remove NAME...` / `--remove-group G` (D25: no run
-  proof, but only names REMOVED in a fresh, reviewed report). `approve --all` backfills `source`
-  into unchanged baselines (`Store.refresh_source`; never fingerprinted).
+- **No bulk path ever drops a REMOVED behavior (D29).** Skips, partial paths and
+  captures moved into a test the run left out (collect_ignore, norecursedirs,
+  `__test__`, pycollect hooks, hidden dirs ...) all read REMOVED, and "proving" a
+  removal leaked four times, so nothing infers it: `approve --all`/`--group` keep
+  every REMOVED, several names refuse REMOVED ones, and the retired (hidden)
+  `--include-removed` raises NightwardError naming them. Removal is only
+  `approve --remove NAME...` / `--remove-group G` (D25: only names REMOVED in a
+  fresh, reviewed report) or one explicit `approve <name>`. The "kept" message
+  explains why each reads REMOVED (`cli._why_removed`/`_run_gaps` from run_meta
+  `completed`, counts, `narrowed`, `uncollected` test files, hook-`filtered` items) -
+  diagnostics only, never authorization; don't turn them back into proof.
+  `approve --all` backfills `source` into unchanged baselines
+  (`Store.refresh_source`; never fingerprinted) - `source` drives NOT_RUN (D21).
 - **Rejections are binding for bulk approval.** `approve --all` skips any
   behavior whose current pending (or, for a removal, baseline) state matches its
   `rejected/` record (fingerprint + group) and lists it as "kept (rejected)".
@@ -159,8 +157,8 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   merge) back to CHANGED - a human rejection beats the judge (D19).
 - **Deselected = not checked (D21).** The plugin records `deselected_ids`; a
   REMOVED whose baseline `source` was deselected (-k/-m) becomes `NOT_RUN` in
-  `runner.classify`: listed in report `not_run`, excluded from `unapproved`, never
-  removal proof. Skips/xfails and source-less baselines stay REMOVED (fail closed).
+  `runner.classify`: listed in report `not_run`, excluded from `unapproved`.
+  Skips/xfails and source-less baselines stay REMOVED (fail closed).
   Not checked is never done (D23): such a report's boundary is `partial`; `gate`
   exits 1 on it unless `--allow-not-run` (a CI-yaml opt-in); MCP can't waive it.
 - **Later team decisions win (D27).** The report records `rejected_digest` (binding
