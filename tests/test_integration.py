@@ -53,6 +53,7 @@ def test_full_capture_approve_gate_cycle(project):
     assert report["counts"]["new"] == 2
 
     # 2. approve all -> intact, baseline written
+    _cli("review", "--dir", str(tw), cwd=project)  # D26: only review marks
     r = _cli("approve", "--all", "--dir", str(tw), cwd=project)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "alpha.approved.json").exists()
@@ -68,6 +69,7 @@ def test_full_capture_approve_gate_cycle(project):
 def test_change_breaches_boundary_and_gate(project):
     tw = project / ".nightward"
     _cli("run", "test_sample.py", "--dir", str(tw), cwd=project)
+    _cli("review", "--dir", str(tw), cwd=project)   # D26: only review marks
     _cli("approve", "--all", "--dir", str(tw), cwd=project)
 
     # introduce a side effect
@@ -101,8 +103,10 @@ def test_duplicate_name_fails_the_test(tmp_path):
         encoding="utf-8",
     )
     r = _cli("run", "test_dup.py", "--dir", str(tmp_path / ".nightward"), cwd=tmp_path)
-    # pytest reports a failure -> nightward warns but still exits 0 (returncode 1 path)
-    assert "warning" in r.stderr.lower() or r.returncode == 0
+    # pytest reports a failure -> the capture is incomplete: summary, then exit 1
+    # (R1-DATA-02: a green exit let CI merge a failing capture)
+    assert r.returncode == 1
+    assert "capture incomplete" in r.stderr
 
 
 def test_nonascii_payload_review_survives_legacy_encoding(tmp_path):
@@ -121,6 +125,7 @@ def test_nonascii_payload_review_survives_legacy_encoding(tmp_path):
     env = dict(os.environ, PYTHONIOENCODING="cp949")
 
     assert _cli("run", "test_kor.py", "--dir", str(tw), cwd=tmp_path, env=env).returncode == 0
+    _cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     _cli("approve", "--all", "--dir", str(tw), cwd=tmp_path, env=env)
 
     # change the Hangul value so review must print a diff containing Hangul

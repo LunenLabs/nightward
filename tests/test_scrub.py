@@ -58,3 +58,35 @@ def test_field_scrub_runs_before_text_scrubbers():
     register_field("at")
     out = scrub({"at": "2026-06-05T12:00:00Z"})
     assert out == {"at": "<SCRUBBED>"}
+
+
+# ---- R1-DATA-01: default scrubbing is opt-out-able and counted --------------
+
+def test_scrub_counted_reports_default_masks():
+    from nightward.scrub import scrub_counted
+    value, masked = scrub_counted({"at": "2026-06-05T12:00:00Z",
+                                   "id": "12345678-1234-1234-1234-123456789abc", "v": 1})
+    assert value == {"at": "<TIMESTAMP>", "id": "<UUID>", "v": 1}
+    assert masked == 2
+
+
+def test_scrub_disabled_keeps_values_but_still_validates():
+    from nightward.scrub import scrub_counted
+    register_field("v", 0)
+    assert scrub_counted({"at": "2026-06-05T12:00:00Z", "v": (1, 2)}, enabled=False) == (
+        {"at": "2026-06-05T12:00:00Z", "v": [1, 2]}, 0)
+    with pytest.raises(NightwardError):
+        scrub_counted({"bad": object()}, enabled=False)
+
+
+def test_disable_defaults_keeps_custom_scrubbers():
+    from nightward.scrub import disable_defaults, scrub_counted
+    disable_defaults()
+    register(r'"ord_\d+"', '"<ORDER>"')
+    assert scrub_counted({"at": "2026-06-05T12:00:00Z", "o": "ord_1"}) == (
+        {"at": "2026-06-05T12:00:00Z", "o": "<ORDER>"}, 0)
+
+
+def test_collapsed_keys_message_points_at_the_opt_out():
+    with pytest.raises(NightwardError, match="scrub=False"):
+        scrub({"2024-01-01T00:00:00": 1, "2024-01-02T00:00:00": 2})

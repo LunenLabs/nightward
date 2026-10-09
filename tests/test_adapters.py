@@ -38,6 +38,28 @@ def test_from_text_same_content_different_encodings_gate_equal(tmp_path):
     assert pa["chars"] == pb["chars"]
 
 
+@pytest.mark.parametrize("raw", [
+    b"server {\r\n    listen 80;\r\n}\r\n",          # Windows text mode
+    b"\xef\xbb\xbfserver {\n    listen 80;\n}\n",    # UTF-8 BOM (Notepad)
+    b"server {\r    listen 80;\r}\r",                 # classic Mac
+])
+def test_from_text_line_endings_and_bom_gate_equal(tmp_path, raw):
+    # R1-OPS-04: the same generated config breached between Windows dev and Linux CI.
+    lf = tmp_path / "lf.conf"
+    lf.write_bytes(b"server {\n    listen 80;\n}\n")
+    other = tmp_path / "other.conf"
+    other.write_bytes(raw)
+    assert from_text(other) == from_text(lf)
+
+
+@pytest.mark.parametrize("raw,lines", [(b"", 0), (b"a", 1), (b"a\n", 1), (b"a\nb", 2),
+                                       (b"a\nb\n", 2), (b"a\n\n", 2)])
+def test_from_text_counts_lines_not_newlines(tmp_path, raw, lines):
+    f = tmp_path / "t.txt"
+    f.write_bytes(raw)
+    assert from_text(f)["lines"] == lines
+
+
 def test_from_text_undecodable_falls_back_to_artifact(tmp_path):
     f = tmp_path / "junk.txt"
     f.write_bytes(b"\xff\xfe\xff\x00\xff")

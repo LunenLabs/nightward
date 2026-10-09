@@ -25,8 +25,8 @@ jobs:
       - run: pip install nightward  # plus your project deps
       - name: Capture behaviors and gate against the approved baseline
         run: |
-          nightward run .
-          nightward gate            # exit 1 = boundary breached = PR blocked
+          nightward run .           # exit 1 if any capture test failed or errored
+          nightward gate            # exit 1 = breached, incomplete or stale = PR blocked
 
   blast-radius:
     if: always()                    # build the explanation even when the gate fails
@@ -60,9 +60,15 @@ jobs:
 
 ## Semantic judge in CI (nondeterministic AI output)
 
-If you capture LLM output with `semantic=True`, give the run a judge. Use a real
-model on CI with a secret, and note the verdict cache keeps token spend at one
-call per new fingerprint pair:
+If you capture LLM output with `semantic=True`, commit the project's judge in
+`pyproject.toml`. CI then uses it with a plain `nightward run`, just like local runs
+and the MCP agent. Use a real model on CI with a secret; the committed verdict ledger
+keeps token spend at one call per new fingerprint pair:
+
+```toml
+[tool.nightward]
+judge = "anthropic:claude-haiku-4-5"
+```
 
 ```yaml
       - name: Capture and gate (with semantic judge)
@@ -70,13 +76,18 @@ call per new fingerprint pair:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           pip install "nightward[judge]"
-          nightward run . --judge anthropic:claude-haiku-4-5
+          nightward run .
           nightward gate
 ```
 
-No key available (forks, dry runs)? `--judge persona:editor` is a deterministic,
-key-free stand-in: it collapses pure case/punctuation/whitespace rewording and
-keeps everything else breached. Judge failures always fall back to the exact
+Don't put `--judge` in the CI step: it overrides the committed judge for that run,
+so CI would stop gating with what the PR reviewers see in `pyproject.toml`.
+
+No key available (forks, dry runs)? `judge = "persona:editor"` is a deterministic,
+key-free stand-in: it collapses only letter case, whitespace, and sentence
+punctuation, and keeps everything else breached, including any change to a number,
+sign, currency or unit symbol, operator, emoji, or value type (README "Semantic
+judge"). Never use `persona:lenient` for real gating. Judge failures always fall back to the exact
 comparison — the gate fails closed.
 
 ## Rules worth keeping

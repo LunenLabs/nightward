@@ -126,9 +126,12 @@ code { font-family: var(--mono); }
   0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 18%, transparent); }
   50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--red) 8%, transparent); }
 }
+.banner.untrusted { border-color: var(--amber-border); }
+.banner.untrusted .status-dot { background: var(--amber); box-shadow: 0 0 0 4px color-mix(in srgb, var(--amber) 18%, transparent); }
 .banner-state { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
 .banner.intact .banner-state { color: var(--green); }
 .banner.breached .banner-state { color: var(--red); }
+.banner.untrusted .banner-state { color: var(--amber); }
 .banner-count {
   font-family: var(--mono); font-size: 12px; font-weight: 600;
   padding: 4px 12px; border-radius: 999px;
@@ -210,7 +213,7 @@ code { font-family: var(--mono); }
 .chk-changed:has(input:checked) { color: var(--amber); border-color: var(--amber-border); background: var(--amber-bg); }
 .chk-removed:has(input:checked) { color: var(--red); border-color: var(--red-border); background: var(--red-bg); }
 
-.group-select {
+.group-select, .shell-select {
   background: var(--surface-2); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 6px 10px; font-size: 13px; font-family: inherit;
@@ -262,6 +265,7 @@ code { font-family: var(--mono); }
 .badge-changed { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
 .badge-removed { background: var(--red-bg); color: var(--red); border-color: var(--red-border); }
 .badge-judged { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-border); }
+.badge-replayed { background: transparent; color: var(--blue); border-color: var(--blue-border); border-style: dashed; }
 
 /* judge verdict note */
 .judge-note {
@@ -282,6 +286,7 @@ code { font-family: var(--mono); }
 .diff-hunk { color: var(--faint); }
 .diff-add { color: var(--add); background: var(--add-bg); }
 .diff-del { color: var(--del); background: var(--del-bg); }
+.diff-hint { color: var(--muted); font-style: italic; }
 .diff-ctx { color: var(--muted); }
 .diff-empty { color: var(--faint); }
 
@@ -299,6 +304,8 @@ code { font-family: var(--mono); }
 .copy-chip:active { transform: translateY(0); }
 .copy-chip.copied { color: var(--green); border-color: var(--green); }
 .copy-cmd { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+/* no shell-safe form for this name: say so instead of offering a command */
+.copy-none .copy-cmd, .group-head .copy-none .copy-cmd { display: inline; color: var(--muted); font-style: italic; }
 
 .filter-empty { color: var(--muted); text-align: center; padding: 28px; }
 

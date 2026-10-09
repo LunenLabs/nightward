@@ -1,10 +1,12 @@
 # nightward: approved baseline IS committed; everything transient is not
 .nightward/pending/
-.nightward/rejected/
 .nightward/report.json
 .nightward/run_meta.json
 .nightward/pending.tmp/
 .nightward/**/*.tmp
+.nightward/.lock
+.nightward/.lock.takeover
+.nightward/reviewed.json
 
 __pycache__/
 *.pyc
@@ -25,5 +27,5 @@ demo-site/
 nightward-demo.gif
 examples/*/site/
 
-# 실데이터 검증 실험 (PII 포함 — 절대 비커밋, CLAUDE.md §비가역 제약)
+# Real-data validation experiments (contain PII — never commit; CLAUDE.md §irreversible constraints)
 live-experiment/

@@ -91,6 +91,7 @@ def test_r4_reject_cannot_escape_the_store(tmp_path):
 
 
 def test_r4_reject_unknown_name_is_an_error(tmp_path):
+    Store(tmp_path / ".nightward").ensure()   # a missing store is its own error (R1-OPS-07)
     r = cli("reject", "ghost", cwd=tmp_path)
     assert r.returncode == 2
     assert "ghost" in r.stderr
@@ -149,9 +150,12 @@ def test_r6_init_gitignore_follows_dir(tmp_path):
 def test_r6_init_default_dir_lines_unchanged(tmp_path):
     cli("init", cwd=tmp_path)
     gi = (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert gi[-6:] == [".nightward/pending/", ".nightward/rejected/",
+    # rejected/ is committed (D17): a rejection must protect every clone.
+    # .lock.takeover: the stale-lock takeover mutex (R4-OPS-02), per-run too.
+    assert gi[-8:] == [".nightward/pending/",
                        ".nightward/report.json", ".nightward/run_meta.json",
-                       ".nightward/pending.tmp/", ".nightward/**/*.tmp"]
+                       ".nightward/pending.tmp/", ".nightward/**/*.tmp", ".nightward/.lock",
+                       ".nightward/.lock.takeover", ".nightward/reviewed.json"]
 
 
 def test_r6_init_store_outside_cwd_is_not_ignored_here(tmp_path):
@@ -181,6 +185,7 @@ def test_r8_aborted_run_keeps_previous_capture(tmp_path):
           'def test_a(behavior):\n    behavior("a", 1)\n'
           'def test_b(behavior):\n    behavior("b", 2)\n')
     assert cli("run", ".", cwd=tmp_path).returncode == 0
+    cli("review", cwd=tmp_path)   # D26: only review marks
     assert cli("approve", "--all", cwd=tmp_path).returncode == 0
     pending = tmp_path / ".nightward" / "pending"
     before = sorted(p.name for p in pending.iterdir())
@@ -208,16 +213,21 @@ def test_r8_captured_abort_message_carries_pytest_output(tmp_path):
 def test_r9_corrupt_ledger_fails_loudly_and_is_preserved(tmp_path):
     ledger = tmp_path / "judge_verdicts.json"
     write(ledger, "<<<<<<< HEAD\n")
-    with pytest.raises(NightwardError, match="corrupt judge verdict ledger"):
+    with pytest.raises(NightwardError, match="merge conflict markers"):
         Judge("persona:lenient", cache_path=ledger)
     assert ledger.read_text(encoding="utf-8") == "<<<<<<< HEAD\n"
 
 
-def test_r9_hand_edited_entry_without_reason_still_replays(tmp_path):
+def test_r9_hand_edited_entry_without_its_wording_is_not_replayed(tmp_path):
+    # A model ruling replays only when it describes the pair it decides
+    # (R4-LLM-03): a bare {"verdict": "SAME"} is no ruling on "a" -> "b".
     ledger = tmp_path / "judge_verdicts.json"
-    write(ledger, json.dumps({"f1:f2:persona:strict": {"verdict": "SAME"}}))
-    v = Judge("persona:strict", cache_path=ledger).equivalent("a", "b", "f1", "f2")
-    assert v.verdict == "SAME" and v.cached
+    spec = "anthropic:claude-haiku-4-5"
+    write(ledger, json.dumps({f"f1:f2:{spec}": {"verdict": "SAME"}}))
+    j = Judge(spec, cache_path=ledger)
+    v = j.equivalent("a", "b", "f1", "f2", name="x")
+    assert v is None or not v.cached       # ruled again (or unavailable), never replayed
+    assert j.summary()["ledger_rejected"]
 
 
 # R10: `approve --all` ignored the judge, so it re-anchored judged-SAME
@@ -229,13 +239,15 @@ def test_r10_approve_all_matches_the_report(tmp_path):
             '    behavior("count", {count})\n')
     write(test_py, body.format(text="market went up", count=1))
     cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     cli("approve", "--all", cwd=tmp_path)
 
     write(test_py, body.format(text="the market rose", count=2))
     cli("run", ".", "--judge", "persona:lenient", cwd=tmp_path)
+    cli("review", cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "count" in r.stdout and "summary" not in r.stdout
+    assert "approved count" in r.stdout and "approved summary" not in r.stdout
     approved = json.loads((tmp_path / ".nightward" / "baseline" / "summary.approved.json")
                           .read_text(encoding="utf-8"))
     assert approved["payload"] == "market went up"  # original anchor kept
@@ -250,6 +262,7 @@ def test_r10_approve_name_and_all_together_is_an_error(tmp_path):
 
 # R11: `view` on a busy port died with a raw OSError traceback.
 def test_r11_view_busy_port_is_a_clean_error(tmp_path):
+    Store(tmp_path / ".nightward").ensure()   # a missing store is its own error (R1-OPS-07)
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
         busy.listen()

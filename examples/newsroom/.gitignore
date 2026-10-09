@@ -1,7 +1,9 @@
 # nightward: approved baseline IS committed; transient state is not
 .nightward/pending/
-.nightward/rejected/
 .nightward/report.json
 .nightward/run_meta.json
 .nightward/pending.tmp/
 .nightward/**/*.tmp
+.nightward/.lock
+.nightward/.lock.takeover
+.nightward/reviewed.json

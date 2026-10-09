@@ -29,8 +29,53 @@ const KIND_LABEL = {
   REMOVED: "removed — in the baseline but missing this run (could be a skipped test)",
 };
 
+// ---- shell-safe commands ----------------------------------------------------
+// Behavior names come from test code (possibly agent-written) and these commands
+// are pasted into the approver's own shell, so a name is NEVER concatenated raw.
+// The generator quotes every name per shell (nightward/shellquote.py, tested
+// against real shells) into data.quoted; a name without a safe form there
+// (e.g. "100%" in cmd.exe) yields no command at all.
+const SHELL_LABEL = { posix: "bash / zsh / sh", powershell: "PowerShell", cmd: "cmd.exe" };
+let QUOTED = {};
+let SHELL = (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent || ""))
+  ? "powershell" : "posix";
+
+function setQuoting(quoted, shell) {
+  QUOTED = quoted || {};
+  if (shell && SHELL_LABEL[shell]) SHELL = shell;
+}
+
+function cliCommand(verb, names) {
+  const args = [];
+  for (const n of names) {
+    const q = Object.prototype.hasOwnProperty.call(QUOTED, n) ? QUOTED[n][SHELL] : null;
+    if (typeof q !== "string") return null;
+    args.push(q);
+  }
+  // a leading "-" would be read as an option; quoting can't prevent that
+  const sep = names.some(function (n) { return n.charAt(0) === "-"; }) ? ["--"] : [];
+  return ["nightward", verb].concat(sep, args).join(" ");
+}
+
+// One short command for a group of any size: 1,440 quoted names would exceed
+// the Windows command-line limit (R3-DATA-06). The CLI reads the value after
+// --group as the group even when it starts with "-".
+function groupApproveCommand(group) {
+  const q = Object.prototype.hasOwnProperty.call(QUOTED, group) ? QUOTED[group][SHELL] : null;
+  return typeof q === "string" ? "nightward approve --group " + q : null;
+}
+
 // ---- clipboard copy chip --------------------------------------------------
 function copyChip(label, command) {
+  if (command == null) {
+    const none = el("span", { cls: "copy-pair copy-none" });
+    none.appendChild(el("span", {
+      cls: "copy-cmd",
+      text: label + ": a name here can't be pasted safely into " + SHELL_LABEL[SHELL] +
+        " - switch the shell above, or type the name yourself",
+    }));
+    return none;
+  }
   const btn = el("button", { cls: "copy-chip", text: label, attrs: { type: "button" } });
   const cmd = el("code", { cls: "copy-cmd", text: command });
   btn.addEventListener("click", function () {
@@ -68,6 +113,8 @@ function renderDiff(container, diffText) {
     else if (line.startsWith("@@")) { cls = "diff-hunk"; }
     else if (line.startsWith("+")) { cls = "diff-add"; }
     else if (line.startsWith("-")) { cls = "diff-del"; }
+    // names characters that print the same on both sides (escaped as \uXXXX above it)
+    else if (line.startsWith("? ")) { cls = "diff-hint"; }
     pre.appendChild(el("div", { cls: "diff-line " + cls, text: text }));
   }
   container.appendChild(pre);
@@ -83,31 +130,124 @@ function showEmpty(title, body, command) {
   if (command) box.appendChild(copyChip("copy", command));
 }
 
-function renderMeta(meta) {
-  const m = $("run-meta");
-  clear(m);
-  if (!meta) return;
-  if (meta.generated) m.appendChild(el("span", { cls: "meta-item", text: "generated: " + meta.generated }));
-  if (meta.source) m.appendChild(el("span", { cls: "meta-item", text: "source: " + meta.source }));
-  if (meta.judge) m.appendChild(el("span", { cls: "meta-item meta-judge", text: "judge: " + meta.judge }));
+// The verdict's own time comes first: the page may be built long after the run,
+// and both carry their UTC offset so a reviewer can tell how old it is (R3-WEB-04).
+function metaItems(report, meta) {
+  const items = [];
+  if (report && report.generated_at) items.push({ cls: "meta-item", text: "verdict as of: " + report.generated_at });
+  if (!meta) return items;
+  if (meta.generated) items.push({ cls: "meta-item", text: "page built: " + meta.generated });
+  if (meta.source) items.push({ cls: "meta-item", text: "source: " + meta.source });
+  if (meta.judge) items.push({ cls: "meta-item meta-judge", text: "judge: " + meta.judge });
+  return items;
 }
 
-function renderBanner(report) {
+function renderMeta(report, meta) {
+  const m = $("run-meta");
+  clear(m);
+  for (const it of metaItems(report, meta)) m.appendChild(el("span", { cls: it.cls, text: it.text }));
+}
+
+// `nightward run` for the store this page was built from (quoted per shell by
+// the generator); null when its path has no safe form in the selected shell.
+function runCommand(meta) {
+  const cmds = meta && meta.run_command;
+  if (!cmds) return "nightward run .";
+  return typeof cmds[SHELL] === "string" ? cmds[SHELL] : null;
+}
+
+// This page is a static build: it never changes until `nightward view` runs again.
+const REBUILD = "then rebuild this page with `nightward view`.";
+
+// No report: nothing was ever run, or the last run produced no verdict.
+function noReportState(meta) {
+  const captured = meta && (meta.baseline_count || meta.pending_count);
+  return captured ? {
+    title: "No current verdict",
+    body: "The last run did not produce a verdict: it aborted (for example a conftest.py import error or a collection error) or its report was invalidated - see the output of `nightward run`. Fix the error and re-run, " + REBUILD,
+    command: runCommand(meta),
+  } : {
+    title: "No run recorded yet",
+    body: "Capture behaviors with the `behavior` pytest fixture and run nightward, " + REBUILD,
+    command: runCommand(meta),
+  };
+}
+
+// Banner states that are neither a pass nor a breach: the verdict can't be trusted.
+const UNTRUSTED = {
+  stale: {
+    title: "Report is stale",
+    explain: "The approved baseline, the captured behavior or a rejection changed after this report was computed, so its verdict no longer applies. Re-run nightward for a fresh blast radius, " + REBUILD + " (`nightward gate` exits 1.)",
+  },
+  unknown: {
+    title: "No verdict",
+    explain: "There is no current report, so nothing says whether the boundary holds. (`nightward gate` fails until a run produces one.)",
+  },
+  partial: {
+    title: "Boundary partial",
+    explain: "Nothing that ran is unapproved, but some approved behaviors were not checked: their test was deselected (-k/-m). This is NOT done. (`nightward gate` exits 1 unless the CI job passes --allow-not-run.)",
+  },
+  incomplete: {
+    title: "Capture incomplete",
+    explain: "Nothing captured is unapproved, but some capture tests failed or errored, so their behaviors are missing from this report. Fix them and re-run. (`nightward gate` exits 1.)",
+  },
+};
+
+// What the banner says for a state: {cls, title, explain, count}. Only "intact"
+// is done. "partial" (approved behaviors not checked, D23) and any boundary
+// value this page predates are "not done", with the raw value shown as text.
+function bannerText(report, state) {
+  const untrusted = state === "partial" ? null : UNTRUSTED[state];
+  if (untrusted) return { cls: "untrusted " + state, title: untrusted.title, explain: untrusted.explain, count: null };
+  const unapproved = (report && report.unapproved) || 0;
+  if (state === "intact") {
+    return { cls: "intact", title: "Boundary intact", count: null,
+      explain: "No behavior has moved since the approved baseline. (`nightward gate` passes in CI — exit 0.)" };
+  }
+  if (state === "breached") {
+    return { cls: "breached", title: "Boundary breached", count: unapproved + " unapproved",
+      explain: "There are " + unapproved + " unapproved change(s). Review each one: approve it if it was intended, fix the code if it is a regression. (`nightward gate` exits 1.)" };
+  }
+  if (state === "partial") {
+    const notRun = ((report && report.not_run) || []).length;
+    return { cls: "untrusted partial", title: "Partial - not every behavior was checked", count: null,
+      explain: (unapproved ? "There are " + unapproved + " unapproved change(s), and " : "Nothing checked is unapproved, but ") +
+        notRun + " approved behavior(s) were not checked in this run (their tests were deselected), so this is not done. Run the whole suite. (`nightward gate` exits 1 unless the CI job opts in with --allow-not-run.)" };
+  }
+  const raw = String(report && report.boundary);
+  return { cls: "untrusted other", title: "Boundary: " + raw, count: null,
+    explain: "This dashboard does not know the boundary value \"" + raw + "\", so treat it as not done. Check `nightward status` and `nightward gate`." };
+}
+
+function renderBanner(report, state) {
   const b = $("banner");
   clear(b);
-  const intact = report.boundary === "intact";
-  b.className = "banner " + (intact ? "intact" : "breached");
+  const t = bannerText(report, state);
+  b.className = "banner " + t.cls;
   const head = el("div", { cls: "banner-head" });
   head.appendChild(el("span", { cls: "status-dot", attrs: { "aria-hidden": "true" } }));
-  head.appendChild(el("span", { cls: "banner-state", text: intact ? "Boundary intact" : "Boundary breached" }));
-  if (!intact) head.appendChild(el("span", { cls: "banner-count", text: (report.unapproved || 0) + " unapproved" }));
+  head.appendChild(el("span", { cls: "banner-state", text: t.title }));
+  if (t.count) head.appendChild(el("span", { cls: "banner-count", text: t.count }));
   b.appendChild(head);
-  b.appendChild(el("p", {
-    cls: "banner-explain",
-    text: intact
-      ? "No behavior has moved since the approved baseline. (`nightward gate` passes in CI — exit 0.)"
-      : "There are " + (report.unapproved || 0) + " unapproved change(s). Review each one: approve it if it was intended, fix the code if it is a regression. (`nightward gate` exits 1.)",
-  }));
+  b.appendChild(el("p", { cls: "banner-explain", text: t.explain }));
+}
+
+function bannerState(report, meta) {
+  if (!report) return "unknown";
+  if (meta && meta.stale) return "stale";
+  if (report.boundary === "intact" || report.boundary === "partial") {
+    return report.incomplete ? "incomplete" : report.boundary;
+  }
+  if (report.boundary === "breached") return "breached";
+  return "other";
+}
+
+// The empty state when no change is listed: only an intact boundary is done.
+function noChangeText(state) {
+  if (state === "intact") return "Everything matches the last approved baseline. This is a safe place to stop.";
+  if (state === "incomplete") return "Everything captured matches the baseline, but the capture is incomplete. This is NOT a safe place to stop.";
+  if (state === "partial") return "Everything checked matches the baseline, but some approved behaviors were not checked. This is NOT a safe place to stop.";
+  return "No change is listed, but the boundary is not intact. This is NOT a safe place to stop.";
 }
 
 function renderWarnings(report, meta) {
@@ -120,30 +260,72 @@ function renderWarnings(report, meta) {
     "This page can contain captured system output. Review for sensitive data before publishing it anywhere public."));
   w.appendChild(exposure);
 
-  if (meta && (meta.skipped || meta.failed)) {
+  if (meta && (meta.skipped || meta.failed || meta.errors)) {
     const parts = [];
     if (meta.skipped) parts.push(meta.skipped + " skipped");
     if (meta.failed) parts.push(meta.failed + " failed");
+    if (meta.errors) parts.push(meta.errors + " errored");
     const warn = el("div", { cls: "warn warn-alert" });
     warn.appendChild(el("strong", { text: parts.join(" · ") + " " }));
     warn.appendChild(document.createTextNode(
       "— skipped tests don't capture their behavior (it shows up as a false REMOVED), and failed tests make the blast radius incomplete."));
     w.appendChild(warn);
   }
+
+  const notRun = (report && report.not_run) || [];
+  if (notRun.length) {
+    const warn = el("div", { cls: "warn warn-info" });
+    warn.appendChild(el("strong", { text: notRun.length + " behavior(s) not checked " }));
+    warn.appendChild(document.createTextNode(
+      "- their test was deselected (-k/-m) in this run: " +
+      notRun.map(function (n) { return n.name; }).join(", ")));
+    w.appendChild(warn);
+  }
 }
 
-function renderCounts(counts) {
-  const c = $("counts");
-  clear(c);
-  c.hidden = false;
+// Judged-SAME behaviors are already in "unchanged"; the last tile says how many
+// of them a judge (an LLM or a rule-based persona) waved through.
+function countItems(counts) {
   const items = [
     ["unchanged", "unchanged", counts.unchanged],
     ["changed", "changed", counts.changed],
     ["new", "new", counts.new],
     ["removed", "removed", counts.removed],
   ];
-  if (counts.judged_same) items.push(["judged", "judged same (AI)", counts.judged_same]);
-  for (const [key, label, n] of items) {
+  if (counts.judged_same) items.push(["judged", "of them judged same", counts.judged_same]);
+  return items;
+}
+
+// A model ruling read back from the committed ledger (judge_replayed) was not
+// made this run: a reviewer auditing it should know it is a recorded decision.
+function replayedNote(it) {
+  return it && it.judge_replayed ? "replayed from the committed ledger, not ruled this run" : null;
+}
+
+function appendReplayed(head, it) {
+  const note = replayedNote(it);
+  if (note) head.appendChild(el("span", { cls: "badge badge-replayed", text: "replayed", title: note }));
+}
+
+function judgeNote(it, fallback) {
+  const j = el("p", { cls: "judge-note" });
+  j.appendChild(el("strong", { text: (it.judge_model || "judge") + ": " }));
+  j.appendChild(document.createTextNode(it.judge_reason || fallback));
+  const note = replayedNote(it);
+  if (note) j.appendChild(el("span", { cls: "judge-replayed", text: " (" + note + ")" }));
+  return j;
+}
+
+// persona:* judges are deterministic rules, not an AI model.
+function judgeBadge(model) {
+  return String(model || "").indexOf("persona:") === 0 ? "rule-judged" : "AI-judged";
+}
+
+function renderCounts(counts) {
+  const c = $("counts");
+  clear(c);
+  c.hidden = false;
+  for (const [key, label, n] of countItems(counts)) {
     const cell = el("div", { cls: "count count-" + key });
     cell.appendChild(el("span", { cls: "count-n", text: n }));
     cell.appendChild(el("span", { cls: "count-label", text: label }));
@@ -199,6 +381,19 @@ function renderControls(report) {
   });
   box.appendChild(kindWrap);
 
+  // which shell the copy-paste commands are quoted for
+  const sWrap = el("div", { cls: "control-row" });
+  sWrap.appendChild(el("span", { cls: "control-label", text: "commands for:" }));
+  const shellSel = el("select", { cls: "shell-select", attrs: { "aria-label": "shell for copied commands" } });
+  Object.keys(SHELL_LABEL).forEach(function (s) {
+    const opt = el("option", { text: SHELL_LABEL[s], attrs: { value: s } });
+    opt.selected = s === SHELL;
+    shellSel.appendChild(opt);
+  });
+  shellSel.addEventListener("change", function () { SHELL = shellSel.value; renderGroups(report); });
+  sWrap.appendChild(shellSel);
+  box.appendChild(sWrap);
+
   // group select
   const groups = Object.keys(report.blast_radius || {});
   if (groups.length > 1) {
@@ -227,27 +422,58 @@ function renderCard(it) {
   if (it.judged) {
     head.appendChild(el("span", {
       cls: "badge badge-judged",
-      text: "AI-judged",
-      title: "An LLM judge ruled this fingerprint mismatch semantically DIFFERENT — verdict by " + (it.judge_model || "unknown model"),
+      text: judgeBadge(it.judge_model),
+      title: "A judge ruled this fingerprint mismatch semantically DIFFERENT — verdict by " + (it.judge_model || "unknown judge"),
+    }));
+    appendReplayed(head, it);
+  }
+  if (it.rejected) {
+    head.appendChild(el("span", {
+      cls: "badge badge-removed",
+      text: "rejected",
+      title: "This exact payload is a standing rejection" + (it.rejected_by ? " by " + it.rejected_by : "") + " (.nightward/rejected/) - approving it overrides that decision",
     }));
   }
   head.appendChild(el("span", { cls: "card-name", text: it.name }));
   card.appendChild(head);
 
-  if (it.judged) {
-    const j = el("p", { cls: "judge-note" });
-    j.appendChild(el("strong", { text: (it.judge_model || "judge") + ": " }));
-    j.appendChild(document.createTextNode(it.judge_reason || "ruled DIFFERENT"));
-    card.appendChild(j);
-  }
+  if (it.judged) card.appendChild(judgeNote(it, "ruled DIFFERENT"));
 
   renderDiff(card, it.diff);
 
   const actions = el("div", { cls: "card-actions" });
-  actions.appendChild(copyChip("approve (intended change)", "nightward approve " + it.name));
-  actions.appendChild(copyChip("reject (regression)", "nightward reject " + it.name));
+  actions.appendChild(copyChip("approve (intended change)", cliCommand("approve", [it.name])));
+  actions.appendChild(copyChip("reject (regression)", cliCommand("reject", [it.name])));
   card.appendChild(actions);
   return card;
+}
+
+// A REMOVED item may be a test that merely didn't run; dropping it from the
+// baseline is a per-card decision, never part of a group approval (R2-WEB-03):
+// `approve --group` leaves removals out, as `--all` does.
+function groupApproveNames(items) {
+  return items.filter(function (i) { return i.kind !== "REMOVED"; })
+    .map(function (i) { return i.name; });
+}
+
+// A group header: its item count and the label of the `approve --group` chip.
+// The chip always covers the whole group, so when the kind filter hides some of
+// its NEW/CHANGED items the label says how many it will approve unseen (R4-WEB-04).
+function groupHead(allItems, visible) {
+  const names = groupApproveNames(allItems);
+  const shownNames = groupApproveNames(visible);
+  const hidden = names.filter(function (n) { return shownNames.indexOf(n) < 0; }).length;
+  const removals = names.length < allItems.length;
+  let label = null;
+  if (names.length) {
+    label = !hidden && !removals ? "approve this group"
+      : "approve all " + names.length + " NEW/CHANGED in this group" +
+        (hidden ? " (" + hidden + " hidden by your filters)" : "") +
+        (removals ? " - removals: approve each on its card" : "");
+  }
+  const count = visible.length === allItems.length ? allItems.length + " item(s)"
+    : visible.length + " of " + allItems.length + " item(s) shown";
+  return { label: label, count: count };
 }
 
 function renderGroups(report) {
@@ -266,8 +492,9 @@ function renderGroups(report) {
     details.open = true;
     const summary = el("summary", { cls: "group-head" });
     summary.appendChild(el("span", { cls: "group-name", text: group }));
-    summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
-    summary.appendChild(copyChip("approve this group", "nightward approve " + items.map(function (i) { return i.name; }).join(" ")));
+    const head = groupHead(br[group], items);
+    summary.appendChild(el("span", { cls: "group-count", text: head.count }));
+    if (head.label) summary.appendChild(copyChip(head.label, groupApproveCommand(group)));
     details.appendChild(summary);
 
     for (const it of items) details.appendChild(renderCard(it));
@@ -288,20 +515,65 @@ function renderLegend() {
   });
 }
 
+// Fingerprint mismatches a judge ruled semantically SAME. They are not in the
+// boundary, but a wrong SAME is a hole in the gate, so list each one with the
+// wording the judge accepted for a human to audit.
+function renderJudgedSame(report) {
+  const box = $("judged");
+  clear(box);
+  const items = report.judged_same || [];
+  box.hidden = !items.length;
+  if (!items.length) return;
+  const details = el("details", { cls: "group" });
+  details.open = true;
+  const summary = el("summary", { cls: "group-head" });
+  summary.appendChild(el("span", { cls: "group-name", text: "ruled semantically SAME by the judge — audit the wording" }));
+  summary.appendChild(el("span", { cls: "group-count", text: items.length + " item(s)" }));
+  details.appendChild(summary);
+  for (const it of items) {
+    const card = el("article", { cls: "card" });
+    const head = el("div", { cls: "card-head" });
+    head.appendChild(el("span", {
+      cls: "badge badge-judged",
+      text: "judged SAME",
+      title: "Not in the boundary: a judge ruled this fingerprint mismatch semantically SAME — verdict by " + (it.judge_model || "unknown judge"),
+    }));
+    appendReplayed(head, it);
+    head.appendChild(el("span", { cls: "card-name", text: it.name }));
+    card.appendChild(head);
+    card.appendChild(judgeNote(it, "ruled SAME"));
+    renderDiff(card, it.diff);
+    // A wrong SAME is overruled by rejecting it: it becomes unapproved again.
+    const actions = el("div", { cls: "card-actions" });
+    actions.appendChild(copyChip("reject (overrule the judge)", cliCommand("reject", [it.name])));
+    card.appendChild(actions);
+    details.appendChild(card);
+  }
+  box.appendChild(details);
+}
+
 // ---- entry ----------------------------------------------------------------
 function render(data) {
-  renderMeta(data.meta);
+  setQuoting(data.quoted);
   const report = data.report;
+  renderMeta(report, data.meta);
 
+  const state = bannerState(report, data.meta);
+  renderBanner(report, state);
+  renderWarnings(report, data.meta);
   if (!report) {
-    showEmpty("No run recorded yet",
-      "Capture behaviors first, then refresh this page to see the blast radius.",
-      "nightward run example");
+    const empty = noReportState(data.meta);
+    showEmpty(empty.title, empty.body, empty.command);
     return;
   }
+  renderJudgedSame(report);
 
-  renderBanner(report);
-  renderWarnings(report, data.meta);
+  if (state === "stale") {
+    showEmpty("Re-run to refresh this report",
+      "The diffs in this report compare inputs that are no longer on disk, so they are not shown. Re-run, " + REBUILD,
+      runCommand(data.meta));
+    return;
+  }
 
   const changes = allChanges(report);
 
@@ -313,8 +585,7 @@ function render(data) {
   }
 
   if (report.boundary === "intact" || !changes.length) {
-    showEmpty("No behavior changed",
-      "Everything matches the last approved baseline. This is a safe place to stop.", null);
+    showEmpty("No behavior changed", noChangeText(state), null);
     renderCounts(report.counts || {});
     return;
   }
