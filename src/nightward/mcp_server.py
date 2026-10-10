@@ -89,7 +89,8 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
     Returns {boundary, unapproved, changes: [{name, kind, group, judged,
     judge_model, judge_reason, judge_replayed, rejected, rejected_by}], judged_same,
     not_run (approved behaviors whose test was deselected: not checked), narrowed,
-    stale, incomplete, generated_at, judge, store (absolute path of the gated
+    stale, incomplete, generated_at, judge, scrub_rules (custom scrub rules of the run
+    and what they replaced), store (absolute path of the gated
     store), path (what pytest ran), warnings: {skipped, failed, errors, deselected,
     xfailed, scrubbed,
     scrub_unmatched (custom scrub rules that matched nothing), scrub_rules (per custom

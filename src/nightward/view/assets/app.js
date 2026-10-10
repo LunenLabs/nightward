@@ -272,6 +272,15 @@ function renderWarnings(report, meta) {
     w.appendChild(warn);
   }
 
+  const rules = scrubRuleLines(report);
+  if (rules.length) {
+    const warn = el("div", { cls: "warn warn-info" });
+    warn.appendChild(el("strong", { text: "Custom scrub rules " }));
+    warn.appendChild(document.createTextNode(
+      "replaced these values before the comparison in the last run: " + rules.join("; ")));
+    w.appendChild(warn);
+  }
+
   const notRun = (report && report.not_run) || [];
   if (notRun.length) {
     const warn = el("div", { cls: "warn warn-info" });
@@ -281,6 +290,16 @@ function renderWarnings(report, meta) {
       notRun.map(function (n) { return n.name; }).join(", ")));
     w.appendChild(warn);
   }
+}
+
+// One line per custom scrub rule of the last run (R5-POL-03): where it was
+// registered and what it replaced. Plain text, rendered with textContent.
+function scrubRuleLines(report) {
+  return ((report && report.scrub_rules) || []).map(function (r) {
+    const n = (r.behaviors || []).length;
+    return r.rule + ": " + (r.values || 0) + " value(s) in " + n + " behavior(s)" +
+      (r.placeholder === false ? " - not a <PLACEHOLDER>: it writes a plausible value, review it" : "");
+  });
 }
 
 // Judged-SAME behaviors are already in "unchanged"; the last tile says how many

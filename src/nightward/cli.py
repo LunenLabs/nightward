@@ -471,6 +471,25 @@ def _names_text(names: list[str], limit: int = 5) -> str:
                                        if len(names) > limit else "")
 
 
+def _scrub_rule_line(rule: dict) -> str:
+    behaviors = rule.get("behaviors") or []
+    line = (f"{rule.get('rule')}: {rule.get('values', 0)} value(s) in {len(behaviors)} "
+            f"behavior(s)")
+    if not rule.get("placeholder", True):
+        line += " - not a <PLACEHOLDER>: it writes a plausible value, review it"
+    return line
+
+
+def _print_scrub_rules(rules: list[dict]) -> None:
+    """The custom scrub rules behind the last capture (D28, R5-POL-03): a value
+    they replaced never reaches the comparison, so every review surface says so."""
+    if not rules:
+        return
+    console.print("[dim]custom scrub rules (values they replaced in the last run):[/dim]")
+    for rule in rules:
+        console.print(f"[dim]  - {escape(_scrub_rule_line(rule))}[/dim]", soft_wrap=True)
+
+
 def _print_not_run(report: dict) -> None:
     not_run = [it["name"] for it in report.get("not_run") or []]
     if not_run:
@@ -775,6 +794,7 @@ def review(names: list[str] | None = NAMES_ARG,
     if report.get("incomplete"):
         err_console.print(f"[yellow]warning:[/yellow] capture incomplete: "
                           f"{_incomplete_text(report['incomplete'])}")
+    _print_scrub_rules(report.get("scrub_rules") or [])
     blast = report.get("blast_radius", {})
     judged_same = report.get("judged_same") or []
     candidates = {it["name"]: g for g, items in blast.items() for it in items}
@@ -1362,6 +1382,7 @@ def _print_status(payload: dict) -> None:
         console.print(f"[dim]{len(same)} change(s) ruled semantically SAME by the judge: "
                       f"{escape(_names_text(same))} - audit with `nightward review`[/dim]",
                       soft_wrap=True)
+    _print_scrub_rules(payload.get("scrub_rules") or [])
     console.print(f"[dim]{escape(_as_of(payload.get('generated_at')))}[/dim]")
 
 

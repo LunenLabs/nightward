@@ -125,6 +125,12 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
     report["narrowed"] = bool(meta.get("narrowed"))
+    # Custom scrub rules shaped what was compared (D28): every reader of the
+    # report (review, status, MCP, dashboard) shows them, not only the run
+    # that introduced them (R5-POL-03).
+    report["scrub_rules"] = [
+        {k: r.get(k) for k in ("rule", "values", "behaviors", "placeholder")}
+        for r in meta.get("scrub_rules") or [] if isinstance(r, dict)]
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)

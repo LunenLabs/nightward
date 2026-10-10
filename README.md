@@ -280,7 +280,10 @@ how many values it replaced and in which behaviors whenever that count changes s
 the last run (`note: scrub rule register(r'...') in conftest.py replaced 1 value(s)
 this run (was 0) in route`). A replacement that is not a `<PLACEHOLDER>` is called
 out as a rewrite, not a mask. MCP `warnings.scrub_rules` carries the same data
-(`rule`, `values`, `behaviors`, `was`, `changed`, `placeholder`).
+(`rule`, `values`, `behaviors`, `was`, `changed`, `placeholder`). The active rules stay
+visible after that run: `review`, `status` (and `status --json` / MCP `scrub_rules`:
+`rule` with where it was registered, `values`, `behaviors`, `placeholder`) and the
+dashboard list every custom rule and what it replaced in the last run.
 
 `register()` patterns run over the payload's **canonical JSON text**, not over the
 decoded strings: pretty-printed (`"key": "value"`, keys sorted), and inside a string
@@ -495,7 +498,8 @@ Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`nam
 `judge_replayed` when that ruling came from the ledger; `rejected`, `rejected_by` when
 the payload is a standing rejection), `not_run` (`{name, group}` of approved behaviors
 whose test was deselected) and `narrowed`, `judged_same`, `stale`, `incomplete`
-(`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, and `store` (the
+(`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, `scrub_rules` (the
+custom scrub rules of the last run and what they replaced), and `store` (the
 absolute path of the store the verdict comes from). `nightward_run` also returns
 `path` (what pytest ran), so a loop driver can check both. `boundary` is one of:
 

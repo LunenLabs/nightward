@@ -154,3 +154,53 @@ def test_mcp_warns_about_new_ruling_files(replies, monkeypatch):
     assert w["judge_added"] == [ruling.name]
     assert mcp_server.run_tool(".")["warnings"]["judge_added"] == []
 
+
+# ---- R5-POL-03: active custom scrub rules stay visible -------------------------
+
+ORDER_RULE = 'from nightward import scrub\nscrub.register(r"ord-[0-9]+", "<ORDER_ID>")\n'
+ORDER = ('import random\n'
+         'def test_o(behavior):\n'
+         '    behavior("order", {"id": f"ord-{random.randint(1, 10**6)}", "total": 5},\n'
+         '             group="g")\n')
+
+
+@pytest.fixture
+def orders(tmp_path):
+    write(tmp_path / "conftest.py", ORDER_RULE)
+    write(tmp_path / "test_o.py", ORDER)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    r = cli("run", ".", cwd=tmp_path)
+    assert "scrub rule" not in r.stderr      # run keeps its change-only note
+    return tmp_path
+
+
+RULE = "register(r'ord-[0-9]+') in conftest.py"
+
+
+def test_review_and_status_list_active_scrub_rules(orders):
+    for args in (["review"], ["status"]):
+        out = cli(*args, cwd=orders).stdout
+        assert RULE in out and "1 value(s) in 1 behavior(s)" in out, (args, out)
+    payload = json.loads(cli("status", "--json", cwd=orders).stdout)
+    assert payload["scrub_rules"] == [{"rule": RULE, "values": 1, "behaviors": ["order"],
+                                       "placeholder": True}]
+
+
+def test_mcp_status_lists_active_scrub_rules(orders, monkeypatch):
+    monkeypatch.chdir(orders)
+    from nightward import mcp_server
+    assert [r["rule"] for r in mcp_server.status_tool()["scrub_rules"]] == [RULE]
+
+
+def test_dashboard_lists_active_scrub_rules():
+    rules = [{"rule": RULE, "values": 3, "behaviors": ["order", "refund"],
+              "placeholder": True},
+             {"rule": "register(r'x') in t/conftest.py", "values": 0, "behaviors": [],
+              "placeholder": False}]
+    lines = node_eval(f"scrubRuleLines({json.dumps({'scrub_rules': rules})})")
+    assert lines[0] == f"{RULE}: 3 value(s) in 2 behavior(s)"
+    assert "not a <PLACEHOLDER>" in lines[1]
+    assert node_eval("scrubRuleLines({})") == []
