@@ -2,12 +2,14 @@ name: release
 
 # Publishes nightward to PyPI. MANUAL DISPATCH ONLY — publishing is
 # irreversible (sdists/wheels are mirrored immediately), so a human pushes
-# the button after the RELEASING.md checklist is green.
+# the button after the docs/RELEASING.md checklist is green. Start it from the
+# release tag (e.g. v0.3.0): the smoke step refuses a wheel whose version
+# doesn't match the tag.
 #
 # Auth: PyPI Trusted Publishing (OIDC) — no long-lived token stored anywhere.
-# One-time setup on pypi.org: project "nightward" -> Publishing -> add GitHub
-# publisher (owner: LunenLabs, repo: nightward, workflow: release.yml,
-# environment: pypi).
+# One-time setup on pypi.org (the project doesn't exist yet): add a pending
+# publisher (project: nightward, owner: LunenLabs, repo: nightward, workflow:
+# release.yml, environment: pypi).
 
 on:
   workflow_dispatch:
@@ -35,9 +37,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install build
+      - run: pip install build twine
       - run: python -m build
-      - run: pip install dist/*.whl && nightward --help  # smoke: the wheel installs and runs
+      - run: twine check dist/*
+      # smoke: the wheel installs, runs, and is the version of the tag this
+      # workflow was started from (a run from a branch stops here)
+      - name: smoke
+        run: |
+          pip install dist/*.whl
+          nightward --version
+          test "$(nightward --version)" = "nightward ${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: dist
