@@ -371,6 +371,8 @@ def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None
         "scrub_unmatched": meta.get("scrub_unmatched") or [],
         # per custom rule: {rule, values, behaviors, was, changed, placeholder} (D28)
         "scrub_rules": meta.get("scrub_rules") or [],
+        # ruling files this run added to <store>/judge/: commit them (R5-POL-02)
+        "judge_added": sorted(judge.added) if judge is not None else [],
         "pytest_returncode": result.returncode,
         "output_tail": _output_tail(result),
     }

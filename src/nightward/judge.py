@@ -411,6 +411,9 @@ class Judge:
         # Model rulings not replayed because the entry describes another change
         # (forged or hand-edited readable fields): "<file> (<why>)".
         self.ledger_rejected: list[str] = []
+        # Ruling files this judge created: part of the committed boundary, so
+        # `run` says to commit them (R5-POL-02).
+        self.added: list[str] = []
 
     def _load_cache(self) -> dict[str, dict]:
         # The ledger is committed, so it can be corrupted by e.g. a merge
@@ -462,7 +465,10 @@ class Judge:
         if self.ledger_dir:
             from .core.baseline import _atomic_write
             self.ledger_dir.mkdir(parents=True, exist_ok=True)
-            _atomic_write(_ruling_file(self.ledger_dir, key),
+            path = _ruling_file(self.ledger_dir, key)
+            if not path.exists():
+                self.added.append(path.name)
+            _atomic_write(path,
                           json.dumps(self._cache[key], ensure_ascii=False, indent=2,
                                      sort_keys=True) + "\n")
 

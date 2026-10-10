@@ -421,7 +421,9 @@ fingerprint pair in `.nightward/judge/` (one JSON file per ruling) — a **commi
 ledger**. Each entry records the behavior, model, verdict, reason, and the old and
 new wording it ruled on (up to 1,000 chars each), so every ruling lands in the PR
 diff. **Review ledger diffs like baseline diffs**: a ledger entry can turn a breach
-green.
+green. When a run adds ruling files, `run` names them and says to commit
+`.nightward/judge/` with the baseline (MCP: `warnings.judge_added`), so CI and
+teammates gate on the same rulings.
 
 - A model judge (`anthropic:*`) rules once per pair. Its ruling is replayed from
   the ledger after that, so the model's own nondeterminism can't wobble the gate and

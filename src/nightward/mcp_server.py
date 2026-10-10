@@ -94,7 +94,8 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
     xfailed, scrubbed,
     scrub_unmatched (custom scrub rules that matched nothing), scrub_rules (per custom
     rule: values and behaviors it replaced, and whether that changed since the last run),
-    pytest_returncode, pytest_output_tail}}.
+    judge_added (judge ruling files this run added to the store's judge/ dir - a human
+    commits them with the baseline), pytest_returncode, pytest_output_tail}}.
     boundary is one of:
       "intact"     done: no unapproved change;
       "breached"   unapproved changes: fix the code, or ask a human to approve;
@@ -129,6 +130,7 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
         "scrubbed": result["scrubbed"],
         "scrub_unmatched": result["scrub_unmatched"],
         "scrub_rules": result["scrub_rules"],
+        "judge_added": result["judge_added"],
         "pytest_returncode": result["pytest_returncode"],
         "pytest_output_tail": result["output_tail"],
     }

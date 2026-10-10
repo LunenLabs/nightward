@@ -115,3 +115,42 @@ def test_run_meta_records_who_captured(total):
     meta = json.loads((total / ".nightward" / "run_meta.json").read_text("utf-8"))
     assert meta["captured_by"] == "nightward run" and meta["captured_at"]
 
+
+# ---- R5-POL-02: a new judge ruling is part of what to commit -------------------
+
+REPLY = ('import os\n'
+         'def test_r(behavior):\n'
+         '    behavior("reply", os.environ.get("R", "Your refund is approved."), group="g",\n'
+         '             semantic=True)\n')
+
+
+@pytest.fixture
+def replies(tmp_path):
+    write(tmp_path / "pyproject.toml", '[tool.nightward]\njudge = "persona:editor"\n')
+    write(tmp_path / "test_r.py", REPLY)
+    cli("init", cwd=tmp_path)
+    cli("run", ".", cwd=tmp_path)
+    cli("review", cwd=tmp_path)
+    assert cli("approve", "--all", cwd=tmp_path).returncode == 0
+    return tmp_path
+
+
+def test_run_names_new_ruling_files_to_commit(replies):
+    r = cli("run", ".", cwd=replies, env={"R": "your refund is approved"})
+    (ruling,) = (replies / ".nightward" / "judge").glob("*.json")
+    out = r.stdout + r.stderr
+    assert ruling.name in out and "commit .nightward/judge/" in out, out
+    # nothing new on the next run: no note
+    r = cli("run", ".", cwd=replies, env={"R": "your refund is approved"})
+    assert "commit .nightward/judge/" not in r.stdout + r.stderr
+
+
+def test_mcp_warns_about_new_ruling_files(replies, monkeypatch):
+    monkeypatch.chdir(replies)
+    monkeypatch.setenv("R", "your refund is approved")
+    from nightward import mcp_server
+    w = mcp_server.run_tool(".")["warnings"]
+    (ruling,) = (replies / ".nightward" / "judge").glob("*.json")
+    assert w["judge_added"] == [ruling.name]
+    assert mcp_server.run_tool(".")["warnings"]["judge_added"] == []
+

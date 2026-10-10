@@ -680,6 +680,14 @@ def run(ctx: typer.Context,
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
+    added = result.get("judge_added") or []
+    if added:
+        # API rulings replay from the committed ledger (D22): an uncommitted
+        # one makes CI and teammates gate differently (R5-POL-02).
+        ledger = (Path(dir) / "judge").as_posix()
+        console.print(f"note: this run added {len(added)} judge ruling(s) to {escape(ledger)}/ "
+                      f"({escape(_names_text(added, 3))}) - commit {escape(ledger)}/ with the "
+                      f"baseline so CI and teammates gate on the same rulings", soft_wrap=True)
     _legacy_rejection_note(result.get("legacy_rejections") or [])
     # run lists names, not diffs, so it marks nothing reviewed (D26).
     if result["report"].get("blast_radius"):
