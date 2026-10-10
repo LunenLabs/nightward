@@ -38,7 +38,7 @@ pytest tests/test_view.py::test_build_site_intact
 pytest -k timestamp
 
 # dogfooding
-nightward run example            # README quickstart fixture (names only)
+nightward run example            # quickstart-style fixture (CI dogfood; names only)
 nightward review                 # shows the diffs - the only CLI step that marks them reviewed (D26)
 nightward approve --all          # NEW/CHANGED only; REMOVED needs --remove NAME... / --remove-group G
 nightward approve --group G      # --all limited to group G (any size; the dashboard's group chip)

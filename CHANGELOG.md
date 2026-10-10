@@ -159,7 +159,7 @@ Behavior changes a 0.2 user will hit:
 - `pytest` reruns (for example, `pytest-rerunfailures`) replace that test's
   earlier captures instead of failing as duplicates.
 - Default scrubbers stay on, but they are counted and documented
-  (README, "What nightward normalizes").
+  ([docs/normalization.md](docs/normalization.md)).
 
 ### Fixed
 

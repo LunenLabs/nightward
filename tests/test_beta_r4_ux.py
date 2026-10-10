@@ -95,7 +95,8 @@ def cli(*args, cwd):
 
 def test_quickstart_commits_the_judge_ledger_and_rejections():
     text = README.read_text(encoding="utf-8")
-    quickstart = text.split("```bash", 1)[1].split("```", 1)[0]
+    section = text.split("## Quickstart", 1)[1].split("\n## ", 1)[0]
+    quickstart = section.split("```bash", 1)[1].split("```", 1)[0]
     adds = [ln for ln in quickstart.splitlines() if ln.startswith("git add")]
     assert adds, quickstart
     line = adds[0]
