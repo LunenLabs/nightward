@@ -22,9 +22,9 @@ with `pip show nightward`. Do these steps once, in order:
    `pip install -U "git+https://github.com/LunenLabs/nightward"` before the PyPI
    release).
 2. **Run `nightward init`** in the project root and commit `.gitignore`. On an
-   existing store it only migrates the ignore rules. It removes the
-   `.nightward/rejected/` rule (rejections are committed now) and adds
-   `nightward-site/`, `.nightward/.lock`, `.nightward/.lock.takeover` and
+   existing store it keeps the store as it is and migrates the ignore rules: it
+   removes the `.nightward/rejected/` rule (rejections are committed now) and
+   adds `nightward-site/`, `.nightward/.lock`, `.nightward/.lock.takeover` and
    `.nightward/reviewed.json`.
 3. **Commit `.nightward/rejected/` and `.nightward/judge/`** with `baseline/`.
    They are team decisions, so CI and every clone have to see them. Rejection
@@ -56,8 +56,6 @@ with `pip show nightward`. Do these steps once, in order:
    - Model rulings in 0.2's `judge_verdicts.json` don't record the wording they
      ruled on, so they are not replayed. Each pair is ruled again (this needs the
      API key once), or compared exactly when no judge is available.
-   - Turning `semantic=True` on or off for an approved behavior is now a CHANGED
-     that needs approval.
    - `approve --all` writes the capturing test (`source`) into baseline files,
      which shows up once in `git diff`. Fingerprints don't change.
 8. **Update scripts and CI** for the behavior changes below. The loop is now
@@ -79,6 +77,10 @@ Behavior changes a 0.2 user will hit:
 - **`status --json` / MCP `boundary`** can now be `partial`, `incomplete` and
   `stale` as well as `intact`, `breached` and `unknown`. Treat anything but
   `intact` as not done. A check for `== "breached"` misses the new values.
+- **`semantic` is part of the approved behavior.** Turning `semantic=True` on
+  or off for an approved behavior is a CHANGED that needs approval, and the judge
+  runs only when both the baseline and the capture are semantic (0.2 judged
+  whenever the capture was).
 - **Approve only what you reviewed.** `run` lists names only and marks nothing
   reviewed. `review` (for what it printed) and `view` (the dashboard build) do.
   `approve` promotes a change only if its current capture is the one a human was
