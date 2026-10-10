@@ -74,8 +74,9 @@ nightward approve promote pending behavior(s) into the baseline
                   It promotes only changes a human was shown, exactly as shown,
                   with its diff by `review` or `view` (`run` lists names only, so it
                   counts as no review): a scoped `review --group G`
-                  covers only G, and a change captured again since (e.g. by an
-                  agent's nightward_run) or a stale report (a `git pull` moved
+                  covers only G, and a change captured again since (your own
+                  re-run or an agent's nightward_run - the refusal names the run
+                  that took the capture) or a stale report (a `git pull` moved
                   the baseline) is refused until you run/review again
 nightward reject  confirm a change you reviewed as a real regression. It takes only
                   a change in the last report (or a judged-SAME ruling, which the

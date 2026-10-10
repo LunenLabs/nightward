@@ -6,6 +6,7 @@ it. Behaviors are flushed to .nightward/pending only when --nightward-record is 
 """
 from __future__ import annotations
 
+import datetime
 import fnmatch
 import os
 from pathlib import Path
@@ -343,6 +344,11 @@ def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
     # only when it still matches (R2-DATA-04).
     meta["pending_digest"] = digest({b.name: b for b in rec.behaviors})
     meta |= _scope(session, meta, rec)
+    # Which surface took this capture, and when: approve names it when the
+    # capture moved since a review (`nightward run` overwrites captured_by).
+    meta["captured_by"] = "pytest --nightward-record"
+    meta["captured_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec="seconds")
     last = store.load_run_meta()
     # Which behaviors the default scrubbers touched; "changed" lets `run` show
     # its note when that set moves instead of on every run.

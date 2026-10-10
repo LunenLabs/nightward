@@ -316,12 +316,13 @@ def _execute_run(path: str, dir: str, *, capture_output: bool, judge_spec: str |
     # One writer per store (D11): the pytest child flushes under this lock (it
     # recognizes the run id), and the recompute below stays inside it too.
     with store_lock(store.root, command, token=run_id):
-        return _run_locked(store, path, dir, run_id, spec, judge, extra,
+        return _run_locked(store, path, dir, run_id, spec, judge, extra, command=command,
                            capture_output=capture_output, timeout=timeout)
 
 
 def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None, judge,
-                extra: list[str], *, capture_output: bool, timeout: float | None) -> dict:
+                extra: list[str], *, command: str, capture_output: bool,
+                timeout: float | None) -> dict:
     noted = store.load_run_meta().get("legacy_rejections")
     try:
         # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
@@ -353,6 +354,7 @@ def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None
         meta.pop("judge", None)
     legacy = store.legacy_rejections()
     meta["legacy_rejections"] = legacy
+    meta["captured_by"] = command     # e.g. "nightward_run (MCP)" (R5-POL-01)
     store.write_run_meta(meta)
     return {
         "report": report,

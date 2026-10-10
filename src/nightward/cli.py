@@ -266,8 +266,9 @@ def _check_reviewed(store: Store, names: list[str], baseline, pending, verb: str
         return
     seen = store.load_reviewed().get("seen")
     if seen is None:
-        raise NightwardError(f"no human has reviewed this capture yet - run `nightward "
-                             f"review` (or `nightward view`), then {verb}")
+        raise NightwardError(f"this capture is not reviewed yet - only `nightward review` (or "
+                             f"`nightward view`) marks changes reviewed; `run` lists names "
+                             f"only. Run `nightward review`, then {verb}")
     changed = [n for n in names
                if n in seen and seen[n] != change_token(baseline.get(n), pending.get(n))]
     unseen = [n for n in names if n not in seen]
@@ -275,10 +276,15 @@ def _check_reviewed(store: Store, names: list[str], baseline, pending, verb: str
         return
     parts = []
     if changed:
-        parts.append(f"{_shown(changed)} changed since you last reviewed it (another run - "
-                     f"an agent's nightward_run, CI, a teammate - captured again)")
+        # Name the run the store knows took the current capture; never guess who.
+        meta = store.load_run_meta()
+        by, at = meta.get("captured_by"), meta.get("captured_at")
+        how = (f"the capture now in the store was taken by `{by}` at {at}" if by and at
+               else "a later run captured again")
+        parts.append(f"{_shown(changed)} changed since your review ({how})")
     if unseen:
-        parts.append(f"{_shown(unseen)} was not shown in your last review")
+        parts.append(f"{_shown(unseen)}: not reviewed yet (your last review did not show it; "
+                     f"only `review`/`view` mark changes reviewed)")
     todo = changed + unseen
     cmd = (shellquote.command("review", todo) if len(todo) <= 5 else None) or "nightward review"
     raise NightwardError("; ".join(parts) + f". Run `{cmd}`, then {verb} what it shows.")
