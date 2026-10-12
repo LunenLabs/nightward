@@ -86,8 +86,8 @@ so CI would stop gating with what the PR reviewers see in `pyproject.toml`.
 No key available (forks, dry runs)? `judge = "persona:editor"` is a deterministic,
 key-free stand-in: it collapses only letter case, whitespace, and sentence
 punctuation, and keeps everything else breached, including any change to a number,
-sign, currency or unit symbol, operator, emoji, or value type (README "Semantic
-judge"). Never use `persona:lenient` for real gating. Judge failures always fall back to the exact
+sign, currency or unit symbol, operator, emoji, or value type ([Semantic
+judge](../semantic-judge.md)). Never use `persona:lenient` for real gating. Judge failures always fall back to the exact
 comparison — the gate fails closed.
 
 ## Rules worth keeping

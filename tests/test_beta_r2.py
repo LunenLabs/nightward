@@ -236,10 +236,10 @@ def test_moved_capture_is_not_proven_removed_by_its_old_test(tmp_path):
     assert cli("run", ".", "--dir", str(tw), cwd=tmp_path).returncode == 0   # intact
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"CI_NO_K8S": "1"})
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "render.dev.approved.json").exists()
-    assert "1 skipped" in r.stdout     # D18: the run was not clean
+    assert "1 skipped" in r.stdout     # why it reads REMOVED (D29: never proof)
 
 
 def test_approve_all_backfills_sources_of_unchanged_behaviors(tmp_path):
@@ -281,25 +281,25 @@ def legacy_store(tmp_path):
 
 
 @pytest.mark.parametrize("path", ["test_a.py", "test_b.py::test_y"])
-def test_legacy_partial_path_proves_no_removal(legacy_store, path):
+def test_legacy_partial_path_keeps_removals(legacy_store, path):
     tmp_path, tw = legacy_store
     cli("run", path, "--dir", str(tw), cwd=tmp_path)
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert len(list((tw / "baseline").glob("*.json"))) == 3
-    assert "whole-suite" in r.stdout
+    assert "the last run left tests out" in r.stdout
 
 
 def test_legacy_removal_needs_an_explicit_remove_even_after_a_clean_run(legacy_store):
-    # D24 (supersedes D13/D18 for legacy baselines): no recorded test, no bulk proof.
+    # D29: no bulk removal at all; the explicit one works.
     tmp_path, tw = legacy_store
     write(tmp_path / "test_b.py", 'def test_y(behavior):\n    behavior("y", 2, group="g")\n'
                                   'def test_z(behavior):\n    pass\n')
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
     cli("review", "--dir", str(tw), cwd=tmp_path)
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
-    assert r.returncode == 0, r.stderr
+    assert r.returncode == 2 and "z" in r.stderr
     assert (tw / "baseline" / "z.approved.json").exists()
     r = cli("approve", "--remove", "z", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
@@ -435,7 +435,7 @@ def test_narrowed_plugin_capture_proves_no_removal(approved_x):
     record(tmp_path, tw, "-m", "not slow")
     rep = cli("report", "--dir", str(tw), cwd=tmp_path)
     assert "not checked" in rep.stdout   # D21: deselected, so not even REMOVED
-    cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert (tw / "baseline" / "slow.approved.json").exists()
 
 

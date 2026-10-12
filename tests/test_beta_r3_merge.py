@@ -42,7 +42,7 @@ def test_approve_group_needs_that_group_reviewed(tmp_path):
     store = two_group_store(tmp_path / ".tw")
     assert cli("review", "--group", "g2", "--dir", str(store.root), cwd=tmp_path).returncode == 0
     r = cli("approve", "--group", "g1", "--dir", str(store.root), cwd=tmp_path)
-    assert r.returncode == 2 and "was not shown in your last review" in r.stderr, r.stderr
+    assert r.returncode == 2 and "not reviewed yet" in r.stderr, r.stderr
     assert store.load_baseline()["g1.a"].payload == 1
     r = cli("approve", "--group", "g2", "--dir", str(store.root), cwd=tmp_path)
     assert r.returncode == 0, r.stderr

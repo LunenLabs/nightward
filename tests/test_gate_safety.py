@@ -53,32 +53,36 @@ def test_approve_all_keeps_removed_by_default(approved_pair):
     r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "b.approved.json").exists()
-    assert "--include-removed" in r.stdout
+    assert "approve --remove" in r.stdout and "include-removed" not in r.stdout
     assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 1
 
 
-def test_include_removed_approves_removals(approved_pair):
+def test_include_removed_refuses_and_remove_drops(approved_pair):
     tmp_path, tw = approved_pair
-    # test_b still runs to completion but no longer captures "b": a proven removal.
+    # test_b still runs to completion but no longer captures "b" (D29: still
+    # only an explicit removal drops it).
     write(tmp_path / "test_s.py", 'def test_a(behavior):\n    behavior("a", {"v": 1})\n'
                                   'def test_b(behavior):\n    pass\n')
-    cli("run", ".", "--dir", str(tw), cwd=tmp_path)   # D18: a clean whole-suite run
+    cli("run", ".", "--dir", str(tw), cwd=tmp_path)
 
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 2 and "b" in r.stderr and "Traceback" not in r.stderr
+    assert (tw / "baseline" / "b.approved.json").exists()
+    r = cli("approve", "--remove", "b", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (tw / "baseline" / "b.approved.json").exists()
     assert cli("gate", "--dir", str(tw), cwd=tmp_path).returncode == 0
 
 
-def test_include_removed_keeps_removal_of_deleted_test(approved_pair):
+def test_bulk_approval_keeps_removal_of_deleted_test(approved_pair):
     # R1-OPS-02 (D5): a deleted test proves nothing; the removal needs a name.
     tmp_path, tw = approved_pair
     write(tmp_path / "test_s.py", 'def test_a(behavior):\n    behavior("a", {"v": 1})\n')
     cli("run", "test_s.py", "--dir", str(tw), cwd=tmp_path)
 
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "b.approved.json").exists()
     assert "approve --remove" in r.stdout
@@ -86,7 +90,7 @@ def test_include_removed_keeps_removal_of_deleted_test(approved_pair):
     assert not (tw / "baseline" / "b.approved.json").exists()
 
 
-def test_include_removed_holds_removal_after_skip(approved_pair):
+def test_bulk_approval_keeps_removal_after_skip(approved_pair):
     tmp_path, tw = approved_pair
     write(tmp_path / "test_s.py",
           'import pytest\n'
@@ -96,9 +100,9 @@ def test_include_removed_holds_removal_after_skip(approved_pair):
     cli("run", ".", "--dir", str(tw), cwd=tmp_path)
 
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "1 skipped" in r.stdout and "clean whole-suite run" in r.stdout
+    assert "1 skipped" in r.stdout and "did not run and pass" in r.stdout
     assert (tw / "baseline" / "b.approved.json").exists()
 
 

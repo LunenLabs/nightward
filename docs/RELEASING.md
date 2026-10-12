@@ -1,68 +1,92 @@
-# Releasing nightward (going public + PyPI)
+# Releasing nightward
 
-Publishing is irreversible twice over: a public repo gets forked/indexed
-immediately, and PyPI artifacts are mirrored the moment they upload. Work the
-checklist top to bottom; nothing here is automated on purpose.
+Publishing to PyPI can't be undone: a version number can never be uploaded twice,
+and mirrors copy the files the moment they land. Work through this checklist from
+top to bottom. Nothing here is automated, on purpose. The release workflow only
+runs when a human starts it, and it publishes only after a second human approves
+the `pypi` environment.
 
-## 0. Hard gate (do not pass without it)
+The steps below use 0.3.0 as the example. For a later release, substitute the
+version.
 
-- [ ] Legal review complete (employment/IP constraints cleared by the owner).
+## 0. Hard gate (do not continue without it)
+
+- [ ] Legal review is complete: the owner has cleared the employment and IP
+      constraints for publishing nightward under its own name.
       Nothing below happens before this box is checked.
 
-## 1. History decision (file deletion does NOT scrub git history)
+> **History is public.** github.com/LunenLabs/nightward is already public, with a
+> squashed history. Everything on `main` and on any pushed branch is published the
+> moment it's pushed. Push only branches based on the public history (check
+> `git merge-base` against `origin/main`), and never push a branch that was built
+> on the old private history.
 
-Sensitive content that was ever committed remains in history even after the
-file is deleted. Pick one:
+## 1. Content check (on the release branch, before merging)
 
-- [ ] **Option A (recommended, prepared): fresh public repository.**
-      A clean single-commit snapshot of the release tree is maintained on the
-      `public-release` branch of this repo (no history before it). To use it:
-      1. On github.com create a new **private** repo (e.g. `<owner>/nightward-oss`).
-      2. `git push git@github.com:<owner>/nightward-oss.git public-release:main`
-      3. Audit the new repo (`git log` must show the single release commit).
-      4. At launch: rename this repo to `nightward-archive`, rename the new
-         repo to `nightward`, then flip it public. GitHub redirects renames.
-      Keep this repo as the private archive. Pros: zero leakage risk.
-      Cons: public history starts fresh (by design).
-- [ ] **Option B: rewrite history in place** (`git filter-repo`) to drop
-      removed files from all commits, then force-push and make public.
-      Pros: keeps the repo/stars/issues. Cons: rewrites are error-prone —
-      audit the result before flipping visibility.
-- [ ] Either way, audit before flipping: `git log --all --oneline --stat` and
-      search history for removed paths.
+- [ ] `live-experiment/` and other personal-context files are not in the tree.
+- [ ] No real `.nightward/` store is in the tree. The committed stores under
+      `examples/` contain synthetic data only. The only dashboard that is ever
+      published is built by `python scripts/build_demo.py`.
+- [ ] `nightward.__version__` is the release version (`pyproject.toml` reads it).
+- [ ] `CHANGELOG.md` has an entry for the version, still marked "Unreleased".
+- [ ] The README quickstart works from the built wheel in a fresh venv:
+      `python -m build`, then install `dist/*.whl` into a new venv and run every
+      quickstart command in an empty directory outside the repo.
+- [ ] `twine check dist/*` passes, and the wheel contains only `nightward/`
+      (including `view/assets/index.html`, `app.js` and `style.css`) and
+      `nightward-<version>.dist-info/`.
 
-## 2. Content audit (already done on the branch, re-verify at release time)
+## 2. Merge to main
 
-- [ ] CLAUDE.md is the public English version (no legal/visibility notes).
-- [ ] No personal-context docs (the private experiment specs were removed;
-      experiment summaries contain aggregates only).
-- [ ] `live-experiment/` does not exist in the tree being published.
-- [ ] `python scripts/build_demo.py` output is the only dashboard ever
-      published; no real `.nightward/` store leaves the repo.
-- [ ] README quickstart works on a fresh clone (`pip install -e . && nightward run example`).
+- [ ] Merge PR #5 (`launch/beta-rounds` -> `main`) after human review.
+- [ ] CI is green **on `main`** (the `ci` workflow: the test matrix, the dogfood
+      job and the dashboard preview).
 
-## 3. PyPI one-time setup
+## 3. PyPI one-time setup (first release only)
 
-- [ ] pypi.org → account with 2FA.
-- [ ] Add **Trusted Publisher** for the project: owner `LunenLabs`, repo
-      `nightward`, workflow `release.yml`, environment `pypi`.
-      (First release of a new project: use a "pending publisher" so no token
-      is ever created.)
-- [ ] GitHub → Settings → Environments → `pypi` → add yourself as required
-      reviewer (second human gate on the publish job).
+- [ ] Use a pypi.org account with 2FA.
+- [ ] The project doesn't exist on PyPI yet, so add a **pending publisher**
+      (pypi.org -> Your account -> Publishing -> Add a new pending publisher):
+      project `nightward`, owner `LunenLabs`, repository `nightward`, workflow
+      `release.yml`, environment `pypi`. This creates no API token; the first
+      successful publish turns it into the project's trusted publisher.
+- [ ] On GitHub: Settings -> Environments -> `pypi`. Add yourself as a
+      **required reviewer**. This is the second human gate on the publish job.
 
-## 4. Ship
+## 4. Tag and publish
 
-- [ ] Bump `version` in pyproject.toml; update README if needed.
-- [ ] Tag: `git tag v0.X.Y && git push --tags`.
-- [ ] Flip the repo public (same day as first release, so README links work).
-- [ ] Actions → release → Run workflow. Approve the `pypi` environment.
-- [ ] Verify: `pip install nightward` in a clean venv → run the quickstart.
+- [ ] On `main`, set the CHANGELOG date: `## [0.3.0] - Unreleased` becomes
+      `## [0.3.0] - YYYY-MM-DD`. Merge that change the usual way (through a PR).
+- [ ] Tag the merged commit and push the tag:
+      `git tag -a v0.3.0 -m "nightward 0.3.0"`, then `git push origin v0.3.0`.
+- [ ] Actions -> `release` -> Run workflow, and choose **the tag `v0.3.0`**
+      under "Use workflow from". The build job checks that the wheel reports
+      the tag's version, so a run started from a branch fails before anything
+      is published.
+- [ ] The workflow runs `gate` (ruff and the full test suite), then `build` (the
+      sdist and wheel, plus a smoke install), then waits on the `pypi`
+      environment. Check the uploaded `dist` artifact, then approve the
+      environment.
 
-## 5. Within 24h of launch
+## 5. Verify
 
-- [ ] Enable the Pages demo workflow (clean-room data only) if desired.
-- [ ] Listings: pytest plugin list, MCP server directories, awesome-* lists.
-- [ ] Launch post (Show HN: "a definition of 'done' for AI coding agents").
-- [ ] From now on: PRs get human review before merge — the tool's own
-      discipline applies to the tool.
+- [ ] In a clean venv: `pip install nightward`, then `nightward --version`
+      prints `nightward 0.3.0`.
+- [ ] Run the README quickstart against that install.
+- [ ] `pip install "nightward[mcp]"`, then `nightward mcp --help` works.
+- [ ] The project page on pypi.org renders the README, and its images and links
+      work.
+- [ ] Optional: create a GitHub release from the tag, with the CHANGELOG entry
+      as its notes.
+
+## 6. Announce (after verification)
+
+- [ ] Remove the "not on PyPI yet" note and the git pre-release install lines
+      from the README's Install section, and the git URL in step 1 of the
+      CHANGELOG's upgrade guide.
+- [ ] Optional: enable the Pages demo workflow (`pages.yml`). It publishes only
+      the clean-room synthetic demo.
+- [ ] Listings: the pytest plugin list, MCP server directories, awesome-* lists.
+- [ ] Launch post.
+- [ ] From now on, PRs get human review before merge. The tool's own discipline
+      applies to the tool.

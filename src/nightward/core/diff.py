@@ -14,7 +14,7 @@ CHANGED = "CHANGED"
 REMOVED = "REMOVED"
 UNCHANGED = "UNCHANGED"
 # Approved, but its recorded test was explicitly deselected (-k/-m) this run:
-# not checked, so neither unapproved nor removal proof (D21).
+# not checked, so not unapproved (D21).
 NOT_RUN = "NOT_RUN"
 
 SAME = "SAME"  # judge verdict that collapses CHANGED into UNCHANGED (see judge.py)

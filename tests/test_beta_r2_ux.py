@@ -206,15 +206,19 @@ def test_approve_with_an_unknown_name_approves_nothing(tmp_path):
     assert store.load_baseline()["gql.a"].payload == 1
 
 
-def test_several_names_keep_unproven_removals_and_rejections(tmp_path):
+def test_several_names_refuse_removals_and_keep_rejections(tmp_path):
     store = group_store(tmp_path / ".tw")
     assert cli("reject", "gql.c", "--dir", str(store.root), cwd=tmp_path).returncode == 0
+    # D29: several names never drop a behavior - refuse, approve nothing
     r = cli("approve", "gql.a", "gql.c", "gql.old", "--dir", str(store.root), cwd=tmp_path)
+    assert r.returncode == 2 and "gql.old" in r.stderr and "approve --remove" in r.stderr
+    assert store.load_baseline()["gql.a"].payload == 1
+    r = cli("approve", "gql.a", "gql.c", "--dir", str(store.root), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     base = store.load_baseline()
     assert base["gql.a"].payload == 2
     assert base["gql.c"].payload == 1 and "kept (rejected)" in r.stdout
-    assert "gql.old" in base and "can't prove gone" in r.stdout
+    assert "gql.old" in base
 
 
 def test_one_name_still_overrides(tmp_path):

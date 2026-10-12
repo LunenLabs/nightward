@@ -266,19 +266,20 @@ def test_rejection_only_holds_the_rejected_payload(rejected_floor, tmp_path):
     assert floor["payload"] == 2
 
 
-def test_rejected_removal_is_kept_by_include_removed(rejected_floor):
+def test_rejected_removal_is_kept_by_bulk_approval(rejected_floor):
     tmp_path, tw = rejected_floor
-    # D18: only a clean whole-suite run (the default path) may drop a removal
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"DROP": "1"})
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     assert cli("reject", "probe", "--dir", str(tw), cwd=tmp_path).returncode == 0
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 2 and "probe" in r.stderr     # D29: never a bulk removal
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
-    assert "kept (rejected)" in r.stdout
+    assert "kept 1 REMOVED" in r.stdout
     assert (tw / "baseline" / "probe.approved.json").exists()
 
 
-# ---- R1-OPS-02: only a removal the run can prove is approved in bulk -----------
+# ---- R1-OPS-02, D29: no removal is approved in bulk; why it reads REMOVED -----
 
 SUITE = {
     "conftest.py": ('import os, pytest\n'
@@ -324,36 +325,39 @@ def suite(tmp_path):
     (".", {"FLAKY": "1"}, "upstream"),                             # xfail
     ("test_a.py", {}, "other"),                                     # partial path
 ])
-def test_include_removed_holds_unproven_removals(suite, path, env, lost):
+def test_bulk_approval_keeps_removals_and_says_why(suite, path, env, lost):
     tmp_path, tw = suite
     ran = cli("run", path, "--dir", str(tw), cwd=tmp_path, env=env)
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / f"{lost}.approved.json").exists()
     if "not slow" in str(env):   # deselected - D21: "not checked", never even REMOVED
         assert "not checked" in ran.stdout and lost in ran.stdout
     else:
-        assert lost in r.stdout and "can't prove gone" in r.stdout
+        assert lost in r.stdout and "did not run and pass" in r.stdout
 
 
-def test_include_removed_approves_proven_removal(suite):
-    # test_keep ran to completion and no longer captures always2: a real removal.
+def test_a_real_removal_is_dropped_only_by_an_explicit_remove(suite):
+    # test_keep ran to completion and no longer captures always2: a real
+    # removal - but no run can tell it from a moved capture (D29).
     tmp_path, tw = suite
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"DROP_ALWAYS2": "1"})
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
     r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    assert r.returncode == 2 and "always2" in r.stderr and "approve --remove" in r.stderr
+    assert (tw / "baseline" / "always2.approved.json").exists()
+    r = cli("approve", "--remove", "always2", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert not (tw / "baseline" / "always2.approved.json").exists()
 
 
-def test_narrowed_run_proves_no_removal(suite):
-    # R2-OPS-02 (D13): -m/-k narrowing never proves a removal, even one whose
-    # own test completed.
+def test_kept_removal_names_a_narrowed_run(suite):
     tmp_path, tw = suite
     cli("run", ".", "--dir", str(tw), cwd=tmp_path,
         env={"DROP_ALWAYS2": "1", "PYTEST_ADDOPTS": '-m "not slow"'})
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    cli("review", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tw / "baseline" / "always2.approved.json").exists()
     assert "narrowed" in r.stdout
@@ -380,7 +384,7 @@ def test_source_is_recorded_but_not_compared(suite):
     assert change.kind == "UNCHANGED"
 
 
-def test_legacy_baseline_without_source_needs_a_clean_run(suite):
+def test_legacy_baseline_without_source_is_kept(suite):
     tmp_path, tw = suite
     for f in (tw / "baseline").glob("*.json"):       # baselines from before sources
         data = json.loads(f.read_text("utf-8"))
@@ -388,7 +392,7 @@ def test_legacy_baseline_without_source_needs_a_clean_run(suite):
         f.write_text(canonical_json(data), encoding="utf-8")
     cli("run", ".", "--dir", str(tw), cwd=tmp_path, env={"PYTEST_ADDOPTS": '-m "not slow"'})
     cli("review", "--dir", str(tw), cwd=tmp_path)   # D26: only review marks
-    r = cli("approve", "--all", "--include-removed", "--dir", str(tw), cwd=tmp_path)
+    r = cli("approve", "--all", "--dir", str(tw), cwd=tmp_path)
     assert (tw / "baseline" / "slow_report.approved.json").exists()
     assert "deselected" in r.stdout
 

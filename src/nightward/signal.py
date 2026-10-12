@@ -17,7 +17,7 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
     if report is None:
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
                 "not_run": [], "narrowed": False, "stale": False, "incomplete": None,
-                "generated_at": None, "judge": None}
+                "generated_at": None, "judge": None, "scrub_rules": []}
 
     # Every field of a change except its (possibly large) diff and its review
     # token, so judged rulings (judged / judge_model / judge_reason) and
@@ -52,4 +52,7 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
         "incomplete": incomplete,
         "generated_at": report.get("generated_at"),
         "judge": report.get("judge"),
+        # custom scrub rules active in the last run: {rule (where it was
+        # registered), values, behaviors, placeholder} (R5-POL-03)
+        "scrub_rules": list(report.get("scrub_rules") or []),
     }

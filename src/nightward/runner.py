@@ -125,6 +125,12 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None
     report["narrowed"] = bool(meta.get("narrowed"))
+    # Custom scrub rules shaped what was compared (D28): every reader of the
+    # report (review, status, MCP, dashboard) shows them, not only the run
+    # that introduced them (R5-POL-03).
+    report["scrub_rules"] = [
+        {k: r.get(k) for k in ("rule", "values", "behaviors", "placeholder")}
+        for r in meta.get("scrub_rules") or [] if isinstance(r, dict)]
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)
@@ -285,7 +291,7 @@ def execute_run(path: str = ".", dir: str = ".nightward", *,
     report.json. command names
     the holder in the store lock; a concurrent writer fails with NightwardError.
     pytest_args are passed to pytest as-is (-m, -p, --timeout ...); a narrowed
-    run is recorded as such and never proves a removal (D13).
+    run is recorded as such (its deselected behaviors are "not checked", D21).
     Returns {report, skipped, failed, errors, deselected, xfailed, scrubbed,
     scrub_unmatched, pytest_returncode, output_tail};
     output_tail is pytest's last lines when capture_output=True, so a caller can
@@ -316,12 +322,13 @@ def _execute_run(path: str, dir: str, *, capture_output: bool, judge_spec: str |
     # One writer per store (D11): the pytest child flushes under this lock (it
     # recognizes the run id), and the recompute below stays inside it too.
     with store_lock(store.root, command, token=run_id):
-        return _run_locked(store, path, dir, run_id, spec, judge, extra,
+        return _run_locked(store, path, dir, run_id, spec, judge, extra, command=command,
                            capture_output=capture_output, timeout=timeout)
 
 
 def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None, judge,
-                extra: list[str], *, capture_output: bool, timeout: float | None) -> dict:
+                extra: list[str], *, command: str, capture_output: bool,
+                timeout: float | None) -> dict:
     noted = store.load_run_meta().get("legacy_rejections")
     try:
         # stdin=DEVNULL: under `nightward mcp` our stdin is the protocol pipe; a
@@ -353,6 +360,7 @@ def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None
         meta.pop("judge", None)
     legacy = store.legacy_rejections()
     meta["legacy_rejections"] = legacy
+    meta["captured_by"] = command     # e.g. "nightward_run (MCP)" (R5-POL-01)
     store.write_run_meta(meta)
     return {
         "report": report,
@@ -369,6 +377,8 @@ def _run_locked(store: Store, path: str, dir: str, run_id: str, spec: str | None
         "scrub_unmatched": meta.get("scrub_unmatched") or [],
         # per custom rule: {rule, values, behaviors, was, changed, placeholder} (D28)
         "scrub_rules": meta.get("scrub_rules") or [],
+        # ruling files this run added to <store>/judge/: commit them (R5-POL-02)
+        "judge_added": sorted(judge.added) if judge is not None else [],
         "pytest_returncode": result.returncode,
         "output_tail": _output_tail(result),
     }

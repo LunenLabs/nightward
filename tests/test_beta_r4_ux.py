@@ -56,8 +56,20 @@ def test_group_chip_is_plain_when_everything_is_shown():
 def test_group_chip_still_points_removals_at_their_cards():
     head = chip([D, R], [D, R])
     assert "approve all 1 NEW/CHANGED" in head["label"]
-    assert "removals: approve each on its card" in head["label"]
+    assert "removals: drop each on its card" in head["label"]   # D29: never in bulk
     assert "hidden" not in head["label"]
+
+
+def test_a_removed_card_offers_the_explicit_remove_command():
+    # R4-OPS-01 (D29): removal is always an explicit act - the card says so.
+    quoted = {n: {"posix": n} for n in ("grp.old", "grp.d")}
+    got = node_eval(f"setQuoting({json.dumps(quoted)}, 'posix'); "
+                    f"[cardCommands({json.dumps(R)}), cardCommands({json.dumps(D)})]")
+    removed, changed = (dict(map(tuple, c)) for c in got)
+    assert removed == {"drop from the baseline (intended removal)":
+                       "nightward approve --remove grp.old",
+                       "reject (regression)": "nightward reject grp.old"}
+    assert changed["approve (intended change)"] == "nightward approve grp.d"
 
 
 def test_group_chip_counts_a_hidden_removal_only_as_hidden_not_as_approved():
@@ -83,7 +95,8 @@ def cli(*args, cwd):
 
 def test_quickstart_commits_the_judge_ledger_and_rejections():
     text = README.read_text(encoding="utf-8")
-    quickstart = text.split("```bash", 1)[1].split("```", 1)[0]
+    section = text.split("## Quickstart", 1)[1].split("\n## ", 1)[0]
+    quickstart = section.split("```bash", 1)[1].split("```", 1)[0]
     adds = [ln for ln in quickstart.splitlines() if ln.startswith("git add")]
     assert adds, quickstart
     line = adds[0]
