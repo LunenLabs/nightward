@@ -3,15 +3,13 @@ name: pages
 # Publishes ONLY the clean-room synthetic demo (scripts/build_demo.py).
 # It never reads a real .nightward/ store, so no captured user data can leak.
 #
-# NOTE: GitHub Pages serves a public URL only for public repos (or paid plans).
-# nightward is intentionally private pending a legal review, so this workflow is
-# wired up but gated behind manual dispatch — flip it on only after that review,
-# or point it at a dedicated public demo repo. See the design spec, §6.
+# Manual dispatch only: publishing the demo is a launch step (docs/RELEASING.md),
+# taken after the legal-review gate. It serves synthetic data only.
 
 on:
   workflow_dispatch:
   # push:
-  #   branches: [main]   # enable after the public/private decision is made
+  #   branches: [main]   # optional, after launch
 
 permissions:
   contents: read
