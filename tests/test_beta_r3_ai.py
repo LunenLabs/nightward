@@ -348,4 +348,4 @@ def test_cli_mcp_takes_the_store_option():
     # Under GITHUB_ACTIONS typer/rich force a colour terminal: compare the text
     # without its ANSI styling.
     import re
-    assert "--dir" in re.sub(r"\[[0-9;]*m", "", r.output)
+    assert "--dir" in re.sub(r"\x1b\[[0-9;]*m", "", r.output)
