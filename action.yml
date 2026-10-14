@@ -1,0 +1,125 @@
+name: nightward gate
+description: >-
+  Block unapproved behavior changes in CI. Captures what your code does with
+  pytest, compares it with the approved baseline, and fails the job when
+  anything moved that a human hasn't approved.
+author: LunenLabs
+branding:
+  icon: shield
+  color: purple
+
+# Set up Python and install your project's dependencies BEFORE this step: the
+# action runs your test suite. It never approves anything - approval is a human
+# command (`nightward review` + `nightward approve`) whose result is committed.
+
+inputs:
+  path:
+    description: Test path passed to pytest.
+    default: "."
+  dir:
+    description: The nightward store (the directory with the committed baseline/).
+    default: ".nightward"
+  pytest-args:
+    description: >-
+      Extra pytest arguments, ONE PER LINE (so values with spaces need no
+      quoting), e.g. a block with `-m` and `not gpu` on two lines. A run that
+      deselects tests is "partial" and does not pass unless allow-not-run is true.
+    default: ""
+  allow-not-run:
+    description: >-
+      Let a deliberately narrowed job pass when approved behaviors were not
+      checked because pytest-args deselected their tests. Leave false otherwise.
+    default: "false"
+  version:
+    description: >-
+      pip version specifier for nightward, e.g. "==0.3.2". Empty: the version of
+      this action's tag (uses: LunenLabs/nightward@v0.3.2 installs 0.3.2), or the
+      latest release when the ref is not a version tag.
+    default: ""
+  install:
+    description: Install nightward with pip. Set to false if your environment already has it.
+    default: "true"
+  summary:
+    description: Write the verdict and the diffs that moved to the job summary.
+    default: "true"
+
+outputs:
+  boundary:
+    description: intact, breached, incomplete, stale, partial or unknown.
+    value: ${{ steps.verdict.outputs.boundary }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install nightward
+      if: inputs.install == 'true'
+      shell: bash
+      env:
+        NW_VERSION: ${{ inputs.version }}
+        NW_REF: ${{ github.action_ref }}
+      run: |
+        spec="$NW_VERSION"
+        if [ -z "$spec" ] && [[ "$NW_REF" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          spec="==${BASH_REMATCH[1]}"
+        fi
+        python -m pip install --disable-pip-version-check "nightward${spec}"
+        nightward --version
+
+    - name: Capture behaviors (nightward run)
+      shell: bash
+      env:
+        NW_PATH: ${{ inputs.path }}
+        NW_DIR: ${{ inputs.dir }}
+        NW_ARGS: ${{ inputs.pytest-args }}
+        NO_COLOR: "1"
+      run: |
+        extra=()
+        while IFS= read -r line; do
+          line="${line%$'\r'}"
+          [ -n "$line" ] && extra+=("$line")
+        done <<< "$NW_ARGS"
+        if [ ${#extra[@]} -gt 0 ]; then
+          nightward run "$NW_PATH" --dir "$NW_DIR" -- "${extra[@]}" || true
+        else
+          nightward run "$NW_PATH" --dir "$NW_DIR" || true
+        fi
+        # The verdict comes from `gate` below; a failing capture test makes the
+        # run incomplete, which gate also refuses.
+
+    - name: Verdict
+      id: verdict
+      shell: bash
+      env:
+        NW_DIR: ${{ inputs.dir }}
+        NW_SUMMARY: ${{ inputs.summary }}
+        NO_COLOR: "1"
+      run: |
+        boundary=$(nightward status --json --dir "$NW_DIR" | python -c "import json,sys; print(json.load(sys.stdin)['boundary'])")
+        echo "boundary=$boundary" >> "$GITHUB_OUTPUT"
+        if [ "$NW_SUMMARY" = "true" ]; then
+          {
+            echo "## nightward: \`$boundary\`"
+            echo
+            if [ "$boundary" != "intact" ]; then
+              echo "Approve intended changes locally (\`nightward review\`, then \`nightward approve\`) and push the baseline diff; fix the code otherwise."
+              echo
+              echo '```diff'
+              # rich still styles (bold) with NO_COLOR; the summary is Markdown
+              nightward review --dir "$NW_DIR" --max-lines 40 2>&1 | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' || true
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Gate
+      shell: bash
+      env:
+        NW_DIR: ${{ inputs.dir }}
+        NW_ALLOW: ${{ inputs.allow-not-run }}
+        NO_COLOR: "1"
+      run: |
+        if [ "$NW_ALLOW" = "true" ]; then
+          nightward gate --dir "$NW_DIR" --allow-not-run
+        else
+          nightward gate --dir "$NW_DIR"
+        fi

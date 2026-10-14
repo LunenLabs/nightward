@@ -1,0 +1,15 @@
+{
+  "name": "nightward",
+  "description": "The nightward regression gate for Claude Code.",
+  "owner": {
+    "name": "LunenLabs",
+    "url": "https://github.com/LunenLabs"
+  },
+  "plugins": [
+    {
+      "name": "nightward",
+      "source": "./plugins/nightward",
+      "description": "Run the nightward gate from Claude Code: an MCP server (run + status, never approve) and a skill that closes the edit-test loop on the gate's verdict."
+    }
+  ]
+}

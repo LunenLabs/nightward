@@ -68,6 +68,43 @@ jobs:
             echo "a --judge override leaked into a later run" && exit 1
           fi
 
+  # The published GitHub Action (action.yml), run from this checkout: it must
+  # pass the committed example and block a seeded regression, on both OSes.
+  action:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: the action passes the committed example
+        id: ok
+        uses: ./
+        with:
+          path: example
+          install: "false"
+      - shell: bash
+        run: test "${{ steps.ok.outputs.boundary }}" = intact
+      - name: seed a regression
+        shell: bash
+        run: sed -i 's/subtotal \* 0.1/subtotal * 0.2/' example/app.py
+      - name: the action blocks it
+        id: bad
+        uses: ./
+        continue-on-error: true
+        with:
+          path: example
+          install: "false"
+      - shell: bash
+        run: |
+          test "${{ steps.bad.outcome }}" = failure
+          test "${{ steps.bad.outputs.boundary }}" = breached
+
   # Non-blocking: build the dashboard from clean-room demo data and upload it as
   # a preview artifact. This must NOT gate the PR — view explains, gate blocks.
   preview:

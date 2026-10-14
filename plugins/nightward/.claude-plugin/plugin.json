@@ -1,0 +1,13 @@
+{
+  "name": "nightward",
+  "description": "A regression gate for AI-made changes: Claude can run it and read the verdict, only a human can approve.",
+  "version": "0.3.2",
+  "author": {
+    "name": "LunenLabs",
+    "url": "https://github.com/LunenLabs"
+  },
+  "homepage": "https://github.com/LunenLabs/nightward",
+  "repository": "https://github.com/LunenLabs/nightward",
+  "license": "MIT",
+  "keywords": ["testing", "regression", "gate", "pytest", "approval-testing", "agents"]
+}
