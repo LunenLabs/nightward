@@ -5,6 +5,25 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [0.3.1] - 2026-10-14
+
+A documentation and packaging patch. No change to how the gate decides.
+
+### Fixed
+
+- The PyPI project page still said nightward was "not on PyPI yet" and showed the
+  git pre-release install lines: PyPI keeps the README a release was built with.
+  0.3.1 ships the README with plain `pip install nightward`.
+- The clean-room demo site (`scripts/build_demo.py`, used for the Pages demo and the
+  README screenshots) showed the absolute temp path of the machine that built it,
+  including its user name. It now shows `.nightward`.
+
+### Changed
+
+- Refreshed the dashboard screenshot and the demo GIF for the 0.3 UI. The GIF adds
+  the core rule: the agent can run the gate over MCP, only a human can approve,
+  and only what `review` showed.
+
 ## [0.3.0] - 2026-10-13
 
 The first release meant for other people's repositories. 0.3.0 is the 0.2 core
@@ -227,4 +246,5 @@ Never published to PyPI; installed from git.
 - Document adapters (`from_file`, `from_text`, `from_pdf`, `from_docx`,
   `from_xlsx`).
 
+[0.3.1]: https://github.com/LunenLabs/nightward/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/LunenLabs/nightward/compare/900b8d5...v0.3.0
