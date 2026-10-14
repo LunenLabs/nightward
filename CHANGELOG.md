@@ -5,6 +5,28 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [0.3.2] - Unreleased
+
+Two ways to adopt the gate without wiring it by hand. No change to how the gate
+decides.
+
+### Added
+
+- **GitHub Action.** `uses: LunenLabs/nightward@v0.3.2` installs that version of
+  nightward, runs your tests, writes the verdict and the diffs that moved to the
+  job summary, and fails the job unless the boundary is intact. It never approves.
+  Inputs: `path`, `dir`, `pytest-args` (one per line), `allow-not-run`, `version`,
+  `install`, `summary`; output: `boundary`. CI runs it on Ubuntu and Windows
+  against the committed example and a seeded regression.
+- **Claude Code plugin.** `/plugin install nightward --marketplace LunenLabs/nightward`
+  adds the MCP server (run + status, never approve), a `gate-loop` skill that has
+  Claude run the gate after its edits and hand intended changes to a human, and
+  `/nightward:status`.
+
+### Changed
+
+- The README comparison table has a header row, and the CI recipe uses the action.
+
 ## [0.3.1] - 2026-10-14
 
 A documentation and packaging patch. No change to how the gate decides.
@@ -246,5 +268,6 @@ Never published to PyPI; installed from git.
 - Document adapters (`from_file`, `from_text`, `from_pdf`, `from_docx`,
   `from_xlsx`).
 
+[0.3.2]: https://github.com/LunenLabs/nightward/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/LunenLabs/nightward/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/LunenLabs/nightward/compare/900b8d5...v0.3.0

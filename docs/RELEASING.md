@@ -27,7 +27,10 @@ version.
 - [ ] No real `.nightward/` store is in the tree. The committed stores under
       `examples/` contain synthetic data only. The only dashboard that is ever
       published is built by `python scripts/build_demo.py`.
-- [ ] `nightward.__version__` is the release version (`pyproject.toml` reads it).
+- [ ] `nightward.__version__` is the release version (`pyproject.toml` reads it),
+      and so is `plugins/nightward/.claude-plugin/plugin.json` (a test checks it).
+- [ ] The README and the CI recipe pin the action to the release tag
+      (`uses: LunenLabs/nightward@vX.Y.Z`): that tag installs nightward X.Y.Z.
 - [ ] `CHANGELOG.md` has an entry for the version, still marked "Unreleased".
 - [ ] The README quickstart works from the built wheel in a fresh venv:
       `python -m build`, then install `dist/*.whl` into a new venv and run every
@@ -76,8 +79,14 @@ version.
 - [ ] `pip install "nightward[mcp]"`, then `nightward mcp --help` works.
 - [ ] The project page on pypi.org renders the README, and its images and links
       work.
-- [ ] Optional: create a GitHub release from the tag, with the CHANGELOG entry
-      as its notes.
+- [ ] Create a GitHub release from the tag with the CHANGELOG entry as its notes.
+      Join the entry's wrapped lines into paragraphs first: release notes keep
+      every line break. To list the action on GitHub Marketplace, tick "Publish
+      this Action to the GitHub Marketplace" on the release (the first time, the
+      owner accepts the Marketplace developer agreement).
+- [ ] In Claude Code: `/plugin install nightward --marketplace LunenLabs/nightward`,
+      then `/mcp` shows the nightward server connected in a project that has
+      nightward installed, and `/nightward:status` works.
 
 ## 6. Announce (after verification)
 

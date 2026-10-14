@@ -173,6 +173,30 @@ the [petshop example](https://github.com/LunenLabs/nightward/tree/main/examples/
 | `pending/`, `report.json`, `run_meta.json`, `reviewed.json`, `.lock` | no | per-run state, ignored by `nightward init` |
 | `nightward-site/` | no | the dashboard build: it contains your captured data |
 
+## In CI: the GitHub Action
+
+Set up Python and your project's dependencies, then gate the PR with one step.
+It runs your tests, writes the verdict and the diffs that moved to the job
+summary, and fails the job unless the boundary is intact. It never approves:
+intended changes are approved locally (`nightward review`, `nightward approve`)
+and arrive in the PR as a baseline diff.
+
+```yaml
+- uses: actions/checkout@v4
+- uses: actions/setup-python@v5
+  with:
+    python-version: "3.12"
+- run: pip install -e .          # your project and its test dependencies
+- uses: LunenLabs/nightward@v0.3.2
+  with:
+    path: tests                  # what pytest runs; default "."
+```
+
+Inputs: `path`, `dir` (default `.nightward`), `pytest-args` (one per line),
+`allow-not-run`, `version`, `install`, `summary`; output: `boundary`. A full
+workflow with the dashboard artifact is in the
+[CI recipe](https://github.com/LunenLabs/nightward/blob/main/docs/recipes/ci-github-actions.md).
+
 ## Commands
 
 | command | what it does |
@@ -206,9 +230,24 @@ exposed: if the agent that makes a change could also approve it, the gate would
 turn into a changelog. The judge and the store are the humans' committed choices,
 so the agent can't pick a lenient judge or point the server at another store.
 
+In Claude Code, install the plugin. It adds the MCP server and a skill that
+tells Claude to run the gate after its edits and to hand intended changes to
+you instead of approving them. nightward itself must be installed in the
+environment you start `claude` from (your project's virtualenv):
+
 ```bash
-pip install "nightward[mcp]"                      # the mcp 1.x SDK
-claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in the project root
+pip install "nightward[mcp]"                      # in the project's environment
+```
+
+```text
+/plugin install nightward --marketplace LunenLabs/nightward
+```
+
+`/nightward:status` then shows the verdict and what you need to review. Any other
+MCP host can run the server directly:
+
+```bash
+claude mcp add nightward -- nightward mcp         # or your host's equivalent; run it in the project root
 ```
 
 Both tools return the `status --json` shape. The agent is done only when

@@ -22,11 +22,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install nightward  # plus your project deps
-      - name: Capture behaviors and gate against the approved baseline
-        run: |
-          nightward run .           # exit 1 if any capture test failed or errored
-          nightward gate            # exit 1 = breached, incomplete or stale = PR blocked
+      - run: pip install -e .       # your project and its test deps
+      # Capture behaviors, write the verdict + diffs to the job summary, and fail
+      # unless the boundary is intact (breached, incomplete, stale or partial = blocked).
+      - uses: LunenLabs/nightward@v0.3.2
+        # with:
+        #   path: tests             # what pytest runs (default ".")
+        #   pytest-args: |          # one per line; a deselecting run is "partial"
+        #     -p
+        #     no:randomly
+
+      # Without the action, the same gate is two commands:
+      #   pip install nightward
+      #   nightward run .           # exit 1 if any capture test failed or errored
+      #   nightward gate            # exit 1 = breached, incomplete, stale or partial
 
   blast-radius:
     if: always()                    # build the explanation even when the gate fails
