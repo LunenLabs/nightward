@@ -1,11 +1,13 @@
 """Assemble the nightward demo GIF from the REAL petshop run.
 
-Every line of terminal text here is the actual stdout captured from
-`examples/petshop` (tax rate 0.10 -> 0.095), and the dashboard frame is a real
-screenshot of the rendered site. Nothing is invented — this only re-renders a
-real run into a shareable animation.
+The terminal text is the real output of `examples/petshop` (tax rate 0.10 ->
+0.095; the group lines are condensed to one line each), and the dashboard frame
+is a real screenshot of the rendered site (`nightward view`, headless browser).
+Nothing is invented — this only re-renders a real run into a shareable animation.
 
-    python scripts/build_gif.py <dashboard_png> <out_gif>
+    python scripts/build_gif.py <dashboard_png> <out_gif> [x0,y0,x1,y1]
+
+The optional box crops the screenshot to the diff cards.
 """
 from __future__ import annotations
 
@@ -124,28 +126,28 @@ def scene_tests():
 def scene_nightward():
     img, d = base()
     title_bar(d, "nightward catches the silent cascade", RED)
-    window(d, 60, 120, W - 120, 360, "terminal")
+    window(d, 60, 120, W - 120, 400, "terminal")
     lines(d, 100, 172, [
         ("$ nightward run .", FG),
         ("Boundary: breached (3 unapproved)", RED, MONO_B),
-        ("unchanged=0  changed=3  new=0  removed=0", MUTED),
+        ("unchanged=0 changed=3 new=0 removed=0", MUTED),
+        ("group: billing      - [CHANGED] checkout_total", AMBER),
+        ("group: fulfillment  - [CHANGED] shipping_fee", AMBER),
+        ("group: loyalty      - [CHANGED] loyalty_points", AMBER),
+        ("next: `nightward review` shows the diffs", MUTED),
         ("", FG),
-        ("group: billing       [CHANGED] checkout_total", AMBER),
-        ("group: loyalty       [CHANGED] loyalty_points", AMBER),
-        ("group: fulfillment   [CHANGED] shipping_fee", AMBER),
-        ("", FG),
-        ("$ nightward gate   ->  exit 1   (the stop signal)", RED),
+        ("$ nightward gate        -> exit 1  (CI stops here)", RED),
     ], lh=33)
     return img
 
 
 # ---- Scene 4: the real dashboard ------------------------------------------
-def scene_dashboard(dash_png):
+def scene_dashboard(dash_png, band=None):
     img, d = base()
     title_bar(d, "The blast radius — what else moved", BLUE)
     shot = Image.open(dash_png).convert("RGB")
-    # crop to the most meaningful band and fit width
-    shot = shot.crop((0, 0, shot.width, min(shot.height, 800)))
+    # crop to the most meaningful band (the diff cards) and fit width
+    shot = shot.crop(band or (0, 0, shot.width, min(shot.height, 800)))
     scale = (W - 120) / shot.width
     shot = shot.resize((int(shot.width * scale), int(shot.height * scale)))
     if shot.height > H - 130:
@@ -155,7 +157,28 @@ def scene_dashboard(dash_png):
     return img
 
 
-# ---- Scene 5: the impact punchline ----------------------------------------
+# ---- Scene 5: the agent can pull the gate, not approve it ------------------
+def scene_agent():
+    img, d = base()
+    title_bar(d, "Your agent can run the gate. It can't approve it.", BLUE)
+    window(d, 60, 120, W - 120, 175, "nightward mcp  (what the agent sees)")
+    lines(d, 100, 172, [
+        ("tools: nightward_run, nightward_status", GREEN),
+        ("       approve / reject: not exposed - human CLI only", MUTED),
+        ("boundary: \"breached\" -> keep fixing, or ask a human", AMBER),
+    ], lh=34)
+    window(d, 60, 315, W - 120, 205, "terminal  (the human)")
+    lines(d, 100, 367, [
+        ("$ nightward approve --all", FG),
+        ("error: this capture is not reviewed yet", RED),
+        ("$ nightward review        # read every diff", FG),
+        ("$ nightward approve --all # only what you were shown", GREEN),
+    ], lh=34)
+    d.text((60, 545), "Trigger (AI) is not approval (human).", font=SANS_B, fill=FG)
+    return img
+
+
+# ---- Scene 6: the impact punchline ----------------------------------------
 def scene_impact():
     img, d = base()
     title_bar(d, "One line moved three customer-facing behaviors", AMBER)
@@ -186,11 +209,14 @@ def scene_impact():
 def main():
     dash = sys.argv[1] if len(sys.argv) > 1 else "examples/petshop/dash.png"
     out = sys.argv[2] if len(sys.argv) > 2 else "nightward-demo.gif"
+    # optional "x0,y0,x1,y1": the band of the screenshot to show (the diff cards)
+    band = tuple(int(v) for v in sys.argv[3].split(",")) if len(sys.argv) > 3 else None
 
     add(scene_change(), 2200)
     add(scene_tests(), 1900)
-    add(scene_nightward(), 2600)
-    add(scene_dashboard(dash), 2800)
+    add(scene_nightward(), 2800)
+    add(scene_dashboard(dash, band), 3000)
+    add(scene_agent(), 3400)
     add(scene_impact(), 3200)
 
     imgs = [f[0] for f in frames]
