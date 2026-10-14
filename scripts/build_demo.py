@@ -12,6 +12,7 @@ disappeared one — exactly the cascade nightward exists to surface.
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -63,7 +64,16 @@ def main(out_dir: str = "demo-site") -> None:
         from nightward.runner import recompute
         report = recompute(store)
 
-        out = build_site(tw, out_dir)
+        # Build from inside the temp dir with a relative store path: the page
+        # shows its source, and a published demo must not name the machine's
+        # temp directory (or user name) that built it.
+        out_abs = Path(out_dir).resolve()
+        here = os.getcwd()
+        os.chdir(tmp)
+        try:
+            out = build_site(Path(".nightward"), out_abs)
+        finally:
+            os.chdir(here)  # leave tmp before it is removed (Windows)
         print(f"demo site -> {out}  (boundary: {report['boundary']}, "
               f"unapproved: {report['unapproved']})")
 
