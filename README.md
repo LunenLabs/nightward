@@ -33,13 +33,13 @@ nightward gate      # exit 0 only when nothing unapproved remains (CI, agent loo
 nightward is **not** a test generator, and it has no idea what is *correct*. It
 only makes sure that no change to a captured behavior passes silently.
 
-| | |
+| Compared with | How nightward differs |
 |---|---|
-| vs. NL→test generators | nightward **gates** changes, it doesn't author tests |
-| vs. plain snapshot libs | nightward aggregates a **blast radius**, emits a machine **stop-signal** for agent loops, and keeps approval human-only |
-| vs. ordinary regression tests | no hand-written expected values, and a semantic judge can gate nondeterministic AI text |
+| NL→test generators | nightward **gates** changes, it doesn't author tests |
+| plain snapshot libraries | nightward aggregates a **blast radius**, emits a machine **stop-signal** for agent loops, and keeps approval human-only |
+| ordinary regression tests | no hand-written expected values, and a semantic judge can gate nondeterministic AI text |
 
-What's new in 0.3.0, and what changes for 0.2 users: see the [CHANGELOG](https://github.com/LunenLabs/nightward/blob/main/CHANGELOG.md).
+What's new in 0.3, and what changes for 0.2 users: see the [CHANGELOG](https://github.com/LunenLabs/nightward/blob/main/CHANGELOG.md).
 
 ## Install
 
