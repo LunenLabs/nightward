@@ -46,15 +46,7 @@ What's new in 0.3.0, and what changes for 0.2 users: see the [CHANGELOG](https:/
 nightward needs Python 3.10+. Installing it also registers its pytest plugin, so
 the `behavior` fixture is available in every test.
 
-> **nightward is not on PyPI yet.** `pip install nightward` is the command once
-> 0.3.0 is published. Until then, install the pre-release from GitHub.
-
 ```bash
-# pre-release (works today): the main branch from GitHub
-pip install "git+https://github.com/LunenLabs/nightward"
-pip install "nightward[mcp] @ git+https://github.com/LunenLabs/nightward"   # + MCP server
-
-# after the PyPI release
 pip install nightward
 pip install "nightward[mcp]"      # + MCP server for AI agents
 ```
