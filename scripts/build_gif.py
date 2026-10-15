@@ -7,7 +7,9 @@ Nothing is invented — this only re-renders a real run into a shareable animati
 
     python scripts/build_gif.py <dashboard_png> <out_gif> [x0,y0,x1,y1]
 
-The optional box crops the screenshot to the diff cards.
+The optional box crops the screenshot to the diff cards. For a 1280x1400 headless
+screenshot of the petshop dashboard: 224,852,1056,1316 (the billing card and the
+start of the next group).
 """
 from __future__ import annotations
 
@@ -160,7 +162,7 @@ def scene_dashboard(dash_png, band=None):
 # ---- Scene 5: the agent can pull the gate, not approve it ------------------
 def scene_agent():
     img, d = base()
-    title_bar(d, "Your agent can run the gate. It can't approve it.", BLUE)
+    title_bar(d, "Your agent can run the gate. Opening it takes a human.", BLUE)
     window(d, 60, 120, W - 120, 175, "nightward mcp  (what the agent sees)")
     lines(d, 100, 172, [
         ("tools: nightward_run, nightward_status", GREEN),
@@ -174,7 +176,8 @@ def scene_agent():
         ("$ nightward review        # read every diff", FG),
         ("$ nightward approve --all # only what you were shown", GREEN),
     ], lh=34)
-    d.text((60, 545), "Trigger (AI) is not approval (human).", font=SANS_B, fill=FG)
+    d.text((60, 545), "The approval is a baseline diff your code owners review.", font=SANS_B,
+           fill=FG)
     return img
 
 

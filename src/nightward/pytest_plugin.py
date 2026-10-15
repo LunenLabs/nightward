@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import datetime
 import fnmatch
+import functools
+import inspect
 import os
 from pathlib import Path
 
@@ -158,6 +160,9 @@ def pytest_configure(config):
         raise pytest.UsageError(
             "--nightward-record cannot run under pytest-xdist; drop -n (or pass -n 0)"
         )
+    config.addinivalue_line(
+        "markers", f"{CAPTURE_MARK}(name, group, semantic, scrub): capture the test's return "
+                   f"value as a behavior - apply it with @nightward.capture")
     # Which files may register scrub rules (D28): pytest's own notion of a test module.
     _scrub.set_test_files(config.getini("python_files"))
     recording = config.getoption("--nightward-record")
@@ -214,6 +219,72 @@ def behavior(request):
                 scrub=scrub, path=request.node.path)
 
     return capture
+
+
+# ---- @capture: a test's return value is its behavior ------------------------
+
+CAPTURE_MARK = "nightward_capture"
+
+
+def capture_mark(fn=None, *, name: str | None = None, group: str | None = None,
+                 semantic: bool = False, scrub: bool = True):
+    """The marker behind `nightward.capture` (documented there)."""
+    if fn is not None and not callable(fn):
+        raise TypeError("capture takes keyword arguments: @capture(name=..., group=...)")
+    if name is not None:
+        validate_name(name)   # a parametrized case adds its [id] at capture time
+    mark = getattr(pytest.mark, CAPTURE_MARK).with_args(
+        name=name, group=group, semantic=semantic, scrub=scrub)
+    return mark if fn is None else mark(fn)
+
+
+def pytest_collection_modifyitems(items):
+    # unittest.TestCase methods never reach pytest_pyfunc_call: @capture there
+    # would capture nothing and say nothing.
+    marked = [i.nodeid for i in items if type(i).__name__ == "TestCaseFunction"
+              and i.get_closest_marker(CAPTURE_MARK)]
+    if marked:
+        raise pytest.UsageError(
+            f"@capture works on pytest-style tests, not unittest.TestCase methods "
+            f"({', '.join(marked[:3])}): request the `behavior` fixture there instead")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_pyfunc_call(pyfuncitem):
+    marker = pyfuncitem.get_closest_marker(CAPTURE_MARK)
+    if marker is None:
+        return (yield)
+    test = pyfuncitem.obj
+    if inspect.iscoroutinefunction(test) or inspect.isasyncgenfunction(test):
+        raise NightwardError(f"@capture can't capture an async test ({pyfuncitem.name}): "
+                             f"request the `behavior` fixture and call it with the awaited "
+                             f"value instead")
+    returned = []
+
+    @functools.wraps(test)
+    def keep_return(*args, **kwargs):
+        # pytest warns when a test returns a value; @capture takes it instead.
+        returned.append(test(*args, **kwargs))
+
+    rec = pyfuncitem.config._nightward_recorder
+    if "behavior" not in pyfuncitem.fixturenames:
+        rec.begin(pyfuncitem.nodeid)   # the fixture does this for tests that use it
+    pyfuncitem.obj = keep_return
+    try:
+        result = yield
+    finally:
+        pyfuncitem.obj = test
+    value = returned[0]
+    if value is None:
+        raise NightwardError(f"{pyfuncitem.name} returned None: an @capture test returns "
+                             f"the value to capture (did you forget `return`?)")
+    opts = marker.kwargs
+    # A parametrized case keeps its id: test_tax[low] -> tax[low] with name="tax".
+    name = (opts.get("name") or pyfuncitem.originalname) + pyfuncitem.name[
+        len(pyfuncitem.originalname):]
+    rec.add(name, value, group=opts.get("group"), semantic=opts.get("semantic", False),
+            source=pyfuncitem.nodeid, scrub=opts.get("scrub", True), path=pyfuncitem.path)
+    return result
 
 
 # Only a session that actually ran its tests produces a capture worth keeping.
