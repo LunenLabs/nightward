@@ -1,6 +1,6 @@
 # nightward
 
-**A regression gate for AI-made changes. Your AI agent can run the gate, but it can't approve it.**
+**A regression gate for AI-made changes. Your AI agent can run the gate; opening it takes a human-approved baseline diff.**
 
 ![15-second demo: an AI fixes one line, every test passes, nightward shows three customer-facing behaviors moved, the gate stops CI, and only a human can approve](https://raw.githubusercontent.com/LunenLabs/nightward/main/docs/assets/demo.gif)
 
@@ -36,7 +36,7 @@ only makes sure that no change to a captured behavior passes silently.
 | Compared with | How nightward differs |
 |---|---|
 | NL→test generators | nightward **gates** changes, it doesn't author tests |
-| plain snapshot libraries | nightward aggregates a **blast radius**, emits a machine **stop-signal** for agent loops, and keeps approval human-only |
+| snapshot libraries (syrupy, inline-snapshot, ApprovalTests) | approval is a separate, review-gated step that never removes anything in bulk, and one run lists every moved behavior by feature with a verdict an agent can read. [Detailed comparison](#how-it-compares-with-snapshot-testing) |
 | ordinary regression tests | no hand-written expected values, and a semantic judge can gate nondeterministic AI text |
 
 What's new in 0.3, and what changes for 0.2 users: see the [CHANGELOG](https://github.com/LunenLabs/nightward/blob/main/CHANGELOG.md).
@@ -271,12 +271,34 @@ the loop are in [docs/mcp.md](https://github.com/LunenLabs/nightward/blob/main/d
 
 Free-text AI output changes its wording on every run, so an exact comparison
 breaches every time. Mark such a behavior `semantic=True` and commit a judge in
-`pyproject.toml`: `[tool.nightward] judge = "anthropic:claude-haiku-5-5"`, or the
-key-free `persona:editor`. The judge only decides whether two outputs mean the
+`pyproject.toml`: `[tool.nightward] judge = "anthropic:claude-haiku-5-5"`. The
+key-free `persona:*` judges are deterministic stand-ins for tests and CI: they
+forgive changes of case, whitespace and punctuation in prose, not a reworded
+sentence, so reworded AI text needs the LLM judge. The judge only decides whether two outputs mean the
 same thing; approval stays human. Every ruling is recorded in the committed
 ledger `.nightward/judge/`, and a judge that can't rule falls back to the exact
 comparison. Details are in
 [docs/semantic-judge.md](https://github.com/LunenLabs/nightward/blob/main/docs/semantic-judge.md).
+
+## How it compares with snapshot testing
+
+nightward is snapshot testing underneath: capture, approve, compare. If you already
+use [syrupy](https://github.com/syrupy-project/syrupy),
+[inline-snapshot](https://github.com/15r10nk/inline-snapshot) or
+[ApprovalTests](https://github.com/approvals/ApprovalTests.Python) and people make
+your changes, they may be all you need. nightward is built for the loop where an
+agent makes the change:
+
+| | snapshot libraries | nightward |
+|---|---|---|
+| a mismatch | fails the test; a test stops at its first failing assertion | is recorded; one run lists every moved behavior, grouped by feature |
+| accepting changes | an update flag rewrites snapshots (syrupy's `--snapshot-update` also deletes unused ones), or you edit the approved file | `approve` accepts only what `review` showed you, and never removes a behavior in bulk |
+| a machine verdict | the pytest exit code | `status --json`, MCP tools, a GitHub Action; never `intact` when tests were deselected (`partial`), failed (`incomplete`) or the store moved since (`stale`) |
+| reworded AI text | a mismatch every run | optional semantic judge with a committed ledger |
+
+Where they're better: inline-snapshot keeps the value next to the assertion,
+syrupy has serializers for many types and needs no extra command, and ApprovalTests
+exists for many languages. They can run side by side with nightward in one suite.
 
 ## What "intact" means
 
@@ -285,9 +307,10 @@ comparison. Details are in
 - The gate sees only what `behavior()` captures, so capture the behaviors you
   care about.
 - The gate is a convention, not a sandbox. An agent with a shell could run
-  `approve` or edit the baseline, but every bypass leaves a trace in git. Review
-  baseline, ledger, scrub-rule and test diffs in every PR, protect your main
-  branch, and let CI run `nightward run && nightward gate` from source.
+  `approve` or edit the baseline, but every bypass leaves a trace in git. Make
+  that trace need a human: own the store with CODEOWNERS, require code-owner
+  review on `main`, and let CI run the gate from source
+  ([recipe](https://github.com/LunenLabs/nightward/blob/main/docs/recipes/protect-the-baseline.md)).
 - A semantic judge can be wrong, so its rulings are recorded for review.
 - Normalization defines "the same": timestamps and UUIDs are masked by default
   (opt out with `scrub=False`), and dict key order is ignored.
@@ -314,6 +337,8 @@ before you rely on a green gate.
   PDF, Word, Excel, text and raw bytes
 - [Threat model](https://github.com/LunenLabs/nightward/blob/main/docs/threat-model.md)
 - [CI recipe: GitHub Actions](https://github.com/LunenLabs/nightward/blob/main/docs/recipes/ci-github-actions.md)
+- [Recipe: make "only a human approves" hold on GitHub](https://github.com/LunenLabs/nightward/blob/main/docs/recipes/protect-the-baseline.md):
+  CODEOWNERS for the store, code-owner review, and an agent identity that isn't an owner
 
 ## Scope
 

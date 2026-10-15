@@ -17,8 +17,19 @@ behavior; every such change is listed under "Upgrading").
   judge unavailable, so the behavior falls back to the exact comparison. Examples
   now use `anthropic:claude-haiku-5-5`.
 
+### Added
+
+- **[Recipe: make "only a human approves" hold on GitHub](docs/recipes/protect-the-baseline.md):**
+  CODEOWNERS for `baseline/`, `rejected/`, `judge/`, `pyproject.toml` and
+  `conftest.py`, required code-owner review, and an agent identity that isn't an
+  owner. The README and the threat model point at it.
+
 ### Changed
 
+- The README headline says what holds: the agent can run the gate, and opening it
+  takes a human-approved baseline diff. A new section compares nightward with
+  syrupy, inline-snapshot and ApprovalTests, including where they are better, and
+  the `persona:*` judges are described as stand-ins that don't forgive rewording.
 - The test suite runs in parallel (`pytest -q -n auto`) in CI and in
   CONTRIBUTING: about 5 minutes instead of 15.
 

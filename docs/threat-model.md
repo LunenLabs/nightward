@@ -17,7 +17,8 @@ changed** — nothing more. Read these four limits before trusting the green lig
    visible trace in git. The enforcement point is **review**:
    - `baseline/*.approved.json`, the judge ledger (`judge/`), scrub rules, and test
      files are code — review their diffs in every PR;
-   - protect your main branch (required human review) and let CI re-run
+   - protect your main branch (required code-owner review of the store, see
+     [the recipe](recipes/protect-the-baseline.md)) and let CI re-run
      `nightward run && nightward gate` from source, so a locally forged
      "intact" can't merge itself (a hand-edited `report.json` or a forged copy
      of the store leaves no trace in git; MCP refuses any store but the one the
