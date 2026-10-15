@@ -15,9 +15,13 @@ pip install -e ".[dev]"
 ## Before you push
 
 ```bash
-pytest -q          # all tests must pass
+pytest -q -n auto  # all tests must pass (parallel: ~5 min instead of ~15)
 ruff check .       # lint must be clean
 ```
+
+Tests live in `tests/<area>/`: `core`, `gate`, `judge`, `doctor`, `scrub`, `cli`,
+`mcp`, `view`, `adapters` and `release`. Put a new test next to the area it
+exercises, not in a file named after the review that found it.
 
 ## Scope guardrails
 

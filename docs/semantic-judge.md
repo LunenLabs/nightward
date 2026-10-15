@@ -22,7 +22,7 @@ The judge is a project decision, so it lives in your committed `pyproject.toml`.
 
 ```toml
 [tool.nightward]
-judge = "anthropic:claude-haiku-4-5"   # real LLM (pip install "nightward[judge]")
+judge = "anthropic:claude-haiku-5-5"   # real LLM (pip install "nightward[judge]")
 # judge = "persona:editor"             # deterministic, key-free (see below)
 ```
 

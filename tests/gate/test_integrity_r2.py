@@ -505,7 +505,7 @@ def test_repo_gitignores_cover_transient_entries():
 
     from nightward.cli import LEGACY_ENTRIES, TRANSIENT_ENTRIES
 
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     for gi in [root / ".gitignore", *sorted(root.glob("examples/*/.gitignore"))]:
         lines = gi.read_text(encoding="utf-8").splitlines()
         for entry in TRANSIENT_ENTRIES:

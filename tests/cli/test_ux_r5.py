@@ -25,7 +25,7 @@ def write(path, body):
     path.write_text(body, encoding="utf-8")
 
 
-APP_JS = Path(__file__).parents[1] / "src" / "nightward" / "view" / "assets" / "app.js"
+APP_JS = Path(__file__).parents[2] / "src" / "nightward" / "view" / "assets" / "app.js"
 
 
 def node_eval(js_expr):

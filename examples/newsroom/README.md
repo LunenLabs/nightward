@@ -26,7 +26,7 @@ nightward gate                                               # exit 0
 NEWSROOM_REWRITE=1 nightward run .                           # breached again (no judge)
 
 # with a real model (pip install "nightward[judge]", ANTHROPIC_API_KEY set):
-NEWSROOM_REWRITE=1 nightward run . --judge anthropic:claude-haiku-4-5
+NEWSROOM_REWRITE=1 nightward run . --judge anthropic:claude-haiku-5-5
 ```
 
 In a real project you commit the judge instead of typing it, so CI, every
@@ -36,7 +36,7 @@ only, never for real gating):
 ```toml
 # pyproject.toml
 [tool.nightward]
-judge = "anthropic:claude-haiku-4-5"
+judge = "anthropic:claude-haiku-5-5"
 ```
 
 ## What to notice

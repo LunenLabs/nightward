@@ -5,6 +5,38 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [Unreleased]
+
+### Fixed
+
+- **The Anthropic judge works on current models.** It no longer sends
+  `temperature=0`, which current Claude models reject with a 400 (the ledger
+  already makes a model's ruling repeatable by replaying it). It reads the first
+  text block of the reply instead of the first block, which on current models is a
+  thinking block, and gives the reply room for that thinking. A refusal makes the
+  judge unavailable, so the behavior falls back to the exact comparison. Examples
+  now use `anthropic:claude-haiku-5-5`.
+
+### Added
+
+- **[Recipe: make "only a human approves" hold on GitHub](docs/recipes/protect-the-baseline.md):**
+  CODEOWNERS for `baseline/`, `rejected/`, `judge/`, `pyproject.toml` and
+  `conftest.py`, required code-owner review, and an agent identity that isn't an
+  owner. The README and the threat model point at it.
+
+### Changed
+
+- The README headline says what holds: the agent can run the gate, and opening it
+  takes a human-approved baseline diff. A new section compares nightward with
+  syrupy, inline-snapshot and ApprovalTests, including where they are better, and
+  the `persona:*` judges are described as stand-ins that don't forgive rewording.
+- The test suite runs in parallel (`pytest -q -n auto`) in CI and in
+  CONTRIBUTING: about 5 minutes instead of 15.
+- `nightward/cli.py` (1,500 lines) is now the package `nightward/cli/`, one module
+  per command family. `nightward.cli:app` and every command's help are unchanged.
+- Tests are grouped by area (`tests/core`, `tests/gate`, `tests/judge`, ...) instead
+  of by the review round that found them.
+
 ## [0.3.3] - 2026-10-15
 
 From a user's first review of a large capture. The gate decides exactly as before.
