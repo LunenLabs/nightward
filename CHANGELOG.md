@@ -32,6 +32,8 @@ behavior; every such change is listed under "Upgrading").
   the `persona:*` judges are described as stand-ins that don't forgive rewording.
 - The test suite runs in parallel (`pytest -q -n auto`) in CI and in
   CONTRIBUTING: about 5 minutes instead of 15.
+- `nightward/cli.py` (1,500 lines) is now the package `nightward/cli/`, one module
+  per command family. `nightward.cli:app` and every command's help are unchanged.
 - Tests are grouped by area (`tests/core`, `tests/gate`, `tests/judge`, ...) instead
   of by the review round that found them.
 
