@@ -5,7 +5,7 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
-## [Unreleased]
+## [0.3.3] - 2026-10-15
 
 From a user's first review of a large capture. The gate decides exactly as before.
 
@@ -297,6 +297,7 @@ Never published to PyPI; installed from git.
 - Document adapters (`from_file`, `from_text`, `from_pdf`, `from_docx`,
   `from_xlsx`).
 
+[0.3.3]: https://github.com/LunenLabs/nightward/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/LunenLabs/nightward/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/LunenLabs/nightward/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/LunenLabs/nightward/compare/900b8d5...v0.3.0
