@@ -7,6 +7,16 @@ behavior; every such change is listed under "Upgrading").
 
 ## [Unreleased]
 
+### Added
+
+- **`@capture`: a test's return value is its behavior.** `from nightward import
+  capture`; `@capture(group="billing")` on a test that `return`s a value captures it
+  under the test's name (or `name=`), and a parametrized case keeps its id
+  (`tax[low]`). Same rules as the `behavior` fixture (validated, unique, scrubbed,
+  `semantic=`, `scrub=`), and the two mix in one test. A test that returns None
+  fails (a forgotten `return`), an async test and a `unittest.TestCase` method are
+  refused with guidance, and pytest's return-value warning is not raised.
+
 ### Fixed
 
 - **The Anthropic judge works on current models.** It no longer sends

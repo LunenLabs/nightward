@@ -88,6 +88,18 @@ def test_login(behavior):
     behavior("user_login", user_login("alice"), group="auth")
 ```
 
+A test that captures one value can return it instead. `@capture` names the
+behavior after the test (or `name=`), and each parametrized case keeps its id:
+
+```python
+from nightward import capture
+
+
+@capture(name="checkout_total", group="billing")
+def test_checkout():
+    return checkout_total(CART)
+```
+
 **1. Approve the current behavior as the baseline.**
 
 ```bash
