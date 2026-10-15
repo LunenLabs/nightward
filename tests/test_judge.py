@@ -440,3 +440,42 @@ def test_api_judge_sends_the_safe_prompt_and_reads_fenced_json(monkeypatch, tmp_
     assert (verdict.verdict, verdict.reason) == (DIFFERENT, "denied")
     _nonce, a, b = _blocks(sent[0])
     assert (a, b) == ("Refund {new} approved.", "Refund denied.")
+
+
+def _fake_current_model(monkeypatch, content, sent, stop_reason="end_turn"):
+    # Shaped like a current model's reply: typed blocks, a thinking block first.
+    import types
+
+    class APIError(Exception):
+        pass
+
+    class Anthropic:
+        def __init__(self, *a, **k):
+            self.messages = types.SimpleNamespace(create=self._create)
+
+        def _create(self, **kw):
+            sent.append(kw)
+            return types.SimpleNamespace(content=content, stop_reason=stop_reason)
+
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        types.SimpleNamespace(Anthropic=Anthropic, APIError=APIError))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
+
+
+def test_api_judge_reads_the_text_block_after_thinking(monkeypatch, tmp_path):
+    import types
+    sent = []
+    content = [types.SimpleNamespace(type="thinking", thinking=""),
+               types.SimpleNamespace(type="text", text='{"verdict": "SAME", "reason": "same"}')]
+    _fake_current_model(monkeypatch, content, sent)
+    judge = Judge("anthropic:claude-haiku-5-5", cache_path=tmp_path / "c.json")
+    assert judge.equivalent("a", "b", "f1", "f2").verdict == SAME
+    # current models reject non-default sampling parameters with a 400
+    assert "temperature" not in sent[0]
+
+
+def test_api_judge_refusal_is_unavailable_not_a_verdict(monkeypatch, tmp_path):
+    from nightward.judge import _anthropic_backend
+    _fake_current_model(monkeypatch, [], [], stop_reason="refusal")
+    with pytest.raises(JudgeUnavailable, match="declined"):
+        _anthropic_backend("claude-haiku-5-5", "a", "b")

@@ -25,7 +25,9 @@ jobs:
       - name: Lint
         run: ruff check .
       - name: Test
-        run: pytest -q
+        # Most tests run nightward (and a nested pytest) as subprocesses: run them
+        # in parallel. Each test uses its own tmp_path, so workers don't share state.
+        run: pytest -q -n auto
 
   dogfood:
     runs-on: ubuntu-latest

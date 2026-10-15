@@ -6,7 +6,7 @@ into "not a change", but it never approves; baseline changes stay human-CLI-only
 
 Backend spec is "provider:model", so different LLMs are swappable per run:
 
-    anthropic:claude-haiku-4-5     real API (optional extra: pip install nightward[judge])
+    anthropic:claude-haiku-5-5     real API (optional extra: pip install nightward[judge])
     persona:editor                 deterministic, key-free stand-ins (tests / dev / CI)
 
 Verdicts are recorded per (old_fp, new_fp, spec) in the store's ``judge/``
@@ -303,17 +303,25 @@ def _anthropic_backend(model: str, old: Any, new: Any) -> tuple[str, str]:
         raise JudgeUnavailable("ANTHROPIC_API_KEY not set")
     client = anthropic.Anthropic()
     try:
+        # No temperature: current models reject non-default sampling with a 400.
+        # Repeatability comes from the ledger, which replays a model's ruling.
+        # max_tokens leaves room for the thinking current models do by default.
         msg = client.messages.create(
             model=model,
-            max_tokens=200,
-            temperature=0,
+            max_tokens=4096,
             messages=[{"role": "user",
                        "content": _build_prompt(_as_text(old), _as_text(new))}],
         )
     except anthropic.APIError as exc:  # auth, network, rate limit, unknown model
         raise JudgeUnavailable(f"API error: {exc}") from exc
+    if getattr(msg, "stop_reason", None) == "refusal":
+        raise JudgeUnavailable("the judge model declined to rule")
+    # Current models put a thinking block first: read the first text block.
+    texts = [b.text for b in msg.content if getattr(b, "type", "text") == "text"]
+    if not texts:
+        raise JudgeUnavailable("unparseable judge response: no text in the reply")
     try:
-        return _parse_reply(msg.content[0].text)
+        return _parse_reply(texts[0])
     except (ValueError, KeyError, IndexError, AttributeError, TypeError) as exc:
         raise JudgeUnavailable(f"unparseable judge response: {exc}") from exc
 
@@ -329,7 +337,7 @@ def parse_spec(spec: str) -> tuple[str, str]:
     if not sep or not provider or not model:
         raise NightwardError(
             f"invalid judge spec {spec!r}: expected 'provider:model', "
-            f"e.g. 'anthropic:claude-haiku-4-5' or 'persona:editor'"
+            f"e.g. 'anthropic:claude-haiku-5-5' or 'persona:editor'"
         )
     if provider not in _BACKENDS:
         raise NightwardError(

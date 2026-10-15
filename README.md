@@ -271,7 +271,7 @@ the loop are in [docs/mcp.md](https://github.com/LunenLabs/nightward/blob/main/d
 
 Free-text AI output changes its wording on every run, so an exact comparison
 breaches every time. Mark such a behavior `semantic=True` and commit a judge in
-`pyproject.toml`: `[tool.nightward] judge = "anthropic:claude-haiku-4-5"`, or the
+`pyproject.toml`: `[tool.nightward] judge = "anthropic:claude-haiku-5-5"`, or the
 key-free `persona:editor`. The judge only decides whether two outputs mean the
 same thing; approval stays human. Every ruling is recorded in the committed
 ledger `.nightward/judge/`, and a judge that can't rule falls back to the exact

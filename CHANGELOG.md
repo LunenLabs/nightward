@@ -5,6 +5,23 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [Unreleased]
+
+### Fixed
+
+- **The Anthropic judge works on current models.** It no longer sends
+  `temperature=0`, which current Claude models reject with a 400 (the ledger
+  already makes a model's ruling repeatable by replaying it). It reads the first
+  text block of the reply instead of the first block, which on current models is a
+  thinking block, and gives the reply room for that thinking. A refusal makes the
+  judge unavailable, so the behavior falls back to the exact comparison. Examples
+  now use `anthropic:claude-haiku-5-5`.
+
+### Changed
+
+- The test suite runs in parallel (`pytest -q -n auto`) in CI and in
+  CONTRIBUTING: about 5 minutes instead of 15.
+
 ## [0.3.3] - 2026-10-15
 
 From a user's first review of a large capture. The gate decides exactly as before.

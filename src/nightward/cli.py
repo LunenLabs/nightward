@@ -646,7 +646,7 @@ def run(ctx: typer.Context,
         dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"),
         judge: str | None = typer.Option(
             None, help="Semantic judge for semantic=True behaviors, as provider:model "
-                       "(e.g. anthropic:claude-haiku-4-5, persona:editor), for this run "
+                       "(e.g. anthropic:claude-haiku-5-5, persona:editor), for this run "
                        "only. Default: $NIGHTWARD_JUDGE, else [tool.nightward] judge "
                        "in the pyproject.toml nearest the store")):
     """Re-run tests, capture behaviors, compute the blast radius.

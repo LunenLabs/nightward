@@ -76,7 +76,7 @@ keeps token spend at one call per new fingerprint pair:
 
 ```toml
 [tool.nightward]
-judge = "anthropic:claude-haiku-4-5"
+judge = "anthropic:claude-haiku-5-5"
 ```
 
 ```yaml

@@ -15,7 +15,7 @@ pip install -e ".[dev]"
 ## Before you push
 
 ```bash
-pytest -q          # all tests must pass
+pytest -q -n auto  # all tests must pass (parallel: ~5 min instead of ~15)
 ruff check .       # lint must be clean
 ```
 
