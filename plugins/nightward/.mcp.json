@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nightward": {
+      "command": "nightward",
+      "args": ["mcp", "--dir", ".nightward"]
+    }
+  }
+}
