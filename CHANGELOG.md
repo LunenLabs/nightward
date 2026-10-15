@@ -5,6 +5,35 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [Unreleased]
+
+From a user's first review of a large capture. The gate decides exactly as before.
+
+### Added
+
+- **`nightward review --summary`.** Each changed path once, list indices folded into
+  `[*]`, with its old -> new values counted: `cases[*].correct  78/80 changed
+  "ERR ImportError" -> 41 distinct values: ...`. NEW and REMOVED behaviors show their
+  value distribution. An 800-line diff becomes a few lines a reviewer actually
+  reads; it marks what it showed as reviewed, like a capped diff. A capped diff now
+  points at it.
+- **Capture environment.** Every capture records its OS and Python version, and
+  `approve` keeps it in the baseline file (`"env"`, not fingerprinted). A CHANGED
+  behavior approved on another OS or Python gets a note in `run`, `review`, `gate`
+  and `status`, and `env_mismatch` in `status --json` and MCP - suspect the
+  environment before the code. Never a verdict.
+- **`nightward gate --run`** captures first, then gates on that verdict: one command
+  that can't pass on a run older than the code.
+- **[Designing payloads a human can review](docs/payload-design.md):** aggregate by
+  cause and keep the members, record each input once, structured fields over free
+  text, keep the machine out of the payload.
+
+### Upgrading
+
+- Baseline files you approve from now on carry an `"env"` key: a one-time line in
+  their git diff. Older nightward versions ignore it, and baselines without it are
+  never reported as approved elsewhere.
+
 ## [0.3.2] - 2026-10-15
 
 Two ways to adopt the gate without wiring it by hand. No change to how the gate

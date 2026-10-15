@@ -14,7 +14,11 @@ nightward run     re-run tests → capture → compute blast radius
 nightward report  verdict from an existing `pytest --nightward-record` capture
                   (no pytest run) - see "Using the plugin directly" below
 nightward review  show changed behaviors with diffs; scope with `review NAME...` or
-                  `--group G`; each diff shows 60 lines (`--max-lines N`, 0 = all)
+                  `--group G`; each diff shows 60 lines (`--max-lines N`, 0 = all).
+                  `--summary` lists each changed path once instead, list indices
+                  folded (`cases[*].correct  78/80 changed  "ERR" -> 41 distinct
+                  values: ...`); NEW/REMOVED behaviors get their value distribution.
+                  It marks what it showed as reviewed, like a capped diff
 nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
                   for values that are volatile by evidence (normalization.md); takes
                   the same NAME... / --group scope as review
@@ -45,7 +49,9 @@ nightward reject  confirm a change you reviewed as a real regression. It takes o
 nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, partial
                   (behaviors not checked), stale or incomplete; 2 no store, no report
                   (no run yet, or the last run aborted) or another error. Only 0 is a
-                  pass. `--allow-not-run` passes "partial" in a deliberately narrowed job
+                  pass. `--allow-not-run` passes "partial" in a deliberately narrowed job.
+                  `--run` captures first (`nightward run .`, same judge), then gates
+                  on that fresh verdict - the one-command form for loops and hooks
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
                   "done"; "breached", "partial" (approved behaviors not checked:
@@ -72,7 +78,16 @@ edited since then. "stale" only covers a baseline, capture or rejection that cha
 run, never your source code. Both print `(as of the last run, <generated_at>; re-run
 nightward run after code edits)` next to the verdict, and `status --json` and MCP
 carry `generated_at`. Run `nightward run` again after every edit before trusting the
-verdict.
+verdict, or `nightward gate --run`, which does both.
+
+**Baselines made somewhere else.** Each capture records the OS and Python version it
+ran on, and `approve` keeps that record in the baseline file (`"env"`, never part of
+the fingerprint). When a CHANGED behavior was approved on another OS or Python than
+the run that changed it, `run`, `review`, `gate` and `status` print a note naming
+both, and `status --json`/MCP carry `env_mismatch`. It never changes the verdict: a
+Windows path or line ending in a payload is still a change. Fix the payload
+([payload design](payload-design.md#4-leave-the-machine-out-of-the-payload)) or
+approve from the environment CI gates on.
 
 **Merge conflicts in the baseline.** Two branches that approved the same behavior
 differently leave git conflict markers in `baseline/<name>.approved.json`. Every

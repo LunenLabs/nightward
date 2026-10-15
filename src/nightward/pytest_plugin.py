@@ -15,7 +15,7 @@ import pytest
 
 from . import scrub as _scrub
 from .core.baseline import Store, digest
-from .core.behavior import Behavior, validate_name
+from .core.behavior import Behavior, capture_env, validate_name
 from .core.lock import acquire, read_lock, release
 from .errors import NightwardError
 from .scrub import scrub_counted, unmatched_rules
@@ -24,6 +24,8 @@ from .scrub import scrub_counted, unmatched_rules
 # LongPathsEnabled) refuse paths of MAX_PATH (260) characters or more.
 _WINDOWS = os.name == "nt"
 _MAX_PATH = 259
+# Recorded on every capture and copied into the baseline on approve (Behavior.env).
+_ENV = capture_env()
 
 
 def _check_path_length(store_root: Path, name: str) -> None:
@@ -134,7 +136,7 @@ class Recorder:
             self.masked[name] = masked
         self.behaviors.append(
             Behavior(name=name, payload=payload, group=group, semantic=semantic,
-                     source=source, scrub=scrub)
+                     source=source, scrub=scrub, env=_ENV)
         )
 
 

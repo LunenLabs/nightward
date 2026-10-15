@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .core.baseline import Store, change_token, digest
+from .core.behavior import capture_env
 from .core.blast import aggregate
 from .core.diff import CHANGED, NOT_RUN, REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
@@ -131,6 +132,7 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     report["scrub_rules"] = [
         {k: r.get(k) for k in ("rule", "values", "behaviors", "placeholder")}
         for r in meta.get("scrub_rules") or [] if isinstance(r, dict)]
+    report["env_mismatch"] = env_mismatch(changes, baseline, pending)
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)
@@ -148,6 +150,25 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
                            "compared_exactly": unjudged}
     store.write_report(report)
     return report
+
+
+def _env_key(env: dict | None) -> tuple:
+    return (env or {}).get("os"), (env or {}).get("python")
+
+
+def env_mismatch(changes, baseline, pending) -> dict | None:
+    """Unapproved CHANGED behaviors approved on another OS or Python than this
+    capture ran on: a path separator, a line ending or an OS error message can
+    move a payload with no code change. A hint for the reviewer only - it
+    never changes a verdict. None when nothing changed across environments
+    (an intact boundary is silent however the baseline was made)."""
+    capture = next((b.env for b in pending.values() if b.env), None) or capture_env()
+    moved = {c.name: baseline[c.name].env for c in changes
+             if c.kind == CHANGED and baseline[c.name].env
+             and _env_key(baseline[c.name].env) != _env_key(capture)}
+    if not moved:
+        return None
+    return {"capture": capture, "behaviors": moved}
 
 
 def is_stale(store: Store, report: dict | None) -> bool:

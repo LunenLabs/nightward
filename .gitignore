@@ -29,3 +29,6 @@ examples/*/site/
 
 # Real-data validation experiments (contain PII — never commit; CLAUDE.md §irreversible constraints)
 live-experiment/
+
+# Local agent guidance (not shipped)
+CLAUDE.md
