@@ -5,7 +5,9 @@ import datetime
 import decimal
 import hashlib
 import json
-from dataclasses import dataclass
+import platform
+import sys
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import NightwardError
@@ -171,6 +173,10 @@ class Behavior:
     # False when captured with behavior(..., scrub=False): no scrub rule applies,
     # so doctor must never suggest one for it. Not part of the fingerprint.
     scrub: bool = True
+    # Where it was captured ({"os": ..., "python": "3.12"}), copied into the
+    # baseline on approve so a later run on another OS or Python can say so.
+    # Diagnostics only: never part of the fingerprint, equality or comparison.
+    env: dict | None = field(default=None, compare=False)
 
     def fingerprint(self) -> str:
         return hashlib.sha256(canonical_json(self.payload).encode("utf-8")).hexdigest()
@@ -183,6 +189,8 @@ class Behavior:
             d["source"] = self.source
         if not self.scrub:  # omit the default for the same reason
             d["scrub"] = False
+        if self.env:
+            d["env"] = self.env
         return d
 
     @staticmethod
@@ -191,8 +199,23 @@ class Behavior:
             raise NightwardError(f"expected a behavior object, got {type(d).__name__}")
         if not isinstance(d.get("name"), str) or "payload" not in d:
             raise NightwardError("behavior object needs a string 'name' and a 'payload'")
-        source = d.get("source")
+        source, env = d.get("source"), d.get("env")
+        if not (isinstance(env, dict) and env
+                and all(isinstance(v, str) for v in env.values())):
+            env = None   # a hand-edited or foreign value is just "unknown"
         return Behavior(name=d["name"], payload=d["payload"], group=d.get("group"),
                         semantic=d.get("semantic", False),
                         source=source if isinstance(source, str) else None,
-                        scrub=d.get("scrub", True) is not False)
+                        scrub=d.get("scrub", True) is not False, env=env)
+
+
+def capture_env() -> dict[str, str]:
+    """The environment a capture runs in, as far as payloads tend to depend on it."""
+    return {"os": platform.system() or sys.platform,
+            "python": f"{sys.version_info[0]}.{sys.version_info[1]}"}
+
+
+def env_text(env: dict | None) -> str:
+    if not env:
+        return "an unknown environment"
+    return f"{env.get('os', '?')} / Python {env.get('python', '?')}"

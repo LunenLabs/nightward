@@ -17,6 +17,7 @@ from rich.markup import escape
 from . import __version__, shellquote
 from .config import judge_setting
 from .core.baseline import Store, change_token
+from .core.behavior import env_text
 from .core.diff import NOT_RUN, REMOVED, UNCHANGED
 from .core.lock import store_lock
 from .errors import NightwardError
@@ -498,6 +499,25 @@ def _print_not_run(report: dict) -> None:
                       f"without the selection checks them", soft_wrap=True)
 
 
+def _print_env_mismatch(report: dict) -> None:
+    """Say when changed behaviors were approved on another OS or Python (a hint,
+    never a verdict: the boundary stays what the fingerprints say)."""
+    mismatch = report.get("env_mismatch")
+    if not mismatch:
+        return
+    by_env: dict[str, list[str]] = {}
+    for name, env in sorted(mismatch["behaviors"].items()):
+        by_env.setdefault(env_text(env), []).append(name)
+    approved = "; ".join(f"{escape(_names_text(names, 3))} on {escape(where)}"
+                         for where, names in by_env.items())
+    err_console.print(
+        f"[yellow]note:[/yellow] {len(mismatch['behaviors'])} changed behavior(s) were "
+        f"approved on another environment ({approved}); this capture ran on "
+        f"{escape(env_text(mismatch['capture']))}. A path, a line ending or an OS error "
+        f"message can move a payload with no code change - check that before the code "
+        f"(docs/payload-design.md)", soft_wrap=True)
+
+
 def _print_summary(report: dict) -> None:
     c = report["counts"]
     # Same word as status --json and the dashboard: a run with failing capture
@@ -554,6 +574,7 @@ def _print_summary(report: dict) -> None:
                       if it.get("judged") else "")
             console.print(f"  - [[cyan]{it['kind']}[/cyan]] {escape(it['name'])}{judged}"
                           f"{_rejected_note(it)}")
+    _print_env_mismatch(report)
 
 
 @app.command()
@@ -638,6 +659,12 @@ def run(ctx: typer.Context,
         # `nightward run -- -k clamp`: click hands the first pytest arg to PATH,
         # which is optional (R3-OPS-05).
         path, extra = ".", [path, *extra]
+    result = _run(path, dir, judge, extra)
+    _exit_if_incomplete(result["report"], result["pytest_returncode"])
+
+
+def _run(path: str, dir: str, judge: str | None, extra: list[str]) -> dict:
+    """Capture and print what `run` prints; the caller decides the exit code."""
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
         # pytest finds the rootdir from anywhere; a second store here would
@@ -715,7 +742,7 @@ def run(ctx: typer.Context,
     # A committed report.json lets a CI `gate` pass on an old verdict; an
     # ignored baseline or rejected/ never reaches CI or teammates.
     _warn_ignore_problems(dir)
-    _exit_if_incomplete(result["report"], result["pytest_returncode"])
+    return result
 
 
 def _exit_if_incomplete(report: dict, pytest_returncode: int = 0) -> None:
@@ -770,11 +797,42 @@ def _print_diff(it: dict, max_lines: int) -> None:
     if max_lines <= 0 or len(lines) <= max_lines:
         console.print(escape(diff))
         return
+    cmd = escape(shellquote.command('review', [it['name']]) or 'nightward review')
     console.print(escape("\n".join(lines[:max_lines])))
     console.print(f"[dim]... {len(lines) - max_lines:,} more diff line(s) - see all with "
-                  f"`{escape(shellquote.command('review', [it['name']]) or '')} "
-                  f"--max-lines 0`[/dim]",
+                  f"`{cmd} --max-lines 0`, or what moved where with `{cmd} --summary`[/dim]",
                   soft_wrap=True)
+
+
+_SUMMARY_PATHS = 30   # per behavior; the rest is counted
+
+
+def _print_change_summary(it: dict, baseline, pending, max_lines: int) -> None:
+    """What moved where, per path (`review --summary`); the diff when nothing
+    path-level differs (e.g. a payload a standing rejection holds)."""
+    from .core import summary
+    old, new = baseline.get(it["name"]), pending.get(it["name"])
+    if old is not None and new is not None:
+        rows = [(s.path, f"{s.changed}/{s.total} changed" if s.total > 1 else "",
+                 summary.change_line(s)) for s in summary.changes(old.payload, new.payload)]
+    elif old is not None or new is not None:
+        b = new if new is not None else old
+        if new is None:
+            console.print("[dim]removed; it was:[/dim]")
+        rows = [(path, "", summary.distribution_line(values))
+                for path, values in summary.distribution(b.payload)]
+    else:
+        rows = []
+    if not rows:
+        _print_diff(it, max_lines)
+        return
+    for path, count, line in rows[:_SUMMARY_PATHS]:
+        count = f"  [dim]{escape(count)}[/dim]" if count else ""
+        console.print(f"  [cyan]{escape(path)}[/cyan]{count}  {escape(line)}", soft_wrap=True)
+    if len(rows) > _SUMMARY_PATHS:
+        cmd = escape(shellquote.command("review", [it["name"]]) or "nightward review")
+        console.print(f"  [dim]... {len(rows) - _SUMMARY_PATHS} more path(s) - the full "
+                      f"diff: `{cmd} --max-lines 0`[/dim]", soft_wrap=True)
 
 
 @app.command()
@@ -783,6 +841,10 @@ def review(names: list[str] | None = NAMES_ARG,
            group: list[str] | None = GROUP_OPT,
            max_lines: int = typer.Option(60, "--max-lines",
                                          help="Diff lines shown per behavior; 0 = all"),
+           summary: bool = typer.Option(
+               False, "--summary",
+               help="Instead of diffs, list each changed path once with its old -> new "
+                    "values counted (list indices folded into [*])"),
            dir: str = typer.Option(DEFAULT_DIR)):
     """Show the blast radius with diffs, plus what the judge ruled SAME."""
     store = _existing_store(dir)
@@ -791,10 +853,20 @@ def review(names: list[str] | None = NAMES_ARG,
         # Its diffs compare inputs that are no longer on disk - don't show them.
         console.print(STALE_MESSAGE)
         raise typer.Exit(1)
+    if summary:
+        # Not stale: these are exactly the payloads the report compared.
+        baseline, pending = store.load_baseline(), store.load_pending()
+
+        def show(it: dict) -> None:
+            _print_change_summary(it, baseline, pending, max_lines)
+    else:
+        def show(it: dict) -> None:
+            _print_diff(it, max_lines)
     if report.get("incomplete"):
         err_console.print(f"[yellow]warning:[/yellow] capture incomplete: "
                           f"{_incomplete_text(report['incomplete'])}")
     _print_scrub_rules(report.get("scrub_rules") or [])
+    _print_env_mismatch(report)
     blast = report.get("blast_radius", {})
     judged_same = report.get("judged_same") or []
     candidates = {it["name"]: g for g, items in blast.items() for it in items}
@@ -827,7 +899,7 @@ def review(names: list[str] | None = NAMES_ARG,
                 console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}"
                               f"{_REPLAYED if it.get('judge_replayed') else ''}: "
                               f"{escape(it.get('judge_reason', ''))}[/dim]")
-            _print_diff(it, max_lines)
+            show(it)
     if outside:
         # A scoped review covers only what it showed (R3-WEB-01).
         console.print(f"\n[yellow]{len(outside)} other unapproved change(s) outside this "
@@ -843,7 +915,7 @@ def review(names: list[str] | None = NAMES_ARG,
                           f"[dim]{escape(it.get('judge_model', ''))}"
                           f"{_REPLAYED if it.get('judge_replayed') else ''}: "
                           f"{escape(it.get('judge_reason', ''))}[/dim]")
-            _print_diff(it, max_lines)
+            show(it)
 
 
 # A model's ruling replayed from the committed ledger was not made this run:
@@ -1244,6 +1316,13 @@ def doctor(names: list[str] | None = NAMES_ARG,
                       "normalize), or mask it.", soft_wrap=True)
 
 
+def _gate_run(dir: str) -> dict:
+    """`gate --run`: the capture `run .` makes, with the judge `run` would pick."""
+    result = _run(".", dir, None, [])
+    console.print()
+    return {"report": result["report"], "pytest_returncode": result["pytest_returncode"]}
+
+
 @app.command()
 @handle_errors
 def gate(dir: str = typer.Option(DEFAULT_DIR),
@@ -1251,14 +1330,24 @@ def gate(dir: str = typer.Option(DEFAULT_DIR),
              False, "--allow-not-run",
              help="Pass a partial boundary: approved behaviors whose test the run "
                   "deselected (-k/-m) are not checked. Only for a deliberately narrowed "
-                  "CI job whose full run happens elsewhere")):
+                  "CI job whose full run happens elsewhere"),
+         run_first: bool = typer.Option(
+             False, "--run",
+             help="Run the tests and capture first (like `nightward run .`), then gate "
+                  "on that fresh verdict instead of the last run's")):
     """Exit with the verdict of the last run (for CI / agent loops).
 
     0: boundary intact (or partial, with --allow-not-run). 1: breached, partial
     (behaviors not checked), stale (baseline, capture or rejections changed since the
     report) or incomplete (capture tests failed). 2: no store, no report (no
     run yet, or the last run aborted) or another error. Only 0 is a pass.
+
+    --run captures first (`nightward run .`), so the verdict covers the code as it
+    is now, not as it was at the last run.
     """
+    if run_first:
+        _existing_store(dir)   # gate never creates a store, --run or not
+        _exit_if_incomplete(**_gate_run(dir))
     store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):
@@ -1287,6 +1376,7 @@ def gate(dir: str = typer.Option(DEFAULT_DIR),
         raise typer.Exit(1)
     console.print(f"[red]boundary breached[/red] ({report.get('unapproved', 0)} "
                   f"unapproved){as_of}")
+    _print_env_mismatch(report)
     raise typer.Exit(1)
 
 
@@ -1383,6 +1473,7 @@ def _print_status(payload: dict) -> None:
                       f"{escape(_names_text(same))} - audit with `nightward review`[/dim]",
                       soft_wrap=True)
     _print_scrub_rules(payload.get("scrub_rules") or [])
+    _print_env_mismatch(payload)
     console.print(f"[dim]{escape(_as_of(payload.get('generated_at')))}[/dim]")
 
 

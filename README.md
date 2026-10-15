@@ -70,7 +70,9 @@ def user_login(username):
     return {"user": username, "status": "ok", "roles": ["member"]}
 ```
 
-`test_app.py` writes no expected values. It captures what the code returns:
+`test_app.py` writes no expected values. It captures what the code returns
+(for anything bigger than this, shape the payload so a human can review it:
+[payload design](https://github.com/LunenLabs/nightward/blob/main/docs/payload-design.md)):
 
 ```python
 from app import checkout_total, user_login
@@ -203,11 +205,11 @@ workflow with the dashboard artifact is in the
 |---|---|
 | `nightward init` | create the store and the `.gitignore` rules (once per repo, and again after upgrading) |
 | `nightward run [PATH] [-- PYTEST ARGS]` | run pytest, capture, compute the blast radius. Exit 1 if a capture test failed (the run is incomplete) |
-| `nightward review [NAME...] [--group G]` | show the diffs. Only `review` and `view` mark changes as reviewed |
+| `nightward review [NAME...] [--group G] [--summary]` | show the diffs, or with `--summary` each changed path once with its old -> new values counted. Only `review` and `view` mark changes as reviewed |
 | `nightward approve --all` / `NAME...` / `--group G` | promote reviewed NEW/CHANGED behaviors into the baseline. Bulk approval never removes anything |
 | `nightward approve --remove NAME...` / `--remove-group G` | drop REMOVED behaviors: removal is always this explicit act |
 | `nightward reject NAME` | confirm a reviewed change as a regression. The gate stays breached |
-| `nightward gate [--allow-not-run]` | the verdict as an exit code: 0 intact; 1 breached, partial, stale or incomplete; 2 no store, no report, or an error |
+| `nightward gate [--allow-not-run] [--run]` | the verdict as an exit code: 0 intact; 1 breached, partial, stale or incomplete; 2 no store, no report, or an error. `--run` captures first, so the verdict covers the code as it is now |
 | `nightward status [--json]` | the verdict with the change list. `--json` is the machine signal |
 | `nightward doctor [NAME...]` | explain what moved, and suggest scrub rules only for values that are volatile by evidence |
 | `nightward report` | the verdict from a capture that `pytest --nightward-record` already wrote in your CI job |
@@ -216,7 +218,7 @@ workflow with the dashboard artifact is in the
 | `nightward --version` | the installed version |
 
 `gate` and `status` report the **last run**, so run `nightward run` again after
-every code edit. The full reference (removals, stale reports, merge conflicts,
+every code edit (or use `nightward gate --run`). The full reference (removals, stale reports, merge conflicts,
 locking, and using the plugin inside an existing pytest job) is in
 [docs/commands.md](https://github.com/LunenLabs/nightward/blob/main/docs/commands.md).
 
@@ -300,6 +302,9 @@ before you rely on a green gate.
 - [Commands and workflow](https://github.com/LunenLabs/nightward/blob/main/docs/commands.md):
   every command, removals, stale reports, merge conflicts, and the plugin in an
   existing pytest job
+- [Designing payloads a human can review](https://github.com/LunenLabs/nightward/blob/main/docs/payload-design.md):
+  aggregate by cause, record each input once, keep the machine out - read it before
+  your first capture
 - [What nightward normalizes](https://github.com/LunenLabs/nightward/blob/main/docs/normalization.md):
   scrubbing, custom scrub rules, names, non-JSON values, and `doctor`
 - [Semantic judge](https://github.com/LunenLabs/nightward/blob/main/docs/semantic-judge.md)

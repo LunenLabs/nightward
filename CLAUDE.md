@@ -200,7 +200,17 @@ Examples: `example/test_app.py` (quickstart), `examples/petshop/test_shop.py`
   a direct `pytest --nightward-record`, a run killed before its report), the
   report is stale: `gate`/`review` exit 1, `status`/MCP report
   `"boundary": "stale"`, the dashboard shows a stale banner. A report without
-  digests counts as stale. Code edits are not detected - re-run for a verdict.
+  digests counts as stale. Code edits are not detected - re-run for a verdict
+  (`gate --run` = `run .` + gate in one command).
+- **The capture environment is a hint, never a verdict.** The plugin stamps
+  `Behavior.env` (`{os, python}`) on every capture; approve copies it into the
+  baseline. Like `source`, it is outside the fingerprint, equality and change
+  tokens. `runner.env_mismatch` lists CHANGED behaviors approved on another
+  OS/Python -> report/status `env_mismatch` and a note in run/review/gate/status.
+  Don't let it soften a breach: an OS-dependent payload is still a change.
+- **`review --summary` is a review.** `core/summary.py` folds list indices and
+  counts old -> new values per path; it marks reviewed like a capped diff (D19).
+  Display only - never feed it into fingerprints or verdicts.
 - **A failed flush never replays the old capture.** `execute_run` passes a fresh
   `--nightward-run-id`; the plugin writes it into `run_meta.json` only after
   `pending/` was replaced. No matching token -> `NightwardError` and `report.json`

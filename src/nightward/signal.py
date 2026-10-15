@@ -17,7 +17,8 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
     if report is None:
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
                 "not_run": [], "narrowed": False, "stale": False, "incomplete": None,
-                "generated_at": None, "judge": None, "scrub_rules": []}
+                "generated_at": None, "judge": None, "scrub_rules": [],
+                "env_mismatch": None}
 
     # Every field of a change except its (possibly large) diff and its review
     # token, so judged rulings (judged / judge_model / judge_reason) and
@@ -55,4 +56,8 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
         # custom scrub rules active in the last run: {rule (where it was
         # registered), values, behaviors, placeholder} (R5-POL-03)
         "scrub_rules": list(report.get("scrub_rules") or []),
+        # changed behaviors whose baseline was approved on another OS/Python:
+        # {"capture": env, "behaviors": {name: env}} or None - suspect the
+        # environment before the code
+        "env_mismatch": report.get("env_mismatch"),
     }

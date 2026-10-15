@@ -36,7 +36,10 @@ Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`nam
 the payload is a standing rejection), `not_run` (`{name, group}` of approved behaviors
 whose test was deselected) and `narrowed`, `judged_same`, `stale`, `incomplete`
 (`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, `scrub_rules` (the
-custom scrub rules of the last run and what they replaced), and `store` (the
+custom scrub rules of the last run and what they replaced), `env_mismatch`
+(`{"capture": {os, python}, "behaviors": {name: {os, python}}}` for changed
+behaviors approved on another OS or Python, else null - a hint for the human,
+never a verdict), and `store` (the
 absolute path of the store the verdict comes from). `nightward_run` also returns
 `path` (what pytest ran), so a loop driver can check both. `boundary` is one of:
 
