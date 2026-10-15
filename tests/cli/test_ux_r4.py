@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-APP_JS = Path(__file__).parents[1] / "src" / "nightward" / "view" / "assets" / "app.js"
+APP_JS = Path(__file__).parents[2] / "src" / "nightward" / "view" / "assets" / "app.js"
 
 
 def node_eval(js_expr):
@@ -84,7 +84,7 @@ def test_group_without_new_or_changed_has_no_chip():
 
 # ---- R4-FIN-05: onboarding says to commit the decisions, not just the baseline --
 
-README = Path(__file__).parents[1] / "README.md"
+README = Path(__file__).parents[2] / "README.md"
 
 
 def cli(*args, cwd):

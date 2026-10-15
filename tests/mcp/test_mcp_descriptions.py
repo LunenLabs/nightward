@@ -28,7 +28,7 @@ def test_run_tool_description_names_every_returned_field(tmp_path):
 
 
 def test_readme_lists_every_boundary_value():
-    readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+    readme = (Path(__file__).parents[2] / "README.md").read_text(encoding="utf-8")
     section = readme.split("## AI agents", 1)[1].split("\n## ", 1)[0]
     for value in BOUNDARIES:
         assert f"`{value}`" in section, value

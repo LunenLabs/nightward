@@ -5,7 +5,7 @@ import runpy
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_demo_site_names_no_local_path(tmp_path, monkeypatch):

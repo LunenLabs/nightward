@@ -17,7 +17,7 @@ from nightward.runner import recompute
 from nightward.shellquote import SHELLS, quote
 from nightward.view import collect_data
 
-APP_JS = Path(__file__).parents[1] / "src" / "nightward" / "view" / "assets" / "app.js"
+APP_JS = Path(__file__).parents[2] / "src" / "nightward" / "view" / "assets" / "app.js"
 
 
 def cli(*args, cwd):

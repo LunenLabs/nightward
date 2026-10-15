@@ -32,6 +32,8 @@ behavior; every such change is listed under "Upgrading").
   the `persona:*` judges are described as stand-ins that don't forgive rewording.
 - The test suite runs in parallel (`pytest -q -n auto`) in CI and in
   CONTRIBUTING: about 5 minutes instead of 15.
+- Tests are grouped by area (`tests/core`, `tests/gate`, `tests/judge`, ...) instead
+  of by the review round that found them.
 
 ## [0.3.3] - 2026-10-15
 
