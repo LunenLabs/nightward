@@ -2,7 +2,7 @@
 
 **A regression gate for AI-made changes. Your AI agent can run the gate; opening it takes a human-approved baseline diff.**
 
-![15-second demo: an AI fixes one line, every test passes, nightward shows three customer-facing behaviors moved, the gate stops CI, and only a human can approve](https://raw.githubusercontent.com/LunenLabs/nightward/main/docs/assets/demo.gif)
+![15-second demo: an AI fixes one line, every test passes, nightward shows three customer-facing behaviors moved, the gate stops CI, and opening it takes a human-approved baseline diff](https://raw.githubusercontent.com/LunenLabs/nightward/main/docs/assets/demo.gif)
 
 When an AI agent fixes A, it often moves B, C and D too, and the test suite stays
 green because no test pins down B, C or D. You find the side effects later, fix
