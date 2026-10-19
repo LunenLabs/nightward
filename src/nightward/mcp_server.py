@@ -88,7 +88,8 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
     before pytest is stopped (the store is then left untouched and the last
     report invalidated).
     Returns {boundary, unapproved, changes: [{name, kind, group, judged,
-    judge_model, judge_reason, judge_replayed, rejected, rejected_by}], judged_same,
+    judge_model, judge_reason, judge_replayed, rejected, rejected_by, depth,
+    ask_human}], judged_same,
     not_run (approved behaviors whose test was deselected: not checked), narrowed,
     stale, incomplete, generated_at, judge, scrub_rules (custom scrub rules of the run
     and what they replaced), env_mismatch (changed behaviors approved on another OS or

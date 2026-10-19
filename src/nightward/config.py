@@ -98,3 +98,61 @@ def capture_path(store_dir: str | Path = ".nightward") -> str | None:
 def project_judge(store_dir: str | Path = ".nightward") -> str | None:
     """The committed judge spec for the store at `store_dir`, or None."""
     return judge_setting(store_dir)[0]
+
+
+# ---- review depth ---------------------------------------------------------------
+# How much a human reads, and when they are interrupted - never whether they
+# decide: no depth approves anything (docs/review-depth.md).
+DEPTHS = ("brief", "light", "standard", "detailed", "exhaustive")
+DEFAULT_DEPTH = "standard"
+# When the agent hands a change to a human (status --json / MCP `ask_human`).
+ASK_HUMAN = {"exhaustive": "now", "detailed": "now", "standard": "now",
+             "light": "end_of_task", "brief": "at_pr"}
+_NEW_OR_REMOVED_FLOOR = "standard"   # a first capture or a shrinking baseline
+
+
+class ReviewDepths:
+    """`[tool.nightward.review]`: a default depth and per-group depths."""
+
+    def __init__(self, default: str = DEFAULT_DEPTH, groups: dict[str, str] | None = None):
+        self.default = default
+        self.groups = groups or {}
+
+    def of(self, group: str | None, kind: str | None = None, *,
+           at_least: str | None = None) -> str:
+        """The depth a change of `kind` in `group` is reviewed at. NEW and
+        REMOVED never go below standard; `at_least` raises (never lowers) it."""
+        depth = self.groups.get(group or "(ungrouped)", self.default)
+        floors = [depth]
+        if kind in ("NEW", "REMOVED"):
+            floors.append(_NEW_OR_REMOVED_FLOOR)
+        if at_least:
+            floors.append(at_least)
+        return max(floors, key=DEPTHS.index)
+
+
+def _depth(value, where: str) -> str:
+    if value not in DEPTHS:
+        raise NightwardError(f"{where} must be one of {', '.join(DEPTHS)} "
+                             f"(got {value!r})")
+    return value
+
+
+def review_depths(store_dir: str | Path = ".nightward") -> ReviewDepths:
+    """The committed review depths for the store at `store_dir` (D22: the
+    pyproject.toml nearest the store, like the judge)."""
+    table, path = _settings(store_dir)
+    review = table.get("review")
+    if review is None:
+        return ReviewDepths()
+    if not isinstance(review, dict):
+        raise NightwardError(f"{path}: [tool.nightward.review] must be a table")
+    default = _depth(review.get("default", DEFAULT_DEPTH),
+                     f"{path}: [tool.nightward.review] default")
+    groups = review.get("groups", {})
+    if not isinstance(groups, dict):
+        raise NightwardError(f"{path}: [tool.nightward.review.groups] must be a table of "
+                             f'group = "depth"')
+    return ReviewDepths(default, {
+        g: _depth(d, f"{path}: [tool.nightward.review.groups] {g!r}")
+        for g, d in groups.items()})

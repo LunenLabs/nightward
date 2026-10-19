@@ -453,6 +453,14 @@ function renderCard(it) {
       title: "This exact payload is a standing rejection" + (it.rejected_by ? " by " + it.rejected_by : "") + " (.nightward/rejected/) - approving it overrides that decision",
     }));
   }
+  if (it.depth && it.depth !== "standard") {
+    head.appendChild(el("span", {
+      cls: "badge badge-depth",
+      text: it.depth,
+      title: "Review depth (pyproject.toml [tool.nightward.review]) - how much `nightward review` shows" +
+        (it.depth === "exhaustive" ? "; approve it by name, --all and --group leave it" : ""),
+    }));
+  }
   head.appendChild(el("span", { cls: "card-name", text: it.name }));
   card.appendChild(head);
 

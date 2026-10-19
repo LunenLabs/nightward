@@ -9,6 +9,16 @@ behavior; every such change is listed under "Upgrading").
 
 ### Added
 
+- **Review depth (`[tool.nightward.review]`).** Per group, the humans who own the
+  project set how much `review` shows and when the agent hands an intended change
+  over: `exhaustive` and `detailed` show whole diffs, `standard` (the default) is
+  today's review, `light` shows the summary, `brief` one line per group. `status
+  --json` and MCP carry each change's `depth` and `ask_human` (`now`,
+  `end_of_task`, `at_pr`), and the gate-loop skill follows it. `approve --all` and
+  `--group` leave `exhaustive` behaviors to one name each. No depth approves
+  anything, NEW and REMOVED are shown at least at `standard`, and `review --depth`
+  only raises. See [docs/review-depth.md](docs/review-depth.md).
+
 - **`@capture`: a test's return value is its behavior.** `from nightward import
   capture`; `@capture(group="billing")` on a test that `return`s a value captures it
   under the test's name (or `name=`), and a parametrized case keeps its id

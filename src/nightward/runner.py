@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from .config import ASK_HUMAN, review_depths
 from .core.baseline import Store, change_token, digest
 from .core.behavior import capture_env
 from .core.blast import aggregate
@@ -122,6 +123,13 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
     pending = store.load_pending() if pending is None else pending
     changes = classify(store, baseline, pending, judge=judge)
     report = aggregate(changes)
+    # How each change is reviewed, and when the agent hands it to a human: the
+    # committed depths (docs/review-depth.md). The verdict doesn't depend on it.
+    depths = review_depths(store.root)
+    for g, items in report["blast_radius"].items():
+        for it in items:
+            it["depth"] = depths.of(g, it["kind"])
+            it["ask_human"] = ASK_HUMAN[it["depth"]]
     meta = store.load_run_meta()
     failed, errors = meta.get("failed", 0), meta.get("errors", 0)
     report["incomplete"] = {"failed": failed, "errors": errors} if failed or errors else None

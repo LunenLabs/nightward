@@ -33,7 +33,8 @@ in `git status`.
 Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,
 `kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
 `judge_replayed` when that ruling came from the ledger; `rejected`, `rejected_by` when
-the payload is a standing rejection), `not_run` (`{name, group}` of approved behaviors
+the payload is a standing rejection; `depth` and `ask_human`, when to hand an intended
+change to a human: [review depth](review-depth.md)), `not_run` (`{name, group}` of approved behaviors
 whose test was deselected) and `narrowed`, `judged_same`, `stale`, `incomplete`
 (`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, `scrub_rules` (the
 custom scrub rules of the last run and what they replaced), `env_mismatch`

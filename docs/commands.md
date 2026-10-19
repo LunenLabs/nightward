@@ -23,7 +23,10 @@ nightward review  show changed behaviors with diffs; scope with `review NAME...`
                   A list of up to 20 items also shows its order (`top  order: a, b,
                   c`), and a list whose items only moved reads `reordered: a, b ->
                   b, a` instead of a row per field: a ranking stays reviewable.
-                  It marks what it showed as reviewed, like a capped diff
+                  It marks what it showed as reviewed, like a capped diff.
+                  Each group is shown at its review depth (docs/review-depth.md:
+                  brief = one line, light = the summary, standard = capped diffs,
+                  detailed/exhaustive = whole diffs); `--depth D` raises it once
 nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
                   for values that are volatile by evidence (normalization.md); takes
                   the same NAME... / --group scope as review
@@ -35,6 +38,8 @@ nightward approve promote pending behavior(s) into the baseline
                   for groups too big to list on one command line; `approve --remove
                   NAME...` and `--remove-group G` drop exactly those REMOVED behaviors -
                   removal is always this explicit human act on what review showed).
+                  `--all` and `--group` leave behaviors of an `exhaustive` group
+                  (review-depth.md) and name them: approve those one name at a time.
                   It promotes only changes a human was shown, exactly as shown,
                   with its diff by `review` or `view` (`run` lists names only, so it
                   counts as no review): a scoped `review --group G`

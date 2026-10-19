@@ -392,6 +392,9 @@ before you rely on a green gate.
   your first capture
 - [What nightward normalizes](https://github.com/LunenLabs/nightward/blob/main/docs/normalization.md):
   scrubbing, custom scrub rules, names, non-JSON values, and `doctor`
+- [Review depth](https://github.com/LunenLabs/nightward/blob/main/docs/review-depth.md):
+  per group, how much a review shows and when the agent asks - never whether a
+  human approves
 - [Semantic judge](https://github.com/LunenLabs/nightward/blob/main/docs/semantic-judge.md)
 - [AI agents (MCP)](https://github.com/LunenLabs/nightward/blob/main/docs/mcp.md)
 - [Dashboard](https://github.com/LunenLabs/nightward/blob/main/docs/dashboard.md)

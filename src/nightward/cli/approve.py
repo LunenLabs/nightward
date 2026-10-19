@@ -4,6 +4,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
+from ..config import review_depths
 from ..core.baseline import Store, change_token
 from ..core.diff import NOT_RUN, REMOVED, UNCHANGED
 from ..core.lock import store_lock
@@ -278,13 +279,21 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
             targets = [n for n in names if n not in held and n not in rejected]
     else:
         raise NightwardError("specify a behavior name, --group or --all")
+    kept_exhaustive: list[str] = []
+    if all_ or groups:
+        # An exhaustive group is approved one name at a time, after reading it
+        # (docs/review-depth.md); a bulk approval leaves it, like a rejection.
+        depths = review_depths(store.root)
+        kept_exhaustive = [n for n in targets if depths.of(
+            (pending.get(n) or baseline[n]).group) == "exhaustive"]
+        targets = [n for n in targets if n not in kept_exhaustive]
     _check_reviewed(store, targets, baseline, pending, "approve")
     if all_:
         refreshed = _backfill_sources(store, baseline, pending)
         if refreshed:
             console.print(f"[dim]refreshed the recorded test of {refreshed} unchanged "
                           f"behavior(s)[/dim]")
-    if not targets and not held and not kept_rejected:
+    if not targets and not held and not kept_rejected and not kept_exhaustive:
         console.print("nothing to approve in that group" if groups
                       else "nothing to approve - boundary already intact")
         return
@@ -306,6 +315,11 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
         console.print(f"[yellow]kept (rejected)[/yellow] {len(kept_rejected)} behavior(s) "
                       f"rejected as regressions: {escape(', '.join(kept_rejected))}\n  fix the "
                       f"code, or override with `nightward approve <name>`.", soft_wrap=True)
+    if kept_exhaustive:
+        console.print(f"[yellow]kept (exhaustive)[/yellow] {len(kept_exhaustive)} behavior(s) "
+                      f"in a group reviewed exhaustively: {escape(_shown(kept_exhaustive))}\n"
+                      f"  approve each by name after reading it: `nightward approve <name>`.",
+                      soft_wrap=True)
     if held:
         _print_kept_removals(held, baseline, store.load_run_meta())
     _print_summary(recompute(store, judge=judge))
