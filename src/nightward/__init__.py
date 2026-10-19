@@ -19,7 +19,8 @@ def capture(fn=None, *, name: str | None = None, group: str | None = None,
     The name is the test's name unless `name=` is given; a parametrized case keeps
     its id (`test_tax[low]`, or `tax[low]` with name="tax"). semantic and scrub mean
     what they mean for the `behavior` fixture. A test that returns None fails: it
-    almost always forgot its `return`. Async tests use the fixture instead.
+    almost always forgot its `return`. Async tests work under an async plugin
+    (pytest-asyncio, anyio); async generator tests are refused.
     """
     from .pytest_plugin import capture_mark  # pytest only where tests run
     return capture_mark(fn, name=name, group=group, semantic=semantic, scrub=scrub)

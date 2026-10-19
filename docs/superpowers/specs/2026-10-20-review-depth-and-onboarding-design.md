@@ -1,7 +1,7 @@
 # Review depth and domain onboarding: fewer, better human decisions
 
-Status: **proposal.** The direction is the maintainer's (2026-10-20). The open
-questions at the end need an answer before any code.
+Status: **decided** (2026-10-20). The direction and the answers to the questions
+at the end are the maintainer's.
 
 Evidence: the PetTracker dogfood (2026-10-19/20, a FastAPI backend, 11
 behaviors). The first capture review surfaced 5 latent defects. All 5 were found
@@ -175,13 +175,11 @@ the defects, approve. The agent does the rest.
   claiming more, compare it against a plain LLM review of the same code without
   captures.
 
-## Open questions
+## Decisions (2026-10-20)
 
-1. **Depth names.** CLI values in English (`exhaustive / detailed / standard /
-   light / brief`) with the Korean labels in docs, or other names?
-2. **Floors.** Is "NEW and REMOVED get at least `standard`" right, or should
-   `brief` mean brief even for them?
-3. **Map location.** `docs/nightward-domain/` (recommended), or something else?
-4. **Order of work.** Recommended: the dogfood fixes plan first (it unblocks async
-   projects), then Part 1 (depth), then Part 2 (onboard skill), because the
-   rule-in-review display needs the map.
+1. **Depth names:** the CLI values are English (`exhaustive / detailed / standard /
+   light / brief`); the Korean labels appear in docs only.
+2. **Floors:** NEW and REMOVED get at least `standard`.
+3. **Map location:** `docs/nightward-domain/`.
+4. **Order of work:** the dogfood fixes plan (B1 → B3), then Part 1 (depth), then
+   Part 2 (onboard skill).

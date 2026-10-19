@@ -14,8 +14,10 @@ behavior; every such change is listed under "Upgrading").
   under the test's name (or `name=`), and a parametrized case keeps its id
   (`tax[low]`). Same rules as the `behavior` fixture (validated, unique, scrubbed,
   `semantic=`, `scrub=`), and the two mix in one test. A test that returns None
-  fails (a forgotten `return`), an async test and a `unittest.TestCase` method are
-  refused with guidance, and pytest's return-value warning is not raised.
+  fails (a forgotten `return`). Async tests are captured under pytest-asyncio
+  (auto or strict mode) and anyio, whose wrappers would otherwise drop the return
+  value. An async generator test and a `unittest.TestCase` method are refused with
+  guidance, and pytest's return-value warning is not raised.
 
 ### Fixed
 
