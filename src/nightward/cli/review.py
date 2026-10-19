@@ -71,16 +71,21 @@ def _print_change_summary(it: dict, baseline, pending, max_lines: int) -> None:
     from ..core import summary
     old, new = baseline.get(it["name"]), pending.get(it["name"])
     if old is not None and new is not None:
+        order, hidden = summary.order_rows(old.payload, new.payload)
         rows = [(s.path, f"{s.changed}/{s.total} changed" if s.total > 1 else "",
-                 summary.change_line(s)) for s in summary.changes(old.payload, new.payload)]
+                 summary.change_line(s)) for s in summary.changes(old.payload, new.payload)
+                if not summary.is_hidden(s.path, hidden)]
     elif old is not None or new is not None:
         b = new if new is not None else old
         if new is None:
             console.print("[dim]removed; it was:[/dim]")
+        order, _ = summary.order_rows(None, b.payload)
         rows = [(path, "", summary.distribution_line(values))
                 for path, values in summary.distribution(b.payload)]
     else:
-        rows = []
+        order, rows = [], []
+    # The order first: folding indices into [*] below drops it.
+    rows = [(path, "", line) for path, line in order] + rows
     if not rows:
         _print_diff(it, max_lines)
         return
@@ -102,7 +107,8 @@ def review(names: list[str] | None = NAMES_ARG,
            summary: bool = typer.Option(
                False, "--summary",
                help="Instead of diffs, list each changed path once with its old -> new "
-                    "values counted (list indices folded into [*])"),
+                    "values counted (list indices folded into [*]; lists of up to 20 "
+                    "items also show their order)"),
            dir: str = typer.Option(DEFAULT_DIR)):
     """Show the blast radius with diffs, plus what the judge ruled SAME."""
     store = _existing_store(dir)

@@ -120,6 +120,94 @@ def distribution(value: Any) -> list[tuple[str, Counter]]:
     return sorted(out.items(), key=lambda kv: (-sum(kv[1].values()), kv[0]))
 
 
+# ---- list order ---------------------------------------------------------------
+# Folding indices into [*] drops the order, and for a ranking the order is what
+# a reviewer has to see. Short lists get an order row; longer ones are read as
+# a diff (`--max-lines 0`).
+_ORDER_MAX = 20
+_LABEL_CHARS = 24
+
+
+def _lists(value: Any, prefix: str, out: dict[str, list]) -> None:
+    """Lists reachable through dict keys (not inside other lists: their paths
+    would fold together), by summary path."""
+    if isinstance(value, dict):
+        for k in sorted(value):
+            _lists(value[k], _child(prefix, k), out)
+    elif isinstance(value, list):
+        out[prefix or ROOT] = value
+
+
+def _label(item: Any) -> str | None:
+    """What names a list item: a scalar is itself; a dict, its first string
+    value in key order (the order the baseline file is written in)."""
+    if isinstance(item, dict):
+        text = next((v for _, v in sorted(item.items()) if isinstance(v, str)), None)
+    elif isinstance(item, list):
+        return None
+    else:
+        text = item if isinstance(item, str) else json.dumps(item)
+    if text is None:
+        return None
+    return text if len(text) <= _LABEL_CHARS else text[:_LABEL_CHARS - 3] + "..."
+
+
+def _labels(items: list) -> list[str] | None:
+    labels = [_label(i) for i in items]
+    return None if None in labels else labels
+
+
+def _old_positions(old: list, new: list) -> list[str]:
+    """Each new item as the old position it came from (#i): a reorder of items
+    with no label."""
+    free: dict[str, list[int]] = {}
+    for i, item in enumerate(old):
+        free.setdefault(json.dumps(item, sort_keys=True), []).append(i)
+    return [f"#{free[json.dumps(item, sort_keys=True)].pop(0)}" for item in new]
+
+
+def order_rows(old: Any, new: Any) -> tuple[list[tuple[str, str]], set[str]]:
+    """(path, line) rows that show the order of short lists, and the list paths
+    whose per-field rows only repeat a pure reorder (hide them: `is_hidden`).
+
+    One payload (NEW/REMOVED): `order: A, B, C`. Two: `reordered: A, B -> B, A`
+    when the same items moved, `order: ... -> ...` when the labels' order
+    changed along with values.
+    """
+    if old is None or new is None:
+        found: dict[str, list] = {}
+        _lists(new if old is None else old, "", found)
+        return ([(path, "order: " + ", ".join(labels)) for path, items in sorted(found.items())
+                 if 1 < len(items) <= _ORDER_MAX and (labels := _labels(items))], set())
+    before: dict[str, list] = {}
+    after: dict[str, list] = {}
+    _lists(old, "", before)
+    _lists(new, "", after)
+    rows, hidden = [], set()
+    for path in sorted(set(before) & set(after)):
+        o, n = before[path], after[path]
+        if not (1 < len(n) <= _ORDER_MAX and 1 < len(o) <= _ORDER_MAX):
+            continue
+        canon_o = [json.dumps(i, sort_keys=True) for i in o]
+        canon_n = [json.dumps(i, sort_keys=True) for i in n]
+        if canon_o == canon_n:
+            continue
+        lo, ln = _labels(o), _labels(n)
+        if sorted(canon_o) == sorted(canon_n):
+            if lo is None or ln is None:
+                lo, ln = [f"#{i}" for i in range(len(o))], _old_positions(o, n)
+            rows.append((path, f"reordered: {', '.join(lo)} -> {', '.join(ln)}"))
+            hidden.add(path)
+        elif lo is not None and ln is not None and lo != ln:
+            rows.append((path, f"order: {', '.join(lo)} -> {', '.join(ln)}"))
+    return rows, hidden
+
+
+def is_hidden(path: str, hidden: set[str]) -> bool:
+    """Whether a `changes()` path lies inside a list that only reordered."""
+    return any(path == h or path.startswith(f"{h}[*]") for h in hidden)
+
+
 def _counted(values: Counter, limit: int) -> str:
     shown = [v if n == 1 else f"{v} x{n}" for v, n in values.most_common(limit)]
     more = len(values) - limit

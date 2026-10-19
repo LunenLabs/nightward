@@ -28,6 +28,12 @@ behavior; every such change is listed under "Upgrading").
 
 ### Fixed
 
+- **`review --summary` shows list order.** Folding indices into `[*]` hid which
+  item came first, so a ranking couldn't be reviewed in the summary. A list of up
+  to 20 items now gets an `order:` row, and a pure reorder reads `reordered:
+  a, b -> b, a` instead of one changed row per field. Display only: fingerprints
+  and verdicts are unchanged.
+
 - **The Anthropic judge works on current models.** It no longer sends
   `temperature=0`, which current Claude models reject with a 400 (the ledger
   already makes a model's ruling repeatable by replaying it). It reads the first

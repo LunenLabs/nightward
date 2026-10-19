@@ -10,6 +10,9 @@ for real.
 task is one commit; together they are one PR. Releasing 0.3.4 afterwards is the
 maintainer's call.
 
+**Status:** done (2026-10-20). B2 takes one path, not a list: `execute_run` and
+every message are built around one path, and the dogfood needed one.
+
 **Gate before push:** `pytest -q -n auto` and `ruff check .`.
 
 ---
@@ -32,7 +35,7 @@ a coroutine function, so async plugins still recognise and run it.
 `pyproject.toml` (dev extra: `pytest-asyncio`, `anyio`), `docs/` (the
 `@capture` section).
 
-- [ ] **Failing tests first** (pytester), each asserting the captured payload:
+- [x] **Failing tests first** (pytester), each asserting the captured payload:
   - auto mode: `async def` + `@capture` returns a dict
   - strict mode: `@pytest.mark.asyncio` + `@capture`
   - anyio: `@pytest.mark.anyio` + `@capture`
@@ -41,21 +44,21 @@ a coroutine function, so async plugins still recognise and run it.
   - async generator: still refused, with a clear message
   - no async plugin installed: pytest's own "async def functions are not natively
     supported" outcome, with no nightward traceback
-- [ ] In `pytest_collection_modifyitems` (`tryfirst=True`), for each item with the
+- [x] In `pytest_collection_modifyitems` (`tryfirst=True`), for each item with the
   `nightward_capture` marker whose `obj` is a coroutine function, replace
   `item.obj` with a `functools.wraps` async wrapper. The wrapper awaits the
   original and stores the result in `item.stash[_RETURNED]`. Build it in a
   factory function, because a closure over the loop variable captures the wrong
   item (this happened in the spike).
-- [ ] In `pytest_pyfunc_call`, sync tests keep today's `keep_return` path. For
+- [x] In `pytest_pyfunc_call`, sync tests keep today's `keep_return` path. For
   stashed async items, don't rewrap: read `item.stash[_RETURNED]` after `yield`,
   then share the "None" check, the naming and `rec.add` with the sync path (one
   helper).
-- [ ] `rec.begin(nodeid)` for tests without the `behavior` fixture: confirm it
+- [x] `rec.begin(nodeid)` for tests without the `behavior` fixture: confirm it
   still runs before the coroutine body (with a test that also calls `behavior`).
-- [ ] Remove the now-dead "can't capture an async test" message, but keep the
+- [x] Remove the now-dead "can't capture an async test" message, but keep the
   async-generator refusal.
-- [ ] Docs: `@capture` works on async tests (pytest-asyncio, anyio).
+- [x] Docs: `@capture` works on async tests (pytest-asyncio, anyio).
 
 ## B2. A committed default test path (`gate --run`, `run`, MCP)
 
@@ -71,7 +74,7 @@ config next to `judge`:
 
 ```toml
 [tool.nightward]
-path = "tests/nightward"        # or a list of paths
+path = "tests/nightward"        # one path (a list was not needed in the dogfood)
 ```
 
 - An explicit argument wins (`run PATH`, `gate --run --path PATH`, MCP
@@ -87,18 +90,18 @@ path = "tests/nightward"        # or a list of paths
 (`path` default: empty, meaning use the config), `plugins/nightward/skills/gate-loop/SKILL.md`
 (`nightward run` without `.`), README Commands, `docs/mcp.md`.
 
-- [ ] Failing tests: config string, list, and a wrong type (`NightwardError`
+- [x] Failing tests: config string, list, and a wrong type (`NightwardError`
   with the file path); `run` with no argument uses the config; `gate --run`
   uses it; `gate --run --path X` overrides it; MCP `run_tool()` uses it; paths
   resolve from the pyproject dir when the cwd is a subdirectory; no config
   gives `"."` (unchanged).
-- [ ] `config.capture_paths(store_dir) -> list[str] | None`, read from the
+- [x] `config.capture_paths(store_dir) -> list[str] | None`, read from the
   pyproject.toml nearest the store (same lookup as `judge`).
-- [ ] Wire it through `_run`, `_gate_run` (new `--path` option, repeatable),
+- [x] Wire it through `_run`, `_gate_run` (new `--path` option, repeatable),
   `run_tool` (`path: str | None = None`), and `execute_run` (accepts a list).
-- [ ] `action.yml`: empty `path` means "let nightward decide"; keep `"."` for
+- [x] `action.yml`: empty `path` means "let nightward decide"; keep `"."` for
   users with no config (test it in the action job).
-- [ ] Update the skill and docs.
+- [x] Update the skill and docs.
 
 ## B3. `review --summary` hides list order
 
@@ -125,16 +128,16 @@ as the module docstring requires).** For each list of 20 items or fewer:
 **Files:** `src/nightward/core/summary.py`, `src/nightward/cli/review.py`
 (`--summary` help text), tests next to `tests/cli/test_review_summary_env.py`.
 
-- [ ] Failing tests:
+- [x] Failing tests:
   - a NEW ranking shows `order:`
   - a pure swap shows `reordered:` and no `[*]` field rows
   - a changed value plus a reorder shows both
   - a list of 21+ items is unchanged from today
   - a list of dicts with no string field uses `#i`
   - a list of scalars labels by value
-- [ ] Implement in `summary.py` (a new `order_rows(old, new)`), and render it in
+- [x] Implement in `summary.py` (a new `order_rows(old, new)`), and render it in
   `_print_change_summary` before the path rows.
-- [ ] Re-run on the dogfood payload (`pt.walker_search`) and paste the output
+- [x] Re-run on the dogfood payload (`pt.walker_search`) and paste the output
   into the PR description.
 
 ---

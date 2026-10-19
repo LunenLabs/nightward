@@ -20,6 +20,9 @@ nightward review  show changed behaviors with diffs; scope with `review NAME...`
                   `--summary` lists each changed path once instead, list indices
                   folded (`cases[*].correct  78/80 changed  "ERR" -> 41 distinct
                   values: ...`); NEW/REMOVED behaviors get their value distribution.
+                  A list of up to 20 items also shows its order (`top  order: a, b,
+                  c`), and a list whose items only moved reads `reordered: a, b ->
+                  b, a` instead of a row per field: a ranking stays reviewable.
                   It marks what it showed as reviewed, like a capped diff
 nightward doctor  explain what moved in CHANGED behaviors; suggest scrub rules only
                   for values that are volatile by evidence (normalization.md); takes
