@@ -19,6 +19,13 @@ behavior; every such change is listed under "Upgrading").
   value. An async generator test and a `unittest.TestCase` method are refused with
   guidance, and pytest's return-value warning is not raised.
 
+- **`[tool.nightward] path`: the committed capture suite.** `nightward run`
+  without a path, `gate --run` and MCP `nightward_run` without `path` run it
+  (relative to its pyproject.toml), so an agent loop runs the captures instead of
+  a whole suite that can take minutes; `gate --run --path P` and an explicit path
+  still win. The GitHub Action's `path` input now defaults to empty, which means
+  the same. Without the setting everything runs "." as before.
+
 ### Fixed
 
 - **The Anthropic judge works on current models.** It no longer sends

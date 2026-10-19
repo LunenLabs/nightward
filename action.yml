@@ -14,8 +14,10 @@ branding:
 
 inputs:
   path:
-    description: Test path passed to pytest.
-    default: "."
+    description: >-
+      Test path passed to pytest. Empty: the project's committed capture suite
+      ([tool.nightward] path in pyproject.toml), else ".".
+    default: ""
   dir:
     description: The nightward store (the directory with the committed baseline/).
     default: ".nightward"
@@ -78,10 +80,12 @@ runs:
           line="${line%$'\r'}"
           [ -n "$line" ] && extra+=("$line")
         done <<< "$NW_ARGS"
+        path=()
+        [ -n "$NW_PATH" ] && path=("$NW_PATH")
         if [ ${#extra[@]} -gt 0 ]; then
-          nightward run "$NW_PATH" --dir "$NW_DIR" -- "${extra[@]}" || true
+          nightward run "${path[@]}" --dir "$NW_DIR" -- "${extra[@]}" || true
         else
-          nightward run "$NW_PATH" --dir "$NW_DIR" || true
+          nightward run "${path[@]}" --dir "$NW_DIR" || true
         fi
         # The verdict comes from `gate` below; a failing capture test makes the
         # run incomplete, which gate also refuses.

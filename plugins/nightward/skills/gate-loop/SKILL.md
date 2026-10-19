@@ -12,7 +12,8 @@ This repository gates behavior with nightward. The committed baseline in
 ## After every round of code edits
 
 1. Call the `nightward_run` tool (from the nightward MCP server). If the tool
-   isn't available, run `nightward run .` and then `nightward status --json`.
+   isn't available, run `nightward run` and then `nightward status --json`.
+   Leave the path out: the project's committed capture suite runs by default.
 2. Read `boundary` and act on it:
 
 | boundary | what it means | what you do |

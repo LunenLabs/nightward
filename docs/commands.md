@@ -10,7 +10,9 @@ nightward init    create the store and add .gitignore rules (once per repo; re-r
                   any rule that ignores what must be committed (baseline/, rejected/,
                   the judge ledger - e.g. a blanket `.nightward/`) and per-run files
                   that are not ignored
-nightward run     re-run tests → capture → compute blast radius
+nightward run     re-run tests → capture → compute blast radius. Without a path it
+                  runs the committed capture suite, `[tool.nightward] path` in the
+                  pyproject.toml nearest the store (relative to that file), else "."
 nightward report  verdict from an existing `pytest --nightward-record` capture
                   (no pytest run) - see "Using the plugin directly" below
 nightward review  show changed behaviors with diffs; scope with `review NAME...` or
@@ -50,8 +52,9 @@ nightward gate    exit code for CI and agent loops: 0 intact; 1 breached, partia
                   (behaviors not checked), stale or incomplete; 2 no store, no report
                   (no run yet, or the last run aborted) or another error. Only 0 is a
                   pass. `--allow-not-run` passes "partial" in a deliberately narrowed job.
-                  `--run` captures first (`nightward run .`, same judge), then gates
-                  on that fresh verdict - the one-command form for loops and hooks
+                  `--run` captures first (`nightward run`, same path and judge), then
+                  gates on that fresh verdict - the one-command form for loops and
+                  hooks; `--run --path P` runs P instead of the committed suite
 nightward status  boundary summary with the change list (--json: the machine
                   signal for agent loops): "intact" is the only
                   "done"; "breached", "partial" (approved behaviors not checked:

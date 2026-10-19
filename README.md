@@ -253,7 +253,7 @@ and arrive in the PR as a baseline diff.
 - run: pip install -e .          # your project and its test dependencies
 - uses: LunenLabs/nightward@v0.3.3
   with:
-    path: tests                  # what pytest runs; default "."
+    path: tests                  # what pytest runs; default: [tool.nightward] path, else "."
 ```
 
 Inputs: `path`, `dir` (default `.nightward`), `pytest-args` (one per line),

@@ -27,7 +27,7 @@ in `git status`.
 
 | tool | arguments | what it does |
 |---|---|---|
-| `nightward_run` | `path="."` (what pytest runs), `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated); `dir` is optional and may only name the server's store | runs the tests, captures behaviors, recomputes the boundary |
+| `nightward_run` | `path` (what pytest runs; omitted: the project's `[tool.nightward] path`, else `"."`), `timeout=600` (seconds; on expiry the capture is left untouched and the last report invalidated); `dir` is optional and may only name the server's store | runs the tests, captures behaviors, recomputes the boundary |
 | `nightward_status` | `dir` (optional, as above) | reads the last run's verdict without running anything |
 
 Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`name`,

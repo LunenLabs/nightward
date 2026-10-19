@@ -7,6 +7,7 @@ judge the same way, and changing it shows up in a PR diff. `nightward run
 
     [tool.nightward]
     judge = "persona:editor"
+    path = "tests/nightward"      # what pytest runs when no path is given
 
 The setting belongs to the project that owns the store, so it is read from the
 pyproject.toml nearest the store directory - never from the test path, where a
@@ -14,6 +15,7 @@ subpackage's own pyproject could drop or swap the judge (R3-LLM-03, D22).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .errors import NightwardError
@@ -68,6 +70,29 @@ def judge_setting(store_dir: str | Path = ".nightward") -> tuple[str | None, Pat
     except NightwardError as exc:
         raise NightwardError(f"{path}: [tool.nightward] judge: {exc}") from None
     return spec, path
+
+
+def capture_path(store_dir: str | Path = ".nightward") -> str | None:
+    """The committed capture suite (`[tool.nightward] path`), or None.
+
+    What `run`, `gate --run` and MCP `nightward_run` hand pytest when no path is
+    given, so the agent loop runs the captures, not a suite that takes minutes.
+    It is relative to its pyproject.toml, not to the cwd: one setting must not
+    mean different tests from different directories (D22). Returned relative to
+    the cwd where it can be (pytest output stays short), else absolute.
+    """
+    table, path = _settings(store_dir)
+    value = table.get("path")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise NightwardError(f'{path}: [tool.nightward] path must be one test path, '
+                             f'e.g. path = "tests/nightward"')
+    full = path.parent / value
+    try:
+        return os.path.relpath(full)
+    except ValueError:   # Windows: another drive has no relative path
+        return str(full)
 
 
 def project_judge(store_dir: str | Path = ".nightward") -> str | None:
