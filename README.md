@@ -41,6 +41,56 @@ only makes sure that no change to a captured behavior passes silently.
 
 What's new in 0.3, and what changes for 0.2 users: see the [CHANGELOG](https://github.com/LunenLabs/nightward/blob/main/CHANGELOG.md).
 
+## How a project uses it
+
+Setup happens once. After that, every change goes around the loop, and only a
+human can take an "approve" edge:
+
+```mermaid
+flowchart TD
+    subgraph setup["Once per project"]
+        A["Write capture tests<br/>behavior(name, value, group=)"] --> B["nightward run"]
+        B --> C{"A human reads the first capture<br/>nightward review"}
+        C -- "a value is wrong" --> D["Fix the code"] --> B
+        C -- "this is what it should do" --> E["nightward approve<br/>commit .nightward/baseline/"]
+    end
+    E --> F
+    subgraph loop["Every change, by an agent or a human"]
+        F["Edit the code"] --> G["nightward run<br/>(MCP: nightward_run)"]
+        G --> H{"boundary"}
+        H -- "intact" --> I["Done: open the PR"]
+        H -- "breached, not intended" --> F
+        H -- "breached, intended" --> J["The agent stops and lists the changes"]
+        J --> K{"A human runs nightward review"}
+        K -- "approve" --> L["Baseline diff in the PR,<br/>reviewed by code owners"]
+        K -- "reject: a regression" --> F
+    end
+    I --> M["CI: nightward gate<br/>exit 0 only when intact"]
+    L --> M
+```
+
+The same loop as a timeline, for an agent change that moves something it shouldn't:
+
+```mermaid
+sequenceDiagram
+    actor Human
+    participant Agent
+    participant NW as nightward
+    participant CI
+    Human->>Agent: "add a coupon to checkout"
+    Agent->>Agent: edits the code
+    Agent->>NW: nightward_run
+    NW-->>Agent: breached: checkout_total (intended), loyalty_points (not intended)
+    Agent->>Agent: fixes the loyalty side effect
+    Agent->>NW: nightward_run
+    NW-->>Agent: breached: checkout_total only
+    Agent-->>Human: "checkout_total changed as asked - please review"
+    Human->>NW: nightward review, then nightward approve
+    Human->>CI: push (the baseline diff is in the PR)
+    CI->>NW: nightward gate
+    NW-->>CI: exit 0 (intact)
+```
+
 ## Install
 
 nightward needs Python 3.10+. Installing it also registers its pytest plugin, so
