@@ -296,7 +296,10 @@ so the agent can't pick a lenient judge or point the server at another store.
 
 In Claude Code, install the plugin. It adds the MCP server and a skill that
 tells Claude to run the gate after its edits and to hand intended changes to
-you instead of approving them. nightward itself must be installed in the
+you instead of approving them. A second skill, `onboard`, puts new code under the
+gate: Claude reads the code without changing it, writes a
+[domain map](https://github.com/LunenLabs/nightward/blob/main/docs/domain-maps.md)
+and the capture tests, and hands you the suspected defects and the first review. nightward itself must be installed in the
 environment you start `claude` from (your project's virtualenv):
 
 ```bash
@@ -395,6 +398,8 @@ before you rely on a green gate.
 - [Review depth](https://github.com/LunenLabs/nightward/blob/main/docs/review-depth.md):
   per group, how much a review shows and when the agent asks - never whether a
   human approves
+- [Domain maps](https://github.com/LunenLabs/nightward/blob/main/docs/domain-maps.md):
+  the rules each behavior guards, shown next to its diff; the onboard skill writes them
 - [Semantic judge](https://github.com/LunenLabs/nightward/blob/main/docs/semantic-judge.md)
 - [AI agents (MCP)](https://github.com/LunenLabs/nightward/blob/main/docs/mcp.md)
 - [Dashboard](https://github.com/LunenLabs/nightward/blob/main/docs/dashboard.md)

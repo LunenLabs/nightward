@@ -19,6 +19,15 @@ behavior; every such change is listed under "Upgrading").
   anything, NEW and REMOVED are shown at least at `standard`, and `review --depth`
   only raises. See [docs/review-depth.md](docs/review-depth.md).
 
+- **Domain maps and the `onboard` skill.** A map (`docs/nightward-domain/<group>.md`,
+  TOML front matter) lists the rules each behavior guards, with where the code
+  does it and where the intent is stated. `review` prints them above the diff at
+  the `detailed` and `exhaustive` depths, and marks a rule with no intent source
+  as unconfirmed. A bad map only warns. The plugin's `onboard` skill writes the
+  maps and the captures: read-only analysis first, then the first capture, then
+  the suspected defects handed to a human. See
+  [docs/domain-maps.md](docs/domain-maps.md).
+
 - **`@capture`: a test's return value is its behavior.** `from nightward import
   capture`; `@capture(group="billing")` on a test that `return`s a value captures it
   under the test's name (or `name=`), and a parametrized case keeps its id

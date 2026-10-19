@@ -4,7 +4,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
-from .. import shellquote
+from .. import domain, shellquote
 from ..config import DEPTHS, review_depths
 from ..errors import NightwardError
 from ..runner import is_stale
@@ -99,6 +99,16 @@ def _print_change_summary(it: dict, baseline, pending, max_lines: int) -> None:
                       f"diff: `{cmd} --max-lines 0`[/dim]", soft_wrap=True)
 
 
+def _print_rules(rules: list) -> None:
+    """What the value should be, above what it became (detailed/exhaustive)."""
+    for r in rules:
+        intent = (f"intent: {r.intent}" if r.intent
+                  else "unconfirmed: inferred from the code alone")
+        where = "; ".join(x for x in (f"code: {r.code}" if r.code else "", intent, r.source) if x)
+        console.print(f"  [magenta]rule {escape(r.id)}[/magenta] {escape(r.rule)} "
+                      f"[dim]({escape(where)})[/dim]", soft_wrap=True)
+
+
 def _print_brief(group: str, items: list[dict], baseline, pending) -> None:
     """A `brief` group's changes in one line: how many moved, and the biggest move."""
     from ..core import summary
@@ -150,6 +160,9 @@ def review(names: list[str] | None = NAMES_ARG,
         console.print(STALE_MESSAGE)
         raise typer.Exit(1)
     depths = review_depths(store.root)   # live: a depth raised since the run applies now
+    maps = domain.load(store.root)       # the rules each behavior guards (onboarding)
+    for w in maps.warnings:
+        err_console.print(f"[yellow]warning:[/yellow] domain map {escape(w)}", soft_wrap=True)
     # Not stale: these are exactly the payloads the report compared.
     baseline, pending = store.load_baseline(), store.load_pending()
 
@@ -203,6 +216,8 @@ def review(names: list[str] | None = NAMES_ARG,
                 console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}"
                               f"{_REPLAYED if it.get('judge_replayed') else ''}: "
                               f"{escape(it.get('judge_reason', ''))}[/dim]")
+            if d in ("detailed", "exhaustive"):
+                _print_rules(maps.of(it["name"]))
             show(it, d)
         if brief:
             _print_brief(g, brief, baseline, pending)

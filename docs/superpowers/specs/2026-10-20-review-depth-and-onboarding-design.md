@@ -39,7 +39,7 @@ presented and batched.
 
 | depth (CLI value) | Korean label | what `review` shows | what `approve` accepts | when the agent stops for a human |
 |---|---|---|---|---|
-| `exhaustive` | 아주 상세 | the full diff, untruncated, and the domain rule(s) the behavior guards (Part 2) | names only: `--all` and `--group` refused for these behaviors | now: stop and ask |
+| `exhaustive` | 아주 상세 | the full diff, untruncated, and the domain rule(s) the behavior guards (Part 2) | names only: `--all` and `--group` leave these behaviors and name them | now: stop and ask |
 | `detailed` | 상세 | the full diff, untruncated | names, or `--group` | now |
 | `standard` (default) | 보통 | today's view (60 diff lines, then a pointer) | names, `--group`, `--all` (today) | now |
 | `light` | 일반 | `--summary`: each changed path once, with old -> new counts | `--group`, `--all` | end of task: keep working, list the changes in the hand-off |
@@ -85,7 +85,7 @@ default = "standard"
 | `status --json` / MCP | each change carries `depth` and `ask_human: "now" \| "end_of_task" \| "at_pr"` |
 | `gate-loop` skill | stop now / batch to the hand-off / leave for the PR, by `ask_human` |
 | `review` | the per-group renderer above; `--summary` stays the explicit override |
-| `approve` | refuses `--all`/`--group` that would cover an `exhaustive` behavior, and names them |
+| `approve` | `--all`/`--group` leave `exhaustive` behaviors and name them (like standing rejections), so the rest of a bulk approval still goes through |
 | `view` dashboard | shows each card's depth (read-only, as today) |
 | CI / `gate` | **unchanged**: breached is exit 1 at every depth |
 
