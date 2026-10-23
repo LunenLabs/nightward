@@ -34,8 +34,8 @@ inputs:
     default: "false"
   version:
     description: >-
-      pip version specifier for nightward, e.g. "==0.3.3". Empty: the version of
-      this action's tag (uses: LunenLabs/nightward@v0.3.3 installs 0.3.3), or the
+      pip version specifier for nightward, e.g. "==0.3.4". Empty: the version of
+      this action's tag (uses: LunenLabs/nightward@v0.3.4 installs 0.3.4), or the
       latest release when the ref is not a version tag.
     default: ""
   install:
