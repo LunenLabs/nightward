@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape
 
-from ..config import judge_setting
+from ..config import capture_path, judge_setting
 from ..errors import NightwardError
 from ..runner import execute_run, recompute_capture, refused_run_invalidates
 from ..runner import store_above as _store_above
@@ -102,7 +102,9 @@ def init(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir")):
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 @handle_errors
 def run(ctx: typer.Context,
-        path: str = typer.Argument(".", help="Path passed to pytest"),
+        path: str | None = typer.Argument(
+            None, help="Path passed to pytest. Default: [tool.nightward] path in the "
+                       "pyproject.toml nearest the store, else ."),
         dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir"),
         judge: str | None = typer.Option(
             None, help="Semantic judge for semantic=True behaviors, as provider:model "
@@ -112,19 +114,22 @@ def run(ctx: typer.Context,
     """Re-run tests, capture behaviors, compute the blast radius.
 
     Extra pytest arguments go after `--`: nightward run tests -- -m "not gpu" -p no:randomly
-    (without a path, `nightward run -- -k clamp` runs ".").
+    (without a path, `nightward run -- -k clamp` runs the default path).
     """
     extra = [a for a in ctx.args if a != "--"]
-    if path.startswith("-"):
+    if path and path.startswith("-"):
         # `nightward run -- -k clamp`: click hands the first pytest arg to PATH,
         # which is optional (R3-OPS-05).
-        path, extra = ".", [path, *extra]
+        path, extra = None, [path, *extra]
     result = _run(path, dir, judge, extra)
     _exit_if_incomplete(result["report"], result["pytest_returncode"])
 
 
-def _run(path: str, dir: str, judge: str | None, extra: list[str]) -> dict:
-    """Capture and print what `run` prints; the caller decides the exit code."""
+def _run(path: str | None, dir: str, judge: str | None, extra: list[str]) -> dict:
+    """Capture and print what `run` prints; the caller decides the exit code.
+
+    No path: the committed capture suite ([tool.nightward] path), else ".".
+    """
     _check_dir(dir)
     if dir == DEFAULT_DIR and not Path(dir).exists() and _store_above(dir):
         # pytest finds the rootdir from anywhere; a second store here would
@@ -133,6 +138,7 @@ def _run(path: str, dir: str, judge: str | None, extra: list[str]) -> dict:
     # A refused run (bad judge config, busy lock, ...) invalidates the last
     # report like an aborted one: the code it described may have changed.
     with refused_run_invalidates(dir):
+        path = path or capture_path(dir) or "."
         # --judge and $NIGHTWARD_JUDGE are per-run overrides; the committed
         # [tool.nightward] judge is the project's decision (D14).
         if judge:

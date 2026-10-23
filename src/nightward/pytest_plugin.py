@@ -238,15 +238,39 @@ def capture_mark(fn=None, *, name: str | None = None, group: str | None = None,
     return mark if fn is None else mark(fn)
 
 
+# What an async @capture test returned, per call (set at collection, see below).
+_ASYNC_RETURNED = pytest.StashKey[list]()
+
+
+def _keep_async_return(test, returned: list):
+    @functools.wraps(test)
+    async def keep_return(*args, **kwargs):
+        returned.append(await test(*args, **kwargs))
+    return keep_return
+
+
 def pytest_collection_modifyitems(items):
+    marked = [i for i in items if i.get_closest_marker(CAPTURE_MARK)]
     # unittest.TestCase methods never reach pytest_pyfunc_call: @capture there
     # would capture nothing and say nothing.
-    marked = [i.nodeid for i in items if type(i).__name__ == "TestCaseFunction"
-              and i.get_closest_marker(CAPTURE_MARK)]
-    if marked:
+    unittest_ = [i.nodeid for i in marked if type(i).__name__ == "TestCaseFunction"]
+    if unittest_:
         raise pytest.UsageError(
             f"@capture works on pytest-style tests, not unittest.TestCase methods "
-            f"({', '.join(marked[:3])}): request the `behavior` fixture there instead")
+            f"({', '.join(unittest_[:3])}): request the `behavior` fixture there instead")
+    agen = [i.nodeid for i in marked if inspect.isasyncgenfunction(getattr(i, "obj", None))]
+    if agen:
+        raise pytest.UsageError(
+            f"@capture can't capture an async generator test ({', '.join(agen[:3])}): "
+            f"return the value instead of yielding it")
+    # Async plugins (pytest-asyncio, anyio) run a coroutine test through a sync
+    # wrapper that drops its return value, and they install it before
+    # pytest_pyfunc_call. Wrap first, here: the wrapper is still a coroutine
+    # function, so the plugin runs it as before, and it keeps the value.
+    for item in marked:
+        if inspect.iscoroutinefunction(getattr(item, "obj", None)):
+            item.stash[_ASYNC_RETURNED] = []
+            item.obj = _keep_async_return(item.obj, item.stash[_ASYNC_RETURNED])
 
 
 @pytest.hookimpl(wrapper=True)
@@ -254,26 +278,32 @@ def pytest_pyfunc_call(pyfuncitem):
     marker = pyfuncitem.get_closest_marker(CAPTURE_MARK)
     if marker is None:
         return (yield)
-    test = pyfuncitem.obj
-    if inspect.iscoroutinefunction(test) or inspect.isasyncgenfunction(test):
-        raise NightwardError(f"@capture can't capture an async test ({pyfuncitem.name}): "
-                             f"request the `behavior` fixture and call it with the awaited "
-                             f"value instead")
-    returned = []
-
-    @functools.wraps(test)
-    def keep_return(*args, **kwargs):
-        # pytest warns when a test returns a value; @capture takes it instead.
-        returned.append(test(*args, **kwargs))
-
     rec = pyfuncitem.config._nightward_recorder
     if "behavior" not in pyfuncitem.fixturenames:
         rec.begin(pyfuncitem.nodeid)   # the fixture does this for tests that use it
-    pyfuncitem.obj = keep_return
-    try:
+    returned = pyfuncitem.stash.get(_ASYNC_RETURNED, None)
+    if returned is not None:          # async: the collection-time wrapper keeps the value
+        returned.clear()              # a rerun of the same item starts over
         result = yield
-    finally:
-        pyfuncitem.obj = test
+    else:
+        test = pyfuncitem.obj
+        returned = []
+
+        @functools.wraps(test)
+        def keep_return(*args, **kwargs):
+            # pytest warns when a test returns a value; @capture takes it instead.
+            returned.append(test(*args, **kwargs))
+
+        pyfuncitem.obj = keep_return
+        try:
+            result = yield
+        finally:
+            pyfuncitem.obj = test
+    if not returned:
+        # The body never ran (no async plugin ran the coroutine): nothing to capture.
+        raise NightwardError(f"{pyfuncitem.name} did not run, so @capture has nothing to "
+                             f"capture: an async test needs an async plugin "
+                             f"(pytest-asyncio, anyio)")
     value = returned[0]
     if value is None:
         raise NightwardError(f"{pyfuncitem.name} returned None: an @capture test returns "

@@ -125,16 +125,95 @@ def test_flags_reach_the_behavior(tmp_path):
     assert r["pending"]["test_summary"].semantic is True
 
 
-def test_an_async_test_is_refused_with_guidance(tmp_path):
+def test_an_async_test_is_captured_in_pytest_asyncio_auto_mode(tmp_path):
+    # pytest-asyncio swaps item.obj for a sync wrapper that drops the coroutine's
+    # return value; before 0.3.4 this failed with "returned None ... forget `return`?".
+    r = _run(tmp_path, """
+        from nightward import capture
+
+        @capture(group="api")
+        async def test_fetch():
+            return {"status": 200}
+    """, "-o", "asyncio_mode=auto")
+    assert r["pytest_returncode"] == 0, r["output_tail"]
+    b = r["pending"]["test_fetch"]
+    assert (b.payload, b.group, b.source) == ({"status": 200}, "api", "test_app.py::test_fetch")
+
+
+def test_an_async_test_in_strict_mode_keeps_parametrize_ids_and_the_fixture(tmp_path):
+    r = _run(tmp_path, """
+        import pytest
+        from nightward import capture
+
+        @capture(name="tax")
+        @pytest.mark.parametrize("rate", [0.1, 0.2], ids=["low", "high"])
+        @pytest.mark.asyncio
+        async def test_tax(rate, behavior):
+            if rate == 0.1:
+                behavior("rate_seen", rate)
+            return round(100 * rate, 2)
+    """, "-o", "asyncio_mode=strict")
+    assert r["pytest_returncode"] == 0, r["output_tail"]
+    assert {n: b.payload for n, b in r["pending"].items()} == {
+        "tax[low]": 10.0, "tax[high]": 20.0, "rate_seen": 0.1}
+
+
+def test_an_async_test_is_captured_under_anyio(tmp_path):
+    r = _run(tmp_path, """
+        import pytest
+        from nightward import capture
+
+        @pytest.fixture
+        def anyio_backend():
+            return "asyncio"
+
+        @capture
+        @pytest.mark.anyio
+        async def test_fetch():
+            return [1, 2]
+    """, "-p", "no:asyncio")
+    assert r["pytest_returncode"] == 0, r["output_tail"]
+    assert r["pending"]["test_fetch"].payload == [1, 2]
+
+
+def test_an_async_test_returning_none_fails(tmp_path):
+    r = _run(tmp_path, """
+        from nightward import capture
+
+        @capture
+        async def test_forgot_return():
+            {"total": 1}
+    """, "-o", "asyncio_mode=auto")
+    assert r["pytest_returncode"] == 1
+    assert "returned None" in r["output_tail"]
+
+
+def test_an_async_test_without_an_async_plugin_captures_nothing(tmp_path):
     r = _run(tmp_path, """
         from nightward import capture
 
         @capture
         async def test_fetch():
             return 1
-    """)
-    assert r["pytest_returncode"] == 1
-    assert "async" in r["output_tail"] and "behavior" in r["output_tail"]
+    """, "-p", "no:asyncio", "-p", "no:anyio")
+    assert "test_fetch" not in r["pending"]
+    assert "async" in r["output_tail"]       # pytest says why it didn't run
+    assert "IndexError" not in r["output_tail"]
+
+
+def test_an_async_generator_test_is_refused(tmp_path):
+    import pytest
+
+    from nightward.errors import NightwardError
+
+    with pytest.raises(NightwardError, match="could not load"):   # aborted, not a quiet pass
+        _run(tmp_path, """
+            from nightward import capture
+
+            @capture
+            async def test_stream():
+                yield 1
+        """, "-o", "asyncio_mode=auto")
 
 
 def test_bad_arguments_fail_at_decoration_time():

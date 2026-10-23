@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import project_judge
+from .config import capture_path, project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
@@ -77,17 +77,19 @@ def _check_store(dir: str) -> None:
             f"but found {above!r} - start the MCP server in the project root, or {fix}")
 
 
-def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dict:
+def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600) -> dict:
     """Run the tests, capture behaviors, and return the boundary signal.
 
     Call this after every code edit: nightward_status only reports the last run.
-    path: what pytest runs (relative to the server's working directory);
+    path: what pytest runs (relative to the server's working directory); omit it to
+    run the project's capture suite ([tool.nightward] path, else ".");
     dir: omit it - the server gates the store a human started it with
     (`nightward mcp --dir`), and any other store is refused; timeout: seconds
     before pytest is stopped (the store is then left untouched and the last
     report invalidated).
     Returns {boundary, unapproved, changes: [{name, kind, group, judged,
-    judge_model, judge_reason, judge_replayed, rejected, rejected_by}], judged_same,
+    judge_model, judge_reason, judge_replayed, rejected, rejected_by, depth,
+    ask_human}], judged_same,
     not_run (approved behaviors whose test was deselected: not checked), narrowed,
     stale, incomplete, generated_at, judge, scrub_rules (custom scrub rules of the run
     and what they replaced), env_mismatch (changed behaviors approved on another OS or
@@ -119,6 +121,7 @@ def run_tool(path: str = ".", dir: str | None = None, timeout: int = 600) -> dic
     _check_store(dir)
     with refused_run_invalidates(dir):   # e.g. a typo in the committed judge
         spec = _judge_spec(dir)
+        path = path or capture_path(dir) or "."
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
                          judge_spec=spec, command="nightward_run (MCP)")
     payload = status_payload(result["report"])

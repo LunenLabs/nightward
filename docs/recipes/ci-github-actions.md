@@ -27,7 +27,7 @@ jobs:
       # unless the boundary is intact (breached, incomplete, stale or partial = blocked).
       - uses: LunenLabs/nightward@v0.3.3
         # with:
-        #   path: tests             # what pytest runs (default ".")
+        #   path: tests             # what pytest runs (default: [tool.nightward] path, else ".")
         #   pytest-args: |          # one per line; a deselecting run is "partial"
         #     -p
         #     no:randomly

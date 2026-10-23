@@ -4,7 +4,8 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
-from .. import shellquote
+from .. import domain, shellquote
+from ..config import DEPTHS, review_depths
 from ..errors import NightwardError
 from ..runner import is_stale
 from ._common import (
@@ -71,16 +72,21 @@ def _print_change_summary(it: dict, baseline, pending, max_lines: int) -> None:
     from ..core import summary
     old, new = baseline.get(it["name"]), pending.get(it["name"])
     if old is not None and new is not None:
+        order, hidden = summary.order_rows(old.payload, new.payload)
         rows = [(s.path, f"{s.changed}/{s.total} changed" if s.total > 1 else "",
-                 summary.change_line(s)) for s in summary.changes(old.payload, new.payload)]
+                 summary.change_line(s)) for s in summary.changes(old.payload, new.payload)
+                if not summary.is_hidden(s.path, hidden)]
     elif old is not None or new is not None:
         b = new if new is not None else old
         if new is None:
             console.print("[dim]removed; it was:[/dim]")
+        order, _ = summary.order_rows(None, b.payload)
         rows = [(path, "", summary.distribution_line(values))
                 for path, values in summary.distribution(b.payload)]
     else:
-        rows = []
+        order, rows = [], []
+    # The order first: folding indices into [*] below drops it.
+    rows = [(path, "", line) for path, line in order] + rows
     if not rows:
         _print_diff(it, max_lines)
         return
@@ -93,6 +99,34 @@ def _print_change_summary(it: dict, baseline, pending, max_lines: int) -> None:
                       f"diff: `{cmd} --max-lines 0`[/dim]", soft_wrap=True)
 
 
+def _print_rules(rules: list) -> None:
+    """What the value should be, above what it became (detailed/exhaustive)."""
+    for r in rules:
+        intent = (f"intent: {r.intent}" if r.intent
+                  else "unconfirmed: inferred from the code alone")
+        where = "; ".join(x for x in (f"code: {r.code}" if r.code else "", intent, r.source) if x)
+        console.print(f"  [magenta]rule {escape(r.id)}[/magenta] {escape(r.rule)} "
+                      f"[dim]({escape(where)})[/dim]", soft_wrap=True)
+
+
+def _print_brief(group: str, items: list[dict], baseline, pending) -> None:
+    """A `brief` group's changes in one line: how many moved, and the biggest move."""
+    from ..core import summary
+    moved = [s for it in items
+             if (old := baseline.get(it["name"])) is not None
+             and (new := pending.get(it["name"])) is not None
+             for s in summary.changes(old.payload, new.payload)]
+    line = f"{len(items)} behavior(s) changed: {_shown([it['name'] for it in items])}"
+    if moved:
+        top = max(moved, key=lambda s: s.changed)
+        line += f"; {len(moved)} path(s) moved, most: {top.path} ({top.changed}/{top.total})"
+    console.print(f"\n[bold]{escape('[brief]')}[/bold] {escape(line)}", soft_wrap=True)
+    quoted = shellquote.quote(group, shellquote.default_shell())
+    cmd = (f"nightward review --group {quoted} --depth standard" if quoted
+           else "nightward review --depth standard")
+    console.print(f"  [dim]the diffs: `{escape(cmd)}`[/dim]", soft_wrap=True)
+
+
 @app.command()
 @handle_errors
 def review(names: list[str] | None = NAMES_ARG,
@@ -102,24 +136,41 @@ def review(names: list[str] | None = NAMES_ARG,
            summary: bool = typer.Option(
                False, "--summary",
                help="Instead of diffs, list each changed path once with its old -> new "
-                    "values counted (list indices folded into [*])"),
+                    "values counted (list indices folded into [*]; lists of up to 20 "
+                    "items also show their order)"),
+           depth: str | None = typer.Option(
+               None, "--depth",
+               help="Review at least this deeply this time: brief, light, standard, "
+                    "detailed or exhaustive. It raises the committed "
+                    "[tool.nightward.review] depth, never lowers it"),
            dir: str = typer.Option(DEFAULT_DIR)):
-    """Show the blast radius with diffs, plus what the judge ruled SAME."""
+    """Show the blast radius with diffs, plus what the judge ruled SAME.
+
+    Each group is shown at its committed review depth ([tool.nightward.review]):
+    brief = one line per group, light = the summary, standard = diffs of up to
+    --max-lines, detailed/exhaustive = whole diffs. NEW and REMOVED behaviors
+    are shown at least at standard, a standing rejection at least at detailed.
+    """
+    if depth is not None and depth not in DEPTHS:
+        raise NightwardError(f"--depth must be one of {', '.join(DEPTHS)}")
     store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):
         # Its diffs compare inputs that are no longer on disk - don't show them.
         console.print(STALE_MESSAGE)
         raise typer.Exit(1)
-    if summary:
-        # Not stale: these are exactly the payloads the report compared.
-        baseline, pending = store.load_baseline(), store.load_pending()
+    depths = review_depths(store.root)   # live: a depth raised since the run applies now
+    maps = domain.load(store.root)       # the rules each behavior guards (onboarding)
+    for w in maps.warnings:
+        err_console.print(f"[yellow]warning:[/yellow] domain map {escape(w)}", soft_wrap=True)
+    # Not stale: these are exactly the payloads the report compared.
+    baseline, pending = store.load_baseline(), store.load_pending()
 
-        def show(it: dict) -> None:
+    def show(it: dict, d: str = "standard") -> None:
+        if summary or d == "light":
             _print_change_summary(it, baseline, pending, max_lines)
-    else:
-        def show(it: dict) -> None:
-            _print_diff(it, max_lines)
+        else:
+            _print_diff(it, 0 if d in ("detailed", "exhaustive") else max_lines)
     if report.get("incomplete"):
         err_console.print(f"[yellow]warning:[/yellow] capture incomplete: "
                           f"{_incomplete_text(report['incomplete'])}")
@@ -146,9 +197,17 @@ def review(names: list[str] | None = NAMES_ARG,
                       else "no unapproved change in that selection")
     for g, items in blast.items():
         console.print(f"\n[yellow]group: {escape(g)}[/yellow]")
+        brief = []
         for it in items:
+            d = depths.of(g, it["kind"], at_least=depth)
+            if it.get("rejected"):   # a standing rejection is read in full
+                d = max(d, "detailed", key=DEPTHS.index)
+            if d == "brief" and not summary:
+                brief.append(it)
+                continue
+            tag = "" if d == "standard" else f" [dim]({d})[/dim]"
             console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]"
-                          f"{_rejected_note(it)}")
+                          f"{tag}{_rejected_note(it)}")
             if it.get("rejected"):
                 console.print("[dim]this exact payload is a standing rejection "
                               "(.nightward/rejected/); approving it overrides that "
@@ -157,7 +216,11 @@ def review(names: list[str] | None = NAMES_ARG,
                 console.print(f"[dim]judged DIFFERENT by {escape(it['judge_model'])}"
                               f"{_REPLAYED if it.get('judge_replayed') else ''}: "
                               f"{escape(it.get('judge_reason', ''))}[/dim]")
-            show(it)
+            if d in ("detailed", "exhaustive"):
+                _print_rules(maps.of(it["name"]))
+            show(it, d)
+        if brief:
+            _print_brief(g, brief, baseline, pending)
     if outside:
         # A scoped review covers only what it showed (R3-WEB-01).
         console.print(f"\n[yellow]{len(outside)} other unapproved change(s) outside this "

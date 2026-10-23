@@ -8,6 +8,7 @@ import typer
 from rich.markup import escape
 
 from .. import shellquote
+from ..errors import NightwardError
 from ..runner import is_stale
 from ..signal import status_payload
 from ..view import build_site
@@ -36,9 +37,9 @@ from ._gitignore import _ignore_fix, _warn_unless_ignored
 from .init_run import _exit_if_incomplete, _run
 
 
-def _gate_run(dir: str) -> dict:
-    """`gate --run`: the capture `run .` makes, with the judge `run` would pick."""
-    result = _run(".", dir, None, [])
+def _gate_run(dir: str, path: str | None) -> dict:
+    """`gate --run`: the capture `run` makes, with the path and judge it would pick."""
+    result = _run(path, dir, None, [])
     console.print()
     return {"report": result["report"], "pytest_returncode": result["pytest_returncode"]}
 
@@ -53,8 +54,12 @@ def gate(dir: str = typer.Option(DEFAULT_DIR),
                   "CI job whose full run happens elsewhere"),
          run_first: bool = typer.Option(
              False, "--run",
-             help="Run the tests and capture first (like `nightward run .`), then gate "
-                  "on that fresh verdict instead of the last run's")):
+             help="Run the tests and capture first (like `nightward run`), then gate "
+                  "on that fresh verdict instead of the last run's"),
+         path: str | None = typer.Option(
+             None, "--path",
+             help="With --run: the path passed to pytest. Default: [tool.nightward] path "
+                  "in the pyproject.toml nearest the store, else .")):
     """Exit with the verdict of the last run (for CI / agent loops).
 
     0: boundary intact (or partial, with --allow-not-run). 1: breached, partial
@@ -62,12 +67,14 @@ def gate(dir: str = typer.Option(DEFAULT_DIR),
     report) or incomplete (capture tests failed). 2: no store, no report (no
     run yet, or the last run aborted) or another error. Only 0 is a pass.
 
-    --run captures first (`nightward run .`), so the verdict covers the code as it
+    --run captures first (`nightward run`), so the verdict covers the code as it
     is now, not as it was at the last run.
     """
+    if path is not None and not run_first:
+        raise NightwardError("--path only applies with --run (gate alone reads the last run)")
     if run_first:
         _existing_store(dir)   # gate never creates a store, --run or not
-        _exit_if_incomplete(**_gate_run(dir))
+        _exit_if_incomplete(**_gate_run(dir, path))
     store = _existing_store(dir)
     report = _require_report(store)
     if is_stale(store, report):

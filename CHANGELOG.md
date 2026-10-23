@@ -9,15 +9,49 @@ behavior; every such change is listed under "Upgrading").
 
 ### Added
 
+- **Review depth (`[tool.nightward.review]`).** Per group, the humans who own the
+  project set how much `review` shows and when the agent hands an intended change
+  over: `exhaustive` and `detailed` show whole diffs, `standard` (the default) is
+  today's review, `light` shows the summary, `brief` one line per group. `status
+  --json` and MCP carry each change's `depth` and `ask_human` (`now`,
+  `end_of_task`, `at_pr`), and the gate-loop skill follows it. `approve --all` and
+  `--group` leave `exhaustive` behaviors to one name each. No depth approves
+  anything, NEW and REMOVED are shown at least at `standard`, and `review --depth`
+  only raises. See [docs/review-depth.md](docs/review-depth.md).
+
+- **Domain maps and the `onboard` skill.** A map (`docs/nightward-domain/<group>.md`,
+  TOML front matter) lists the rules each behavior guards, with where the code
+  does it and where the intent is stated. `review` prints them above the diff at
+  the `detailed` and `exhaustive` depths, and marks a rule with no intent source
+  as unconfirmed. A bad map only warns. The plugin's `onboard` skill writes the
+  maps and the captures: read-only analysis first, then the first capture, then
+  the suspected defects handed to a human. See
+  [docs/domain-maps.md](docs/domain-maps.md).
+
 - **`@capture`: a test's return value is its behavior.** `from nightward import
   capture`; `@capture(group="billing")` on a test that `return`s a value captures it
   under the test's name (or `name=`), and a parametrized case keeps its id
   (`tax[low]`). Same rules as the `behavior` fixture (validated, unique, scrubbed,
   `semantic=`, `scrub=`), and the two mix in one test. A test that returns None
-  fails (a forgotten `return`), an async test and a `unittest.TestCase` method are
-  refused with guidance, and pytest's return-value warning is not raised.
+  fails (a forgotten `return`). Async tests are captured under pytest-asyncio
+  (auto or strict mode) and anyio, whose wrappers would otherwise drop the return
+  value. An async generator test and a `unittest.TestCase` method are refused with
+  guidance, and pytest's return-value warning is not raised.
+
+- **`[tool.nightward] path`: the committed capture suite.** `nightward run`
+  without a path, `gate --run` and MCP `nightward_run` without `path` run it
+  (relative to its pyproject.toml), so an agent loop runs the captures instead of
+  a whole suite that can take minutes; `gate --run --path P` and an explicit path
+  still win. The GitHub Action's `path` input now defaults to empty, which means
+  the same. Without the setting everything runs "." as before.
 
 ### Fixed
+
+- **`review --summary` shows list order.** Folding indices into `[*]` hid which
+  item came first, so a ranking couldn't be reviewed in the summary. A list of up
+  to 20 items now gets an `order:` row, and a pure reorder reads `reordered:
+  a, b -> b, a` instead of one changed row per field. Display only: fingerprints
+  and verdicts are unchanged.
 
 - **The Anthropic judge works on current models.** It no longer sends
   `temperature=0`, which current Claude models reject with a 400 (the ledger

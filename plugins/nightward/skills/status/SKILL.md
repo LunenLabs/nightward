@@ -11,7 +11,7 @@ Run `nightward status --json` in the repository root and report, briefly:
    code edited since then isn't reflected).
 2. Each unapproved change: kind (NEW, CHANGED, REMOVED), name and group.
 3. What the human runs next, in a code block:
-   - nothing is reported or the report is stale: `nightward run .`
+   - nothing is reported or the report is stale: `nightward run`
    - breached: `nightward review`, then approve the intended changes by name,
      and fix the code for the rest.
 

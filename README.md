@@ -41,6 +41,56 @@ only makes sure that no change to a captured behavior passes silently.
 
 What's new in 0.3, and what changes for 0.2 users: see the [CHANGELOG](https://github.com/LunenLabs/nightward/blob/main/CHANGELOG.md).
 
+## How a project uses it
+
+Setup happens once. After that, every change goes around the loop, and only a
+human can take an "approve" edge:
+
+```mermaid
+flowchart TD
+    subgraph setup["Once per project"]
+        A["Write capture tests<br/>behavior(name, value, group=)"] --> B["nightward run"]
+        B --> C{"A human reads the first capture<br/>nightward review"}
+        C -- "a value is wrong" --> D["Fix the code"] --> B
+        C -- "this is what it should do" --> E["nightward approve<br/>commit .nightward/baseline/"]
+    end
+    E --> F
+    subgraph loop["Every change, by an agent or a human"]
+        F["Edit the code"] --> G["nightward run<br/>(MCP: nightward_run)"]
+        G --> H{"boundary"}
+        H -- "intact" --> I["Done: open the PR"]
+        H -- "breached, not intended" --> F
+        H -- "breached, intended" --> J["The agent stops and lists the changes"]
+        J --> K{"A human runs nightward review"}
+        K -- "approve" --> L["Baseline diff in the PR,<br/>reviewed by code owners"]
+        K -- "reject: a regression" --> F
+    end
+    I --> M["CI: nightward gate<br/>exit 0 only when intact"]
+    L --> M
+```
+
+The same loop as a timeline, for an agent change that moves something it shouldn't:
+
+```mermaid
+sequenceDiagram
+    actor Human
+    participant Agent
+    participant NW as nightward
+    participant CI
+    Human->>Agent: "add a coupon to checkout"
+    Agent->>Agent: edits the code
+    Agent->>NW: nightward_run
+    NW-->>Agent: breached: checkout_total (intended), loyalty_points (not intended)
+    Agent->>Agent: fixes the loyalty side effect
+    Agent->>NW: nightward_run
+    NW-->>Agent: breached: checkout_total only
+    Agent-->>Human: "checkout_total changed as asked - please review"
+    Human->>NW: nightward review, then nightward approve
+    Human->>CI: push (the baseline diff is in the PR)
+    CI->>NW: nightward gate
+    NW-->>CI: exit 0 (intact)
+```
+
 ## Install
 
 nightward needs Python 3.10+. Installing it also registers its pytest plugin, so
@@ -203,7 +253,7 @@ and arrive in the PR as a baseline diff.
 - run: pip install -e .          # your project and its test dependencies
 - uses: LunenLabs/nightward@v0.3.3
   with:
-    path: tests                  # what pytest runs; default "."
+    path: tests                  # what pytest runs; default: [tool.nightward] path, else "."
 ```
 
 Inputs: `path`, `dir` (default `.nightward`), `pytest-args` (one per line),
@@ -246,7 +296,10 @@ so the agent can't pick a lenient judge or point the server at another store.
 
 In Claude Code, install the plugin. It adds the MCP server and a skill that
 tells Claude to run the gate after its edits and to hand intended changes to
-you instead of approving them. nightward itself must be installed in the
+you instead of approving them. A second skill, `onboard`, puts new code under the
+gate: Claude reads the code without changing it, writes a
+[domain map](https://github.com/LunenLabs/nightward/blob/main/docs/domain-maps.md)
+and the capture tests, and hands you the suspected defects and the first review. nightward itself must be installed in the
 environment you start `claude` from (your project's virtualenv):
 
 ```bash
@@ -342,6 +395,11 @@ before you rely on a green gate.
   your first capture
 - [What nightward normalizes](https://github.com/LunenLabs/nightward/blob/main/docs/normalization.md):
   scrubbing, custom scrub rules, names, non-JSON values, and `doctor`
+- [Review depth](https://github.com/LunenLabs/nightward/blob/main/docs/review-depth.md):
+  per group, how much a review shows and when the agent asks - never whether a
+  human approves
+- [Domain maps](https://github.com/LunenLabs/nightward/blob/main/docs/domain-maps.md):
+  the rules each behavior guards, shown next to its diff; the onboard skill writes them
 - [Semantic judge](https://github.com/LunenLabs/nightward/blob/main/docs/semantic-judge.md)
 - [AI agents (MCP)](https://github.com/LunenLabs/nightward/blob/main/docs/mcp.md)
 - [Dashboard](https://github.com/LunenLabs/nightward/blob/main/docs/dashboard.md)
