@@ -23,13 +23,25 @@ def diff_of(old, new):
     return change
 
 
+def assert_near_linear(elapsed, old, new):
+    # A wall-clock limit alone fails on a loaded CI runner (5 s on Windows under
+    # xdist for a diff that takes 0.5 s locally). Serializing both inputs on the
+    # same machine, right now, is a linear yardstick: the diff takes about 5x
+    # that, and the quadratic regression this guards against took ~1000x.
+    start = time.perf_counter()
+    canonical_json(old), canonical_json(new)
+    linear = time.perf_counter() - start
+    assert elapsed < 3 or elapsed < 50 * linear, (elapsed, linear)
+
+
 # ---- R1-FIN-02: diff cost stays near-linear ---------------------------------
 
 def test_scattered_changes_in_a_big_list_diff_fast():
     # 8,000 rows with every 3rd row changed took ~18 s (quadratic difflib).
+    old, new = rows(8000), rows(8000, bump=1)
     start = time.perf_counter()
-    change = diff_of(rows(8000), rows(8000, bump=1))
-    assert time.perf_counter() - start < 3
+    change = diff_of(old, new)
+    assert_near_linear(time.perf_counter() - start, old, new)
     assert change.kind == "CHANGED"
     lines = change.diff_text.splitlines()
     assert len(lines) <= MAX_DIFF_LINES + 5
@@ -47,7 +59,7 @@ def test_single_change_in_huge_list_is_pinpointed():
     new[31337] = {"txn": "txn_0031337", "amount_cents": -1}
     start = time.perf_counter()
     text = diff_of(old, new).diff_text
-    assert time.perf_counter() - start < 3
+    assert_near_linear(time.perf_counter() - start, old, new)
     assert '-    "amount_cents": ' in text and '+    "amount_cents": -1' in text
     assert len(text.splitlines()) < 15
 
