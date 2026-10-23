@@ -5,7 +5,7 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
-## [0.3.4] - Unreleased
+## [0.3.4] - 2026-10-24
 
 From dogfooding on a FastAPI backend: async tests, a capture suite that runs
 in seconds, and review that asks for as much attention as each group needs.
