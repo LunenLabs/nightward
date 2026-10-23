@@ -25,7 +25,7 @@ jobs:
       - run: pip install -e .       # your project and its test deps
       # Capture behaviors, write the verdict + diffs to the job summary, and fail
       # unless the boundary is intact (breached, incomplete, stale or partial = blocked).
-      - uses: LunenLabs/nightward@v0.3.3
+      - uses: LunenLabs/nightward@v0.3.4
         # with:
         #   path: tests             # what pytest runs (default: [tool.nightward] path, else ".")
         #   pytest-args: |          # one per line; a deselecting run is "partial"

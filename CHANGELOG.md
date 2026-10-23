@@ -5,7 +5,11 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
-## [Unreleased]
+## [0.3.4] - Unreleased
+
+From dogfooding on a FastAPI backend: async tests, a capture suite that runs
+in seconds, and review that asks for as much attention as each group needs.
+The gate decides exactly as before.
 
 ### Added
 
@@ -45,24 +49,6 @@ behavior; every such change is listed under "Upgrading").
   still win. The GitHub Action's `path` input now defaults to empty, which means
   the same. Without the setting everything runs "." as before.
 
-### Fixed
-
-- **`review --summary` shows list order.** Folding indices into `[*]` hid which
-  item came first, so a ranking couldn't be reviewed in the summary. A list of up
-  to 20 items now gets an `order:` row, and a pure reorder reads `reordered:
-  a, b -> b, a` instead of one changed row per field. Display only: fingerprints
-  and verdicts are unchanged.
-
-- **The Anthropic judge works on current models.** It no longer sends
-  `temperature=0`, which current Claude models reject with a 400 (the ledger
-  already makes a model's ruling repeatable by replaying it). It reads the first
-  text block of the reply instead of the first block, which on current models is a
-  thinking block, and gives the reply room for that thinking. A refusal makes the
-  judge unavailable, so the behavior falls back to the exact comparison. Examples
-  now use `anthropic:claude-haiku-5-5`.
-
-### Added
-
 - **[Recipe: make "only a human approves" hold on GitHub](docs/recipes/protect-the-baseline.md):**
   CODEOWNERS for `baseline/`, `rejected/`, `judge/`, `pyproject.toml` and
   `conftest.py`, required code-owner review, and an agent identity that isn't an
@@ -80,6 +66,31 @@ behavior; every such change is listed under "Upgrading").
   per command family. `nightward.cli:app` and every command's help are unchanged.
 - Tests are grouped by area (`tests/core`, `tests/gate`, `tests/judge`, ...) instead
   of by the review round that found them.
+
+### Fixed
+
+- **`review --summary` shows list order.** Folding indices into `[*]` hid which
+  item came first, so a ranking couldn't be reviewed in the summary. A list of up
+  to 20 items now gets an `order:` row, and a pure reorder reads `reordered:
+  a, b -> b, a` instead of one changed row per field. Display only: fingerprints
+  and verdicts are unchanged.
+
+- **The Anthropic judge works on current models.** It no longer sends
+  `temperature=0`, which current Claude models reject with a 400 (the ledger
+  already makes a model's ruling repeatable by replaying it). It reads the first
+  text block of the reply instead of the first block, which on current models is a
+  thinking block, and gives the reply room for that thinking. A refusal makes the
+  judge unavailable, so the behavior falls back to the exact comparison. Examples
+  now use `anthropic:claude-haiku-5-5`.
+
+### Upgrading
+
+- The GitHub Action's `path` input defaults to empty instead of `"."`. Without
+  `[tool.nightward] path` an empty `path` still runs `"."`, so a workflow that
+  doesn't set it runs the same tests as before.
+- `nightward run` with no path, `gate --run` and MCP `nightward_run` read
+  `[tool.nightward] path` from the pyproject.toml nearest the store. A project
+  that doesn't set it is unaffected.
 
 ## [0.3.3] - 2026-10-15
 
@@ -373,6 +384,7 @@ Never published to PyPI; installed from git.
 - Document adapters (`from_file`, `from_text`, `from_pdf`, `from_docx`,
   `from_xlsx`).
 
+[0.3.4]: https://github.com/LunenLabs/nightward/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/LunenLabs/nightward/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/LunenLabs/nightward/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/LunenLabs/nightward/compare/v0.3.0...v0.3.1

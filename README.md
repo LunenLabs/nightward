@@ -251,7 +251,7 @@ and arrive in the PR as a baseline diff.
   with:
     python-version: "3.12"
 - run: pip install -e .          # your project and its test dependencies
-- uses: LunenLabs/nightward@v0.3.3
+- uses: LunenLabs/nightward@v0.3.4
   with:
     path: tests                  # what pytest runs; default: [tool.nightward] path, else "."
 ```

@@ -1,7 +1,7 @@
 {
   "name": "nightward",
   "description": "A regression gate for AI-made changes: Claude can run it and read the verdict, only a human can approve.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "author": {
     "name": "LunenLabs",
     "url": "https://github.com/LunenLabs"
