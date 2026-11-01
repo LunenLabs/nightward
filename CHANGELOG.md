@@ -5,6 +5,16 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [Unreleased]
+
+### Changed
+
+- **`nightward mcp` runs on the mcp 2.x SDK.** 2.x renamed `FastMCP` to
+  `MCPServer`; nightward uses whichever major is installed, and the `[mcp]` extra
+  now allows `mcp>=1.0,<3`. The exposed tools are unchanged (`nightward_run`,
+  `nightward_status`), and a new test checks that list over a real stdio session
+  on both majors.
+
 ## [0.3.4] - 2026-10-24
 
 From dogfooding on a FastAPI backend: async tests, a capture suite that runs

@@ -8,7 +8,7 @@ An agent loop needs a definition of "done" that it can check but not change.
 the agent **run** the gate and **read** its verdict. It can't approve anything.
 
 ```bash
-pip install "nightward[mcp]"                      # the mcp 1.x SDK (2.x is not supported yet)
+pip install "nightward[mcp]"                      # the mcp SDK (1.x or 2.x)
 claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in the project root
 ```
 

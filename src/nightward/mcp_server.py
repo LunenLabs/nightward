@@ -173,22 +173,23 @@ _TOOLS = {
 
 
 def build_server():
-    """Build the FastMCP server with only the read/execute tools registered."""
+    """Build the MCP server with only the read/execute tools registered."""
     try:
-        from mcp.server.fastmcp import FastMCP
-    except ImportError as exc:
-        # mcp 2.x renamed FastMCP, so "installed but wrong major" lands here too.
-        raise NightwardError(
-            "MCP support needs the mcp 1.x SDK - run: pip install 'nightward[mcp]' "
-            "(mcp 2.x is not supported yet)"
-        ) from exc
-    server = FastMCP("nightward")
+        from mcp.server.mcpserver import MCPServer  # mcp 2.x
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP as MCPServer  # mcp 1.x
+        except ImportError as exc:
+            raise NightwardError(
+                "MCP support needs the mcp SDK - run: pip install 'nightward[mcp]'"
+            ) from exc
+    server = MCPServer("nightward")
     for name, fn in _TOOLS.items():
         server.tool(name=name)(fn)
     return server
 
 
 def serve(judge: str | None = None, dir: str = ".nightward") -> None:
-    """Start the stdio MCP server (blocks). FastMCP defaults to stdio transport."""
+    """Start the stdio MCP server (blocks). Both SDK majors default to stdio transport."""
     configure(judge=judge, dir=dir)
     build_server().run()

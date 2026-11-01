@@ -63,9 +63,39 @@ def test_run_tool_preserves_hangul(tmp_path):
 
 
 def test_build_server_registers_without_error():
-    pytest.importorskip("mcp")
+    pytest.importorskip("mcp.server")   # not "mcp": without the SDK, tests/mcp/ is that
     server = mcp_server.build_server()
-    assert server is not None   # builds with FastMCP; tool set fixed by _TOOLS
+    assert server is not None   # builds on either SDK major; tool set fixed by _TOOLS
+
+
+def test_isolation_over_the_wire(tmp_path):
+    # What a real client sees, not what _TOOLS says: spawn `nightward mcp` on
+    # stdio with whichever SDK major is installed and list its tools.
+    pytest.importorskip("mcp.client.stdio")
+    import sys
+
+    import anyio
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    store = str(tmp_path / ".nightward")
+    params = StdioServerParameters(command=sys.executable,
+                                   args=["-m", "nightward", "mcp", "--dir", store],
+                                   cwd=str(tmp_path))
+
+    async def session():
+        with anyio.fail_after(60):
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as client:
+                    await client.initialize()
+                    tools = await client.list_tools()
+                    status = await client.call_tool("nightward_status", {})
+                    return {t.name for t in tools.tools}, status
+
+    names, status = anyio.run(session)
+    assert names == {"nightward_run", "nightward_status"}
+    # (the error flag is isError in 1.x, is_error in 2.x: an error has no verdict)
+    assert '"boundary": "unknown"' in status.content[0].text
 
 
 def test_cli_exposes_mcp_subcommand():
