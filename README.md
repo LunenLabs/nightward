@@ -370,7 +370,8 @@ exists for many languages. They can run side by side with nightward in one suite
 "Boundary intact" means no **captured** behavior changed, nothing more:
 
 - The gate sees only what `behavior()` captures, so capture the behaviors you
-  care about.
+  care about. `[tool.nightward] coverage = "src/app"` lists the public functions
+  no capture test ran.
 - The gate is a convention, not a sandbox. An agent with a shell could run
   `approve` or edit the baseline, but every bypass leaves a trace in git. Make
   that trace need a human: own the store with CODEOWNERS, require code-owner

@@ -21,6 +21,7 @@ from ._common import (
     _legacy_rejection_note,
     _missing_store_message,
     _names_text,
+    _print_coverage,
     _print_summary,
     _shown_path,
     _store,
@@ -192,6 +193,7 @@ def _run(path: str | None, dir: str, judge: str | None, extra: list[str]) -> dic
         err_console.print(f"[yellow]warning:[/yellow] scrub rule {escape(rule)} matched "
                           f"nothing in this run ({escape(why)})", soft_wrap=True)
     _print_summary(result["report"])
+    _print_coverage(result["report"].get("capture_coverage"))
     added = result.get("judge_added") or []
     if added:
         # API rulings replay from the committed ledger (D22): an uncommitted

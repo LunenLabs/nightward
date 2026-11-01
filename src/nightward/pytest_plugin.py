@@ -19,6 +19,7 @@ from . import scrub as _scrub
 from .core.baseline import Store, digest
 from .core.behavior import Behavior, capture_env, validate_name
 from .core.lock import acquire, read_lock, release
+from .coverage import Tracer, summarize
 from .errors import NightwardError
 from .scrub import scrub_counted, unmatched_rules
 
@@ -151,6 +152,12 @@ def pytest_addoption(parser):
     group.addoption("--nightward-run-id", action="store", default=None,
                     help="Token recorded in run_meta once the capture is flushed "
                          "(set by `nightward run` to verify the flush happened)")
+    group.addoption("--nightward-coverage", action="append", default=None,
+                    help="Source path whose public functions capture tests should run "
+                         "(repeatable; set by `nightward run` from [tool.nightward] "
+                         "coverage)")
+    group.addoption("--nightward-coverage-base", action="store", default=None,
+                    help="Folder the capture coverage names files relative to")
 
 
 def pytest_configure(config):
@@ -172,6 +179,41 @@ def pytest_configure(config):
     config._nightward_recorder = Recorder(
         Path(config.getoption("--nightward-dir")) if recording else None)
     config.pluginmanager.register(config._nightward_recorder, "nightward-recorder")
+    config._nightward_coverage = None
+    if recording and config.getoption("--nightward-coverage"):
+        config._nightward_coverage = _CaptureCoverage()
+        config.pluginmanager.register(config._nightward_coverage, "nightward-coverage")
+
+
+def _captures(item) -> bool:
+    return ("behavior" in getattr(item, "fixturenames", ())
+            or item.get_closest_marker(CAPTURE_MARK) is not None)
+
+
+class _CaptureCoverage:
+    """Records what runs during capture tests only (setup, call and teardown of a
+    test that uses `behavior` or @capture): a test that captures nothing must not
+    make the code it calls look watched."""
+
+    def __init__(self) -> None:
+        self.tracer = Tracer()
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_protocol(self, item, nextitem):
+        if not _captures(item):
+            return (yield)
+        self.tracer.start()
+        try:
+            return (yield)
+        finally:
+            self.tracer.stop()
+
+    def summary(self, config) -> dict:
+        patterns = list(dict.fromkeys([*config.getini("python_files"),
+                                       *_DEFAULT_PYTHON_FILES]))
+        base = config.getoption("--nightward-coverage-base") or str(config.rootpath)
+        return summarize(base, config.getoption("--nightward-coverage"),
+                         self.tracer.called(), patterns)
 
 
 def _lock_for_session(config) -> None:
@@ -462,6 +504,9 @@ def _flush(session, rec: Recorder, store: Store, run_id: str | None) -> None:
     # A custom rule that never fired leaves the user believing noise is handled.
     meta["scrub_unmatched"] = unmatched_rules()
     meta["scrub_rules"] = _rule_report(rec, last.get("scrub_rules"))
+    # Which public functions no capture test ran - information, never the verdict.
+    tracker = getattr(config, "_nightward_coverage", None)
+    meta["coverage"] = tracker.summary(config) if tracker else None
     # Written last: its presence proves to the runner that THIS run's flush landed.
     if run_id:
         meta["run_id"] = run_id

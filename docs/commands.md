@@ -83,13 +83,39 @@ and points at `../.nightward` when you are in a subdirectory, rather than readin
 empty or "intact". `status` still prints `unknown` (exit 0), with that note on stderr.
 
 Settings live in `[tool.nightward]` of the pyproject.toml nearest the store: `judge`,
-`path`, `domain`, `review` (`default`, `groups`) and `requires`. A key nightward doesn't
+`path`, `domain`, `review` (`default`, `groups`), `coverage` and `requires`. A key nightward doesn't
 know is an error that names the closest known one, never ignored: a typo'd `path` or a
 group depth written one table too high would otherwise do nothing. `requires =
 "0.3.5"` is the lowest nightward that may read the settings. Every command and the
 MCP server refuse to run on an older one, which would ignore settings it doesn't know
 (an `exhaustive` group would go through `approve --all`). Versions before 0.3.5 don't
 read `requires`: pin the version in CI and in the MCP config as well.
+
+### Capture coverage
+
+`coverage = "src/app"` (a path or a list, relative to the pyproject.toml) makes every
+run (CLI, `gate --run`, MCP) list the public functions under it that no capture test
+ran:
+
+```
+capture coverage: 31 of 40 public functions in src/app ran in a capture test
+  not run by any capture test (9): src/app/pricing.py:refund, ... - a change there
+  can't breach the gate (`nightward status --json` lists them)
+```
+
+`status --json` and both MCP tools carry it as `capture_coverage` (`roots`,
+`functions`, `executed`, `uncovered`: at most 200 names, the counts are exact).
+A public function is a module-level function, or a method of a module-level class,
+whose name doesn't start with `_`. Test modules and `conftest.py` don't count.
+"Ran" means called while a test that uses `behavior` or `@capture` ran (setup, call,
+teardown). A test that captures nothing doesn't count, and neither does code that
+runs at import, such as a decorator.
+
+It is information, never the verdict. It doesn't change `boundary`, `gate`'s exit
+code or anything a review binds to, and there is no threshold. A function that ran
+is not protected: its result may not reach any payload. Measuring uses
+`sys.setprofile`, so pytest-cov keeps working, but a run with it on is slower
+(about 0.75 s per million Python calls).
 
 A failing or erroring capture test means its behaviors are missing from the blast
 radius, so the run is **incomplete**: `nightward run` prints the summary and exits 1,
