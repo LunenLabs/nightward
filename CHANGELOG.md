@@ -5,7 +5,10 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
-## [Unreleased]
+## [0.3.5] - Unreleased
+
+From a functional-gap review: the agent's view of a breach, settings that silently
+did nothing, and what the gate can't see. Also runs on the mcp 2.x SDK.
 
 ### Added
 
@@ -421,6 +424,7 @@ Never published to PyPI; installed from git.
 - Document adapters (`from_file`, `from_text`, `from_pdf`, `from_docx`,
   `from_xlsx`).
 
+[0.3.5]: https://github.com/LunenLabs/nightward/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/LunenLabs/nightward/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/LunenLabs/nightward/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/LunenLabs/nightward/compare/v0.3.1...v0.3.2
