@@ -146,7 +146,10 @@ def view(dir: str = typer.Option(DEFAULT_DIR, help="Nightward storage dir to rea
 @app.command()
 @handle_errors
 def status(dir: str = typer.Option(DEFAULT_DIR),
-           json_: bool = typer.Option(False, "--json", help="Machine-readable output")):
+           json_: bool = typer.Option(False, "--json", help="Machine-readable output"),
+           diff: bool = typer.Option(
+               False, "--diff", help="With --json: each change's diff, cut to "
+                                     "40 lines (for agents; marks nothing reviewed)")):
     """Print boundary status - the stop-condition signal for agent loops."""
     store = _store(dir)
     if not store.root.is_dir():
@@ -155,7 +158,7 @@ def status(dir: str = typer.Option(DEFAULT_DIR),
         err_console.print(f"[yellow]note:[/yellow] {escape(_missing_store_message(dir))}",
                           soft_wrap=True)
     report = store.load_report()
-    payload = status_payload(report, stale=is_stale(store, report))
+    payload = status_payload(report, stale=is_stale(store, report), with_diff=diff)
     if json_:
         print(json.dumps(payload, ensure_ascii=False), file=_stdout)
     else:

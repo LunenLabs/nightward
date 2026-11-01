@@ -7,7 +7,27 @@ behavior; every such change is listed under "Upgrading").
 
 ## [Unreleased]
 
+### Added
+
+- **The agent sees what moved without taking the human's review.** `nightward_run`
+  and `nightward_status` return each change's `diff`, cut to 40 lines (400 per call),
+  with `diff_cut` counting the lines left out; `nightward status --json --diff` is
+  the same for agents without MCP. Before, the only way to see the values was
+  `nightward review`, which records that a human saw the diffs: an agent that ran
+  it made the human's `approve --all` go through unseen. The plugin's skills now
+  read the diff and say never to run `review` or `view`.
+- **`[tool.nightward] requires = "0.3.5"`**: the lowest nightward that may read the
+  project's settings. Every command and `nightward mcp` refuse to run on an older
+  one, naming the interpreter it runs from. An older nightward ignores settings it
+  doesn't know: 0.3.2 approves an `exhaustive` group with `approve --all`.
+
 ### Changed
+
+- **An unknown key in `[tool.nightward]` or `[tool.nightward.review]` is an error**
+  that names the closest known key. It was ignored, so `pth = "tests"` or a group
+  depth written under `review` instead of `review.groups` silently did nothing.
+  Check your settings when you upgrade: a project with such a key stops until
+  it's fixed.
 
 - **`nightward mcp` runs on the mcp 2.x SDK.** 2.x renamed `FastMCP` to
   `MCPServer`; nightward uses whichever major is installed, and the `[mcp]` extra

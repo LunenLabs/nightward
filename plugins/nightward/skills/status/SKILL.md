@@ -4,15 +4,17 @@ description: Show the nightward gate verdict for this repository and what a huma
 disable-model-invocation: true
 ---
 
-Run `nightward status --json` in the repository root and report, briefly:
+Run `nightward status --json --diff` in the repository root and report, briefly:
 
 1. The `boundary` and what it means (intact, breached, incomplete, stale,
    partial or unknown), and `generated_at` (the verdict is from the last run;
    code edited since then isn't reflected).
-2. Each unapproved change: kind (NEW, CHANGED, REMOVED), name and group.
+2. Each unapproved change: kind (NEW, CHANGED, REMOVED), name, group, and in a
+   line what its `diff` shows moved.
 3. What the human runs next, in a code block:
    - nothing is reported or the report is stale: `nightward run`
    - breached: `nightward review`, then approve the intended changes by name,
      and fix the code for the rest.
 
-Do not run approve or reject yourself; those are the human's commands.
+Do not run approve or reject yourself; those are the human's commands. Do not run
+`nightward review` either: it records that the human saw the diffs.
