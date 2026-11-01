@@ -5,7 +5,7 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
-## [0.3.5] - Unreleased
+## [0.3.5] - 2026-11-02
 
 From a functional-gap review: the agent's view of a breach, settings that silently
 did nothing, and what the gate can't see. Also runs on the mcp 2.x SDK.
