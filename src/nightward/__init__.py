@@ -4,7 +4,7 @@ Surface: stop the exhausting infinite fix-loop.
 Subtitle: gate every AI-made change against an approved behavior boundary.
 """
 
-__version__ = "0.3.4"
+__version__ = "0.3.5"
 
 
 def capture(fn=None, *, name: str | None = None, group: str | None = None,
