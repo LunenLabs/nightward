@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import capture_path, project_judge
+from .config import capture_path, check_requires, project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
@@ -30,6 +30,8 @@ _server_dir: Path | None = None
 def configure(judge: str | None = None, dir: str | None = None) -> None:
     """Set the server's judge spec and store; a bad spec fails at startup, not mid-loop."""
     global _server_judge, _server_dir
+    if dir:
+        check_requires(dir)   # refuse to start, not on the agent's first call
     if judge:
         parse_spec(judge)
     _server_judge = judge
@@ -60,6 +62,7 @@ def _check_store(dir: str) -> None:
     """The CLI's guard (R1-OPS-07) for the agent: a server started in a
     subdirectory must not create a second, empty store below the project's
     (R3-OPS-02) - every behavior would read NEW there, forever."""
+    check_requires(dir)
     store = Path(dir)
     if store.exists():
         return

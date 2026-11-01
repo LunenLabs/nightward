@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from .. import __version__, shellquote
+from ..config import check_requires
 from ..core.baseline import Store, change_token
 from ..core.behavior import env_text
 from ..errors import NightwardError
@@ -145,6 +146,7 @@ def handle_errors(fn):
 
 
 def _store(dir_: str) -> Store:
+    check_requires(dir_)   # an older nightward must not read settings it can't apply
     return Store(Path(dir_))
 
 
