@@ -14,6 +14,20 @@ def _plain_output(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _quiet_child_plugins(monkeypatch):
+    """Tests assert that nightward prints no warning, and the child pytest a test
+    starts in tmp_path has no config of its own. Under pytest 9.2, pytest-asyncio
+    (a dev dependency) prints a deprecation warning to that child's stderr when
+    its loop scope is unset, which is the plugin talking, not nightward. A test
+    that sets its own PYTEST_ADDOPTS replaces this."""
+    try:
+        import pytest_asyncio  # noqa: F401
+    except ImportError:
+        return
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-o asyncio_default_fixture_loop_scope=function")
+
+
+@pytest.fixture(autouse=True)
 def _run_from_tmp_path(request, monkeypatch):
     """A test that writes a suite into tmp_path runs it from there, as a user
     runs nightward from their project. On a Windows runner the checkout is on D:
