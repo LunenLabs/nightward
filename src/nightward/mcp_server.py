@@ -92,7 +92,7 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
     report invalidated).
     Returns {boundary, unapproved, changes: [{name, kind, group, judged,
     judge_model, judge_reason, judge_replayed, rejected, rejected_by, depth,
-    ask_human}], judged_same,
+    ask_human, diff, diff_cut}], judged_same,
     not_run (approved behaviors whose test was deselected: not checked), narrowed,
     stale, incomplete, generated_at, judge, scrub_rules (custom scrub rules of the run
     and what they replaced), env_mismatch (changed behaviors approved on another OS or
@@ -114,6 +114,10 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
                    (see incomplete and pytest_output_tail): fix the tests;
       "stale"      the baseline, capture or rejections moved since the report: run again;
       "unknown"    no report yet: run.
+    diff is what moved (old "-", new "+"), cut to 40 lines (diff_cut: lines left out;
+    diff is null once 400 lines are shown): read it to tell an intended change
+    from a regression. Reading it marks nothing reviewed; don't run `nightward
+    review` or `nightward view` for the diffs - they record that a human saw them.
     Done means boundary == "intact" and stale is false. Behaviors approved with
     semantic=True are judged by the judge the humans committed
     ([tool.nightward] judge in pyproject.toml, or `nightward mcp --judge`);
@@ -127,7 +131,7 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
         path = path or capture_path(dir) or "."
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
                          judge_spec=spec, command="nightward_run (MCP)")
-    payload = status_payload(result["report"])
+    payload = status_payload(result["report"], with_diff=True)
     payload["store"] = str(Path(dir).resolve())
     payload["path"] = path
     payload["warnings"] = {
@@ -150,8 +154,8 @@ def status_tool(dir: str | None = None) -> dict:
     """Read the boundary signal of the LAST nightward_run, without running tests.
 
     It does not see code edits made since that run: after changing code, call
-    nightward_run for a fresh verdict. Same shape as nightward_run, without
-    warnings. boundary is "intact" (done), "breached" (unapproved changes),
+    nightward_run for a fresh verdict. Same shape as nightward_run (diffs
+    included), without warnings. boundary is "intact" (done), "breached" (unapproved changes),
     "partial" (approved behaviors not checked: their test was deselected),
     "incomplete" (capture tests failed or errored; see incomplete), "stale"
     (the baseline, capture or rejections moved since that run, so its verdict can't be
@@ -163,7 +167,7 @@ def status_tool(dir: str | None = None) -> dict:
     _check_store(dir)
     store = Store(Path(dir))
     report = store.load_report()
-    payload = status_payload(report, stale=is_stale(store, report))
+    payload = status_payload(report, stale=is_stale(store, report), with_diff=True)
     payload["store"] = str(store.root.resolve())
     return payload
 

@@ -10,10 +10,30 @@ report yet).
 """
 from __future__ import annotations
 
+# What an agent reads of each diff (with_diff): enough to tell an intended change
+# from a regression, bounded so a large capture can't flood its context. Reading
+# it marks nothing reviewed - only `review` and `view` record what a human saw.
+AGENT_DIFF_LINES = 40
+AGENT_DIFF_BUDGET = 10 * AGENT_DIFF_LINES   # lines across all changes of one payload
 
-def status_payload(report: dict | None, *, stale: bool = False) -> dict:
+
+def _with_diffs(changes: list[dict], items: list[dict]) -> None:
+    """Add each item's diff, cut to the per-change and per-payload budget;
+    diff_cut counts the lines left out (diff is None once the budget is spent)."""
+    budget = AGENT_DIFF_BUDGET
+    for change, it in zip(changes, items, strict=True):
+        lines = (it.get("diff") or "").splitlines()
+        take = min(len(lines), AGENT_DIFF_LINES, budget)
+        budget -= take
+        change["diff"] = "\n".join(lines[:take]) if take or not lines else None
+        change["diff_cut"] = len(lines) - take
+
+
+def status_payload(report: dict | None, *, stale: bool = False,
+                   with_diff: bool = False) -> dict:
     """stale=True means the baseline, capture or rejections changed since this report; its
-    verdict no longer applies, so boundary reads "stale" instead of intact/breached."""
+    verdict no longer applies, so boundary reads "stale" instead of intact/breached.
+    with_diff=True adds each change's diff, bounded (AGENT_DIFF_LINES) - for agents."""
     if report is None:
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
                 "not_run": [], "narrowed": False, "stale": False, "incomplete": None,
@@ -23,11 +43,10 @@ def status_payload(report: dict | None, *, stale: bool = False) -> dict:
     # Every field of a change except its (possibly large) diff and its review
     # token, so judged rulings (judged / judge_model / judge_reason) and
     # standing rejections (rejected / rejected_by) reach agents and CI.
-    changes = [
-        {k: v for k, v in it.items() if k not in ("diff", "token")}
-        for items in report.get("blast_radius", {}).values()
-        for it in items
-    ]
+    items = [it for group in report.get("blast_radius", {}).values() for it in group]
+    changes = [{k: v for k, v in it.items() if k not in ("diff", "token")} for it in items]
+    if with_diff:
+        _with_diffs(changes, items)
     boundary = report.get("boundary", "unknown")
     incomplete = report.get("incomplete")
     if stale:

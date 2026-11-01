@@ -68,7 +68,10 @@ nightward status  boundary summary with the change list (--json: the machine
                   "done"; "breached", "partial" (approved behaviors not checked:
                   their test was deselected), "incomplete" (capture tests failed/errored),
                   "stale" (baseline, capture or rejections changed since the last report -
-                  re-run) and "unknown" (no report) are not
+                  re-run) and "unknown" (no report) are not. `--json --diff` adds
+                  each change's diff, cut to 40 lines: what an agent reads to tell
+                  an intended change from a regression. It marks nothing reviewed
+                  (`review` and `view` do: an agent must not run them)
 nightward view    build a static, read-only dashboard and view it in a browser
 nightward mcp     stdio MCP server for AI agents: run + status, never approve
 nightward --version  the installed version (put it in bug reports and CI logs)
@@ -78,6 +81,15 @@ Every command uses the store at `./.nightward` (or `--dir`), so run them from th
 project root. A store that isn't there is an error that says where nightward looked,
 and points at `../.nightward` when you are in a subdirectory, rather than reading as
 empty or "intact". `status` still prints `unknown` (exit 0), with that note on stderr.
+
+Settings live in `[tool.nightward]` of the pyproject.toml nearest the store: `judge`,
+`path`, `domain`, `review` (`default`, `groups`) and `requires`. A key nightward doesn't
+know is an error that names the closest known one, never ignored: a typo'd `path` or a
+group depth written one table too high would otherwise do nothing. `requires =
+"0.3.5"` is the lowest nightward that may read the settings. Every command and the
+MCP server refuse to run on an older one, which would ignore settings it doesn't know
+(an `exhaustive` group would go through `approve --all`). Versions before 0.3.5 don't
+read `requires`: pin the version in CI and in the MCP config as well.
 
 A failing or erroring capture test means its behaviors are missing from the blast
 radius, so the run is **incomplete**: `nightward run` prints the summary and exits 1,

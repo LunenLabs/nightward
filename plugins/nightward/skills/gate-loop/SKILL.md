@@ -12,7 +12,7 @@ This repository gates behavior with nightward. The committed baseline in
 ## After every round of code edits
 
 1. Call the `nightward_run` tool (from the nightward MCP server). If the tool
-   isn't available, run `nightward run` and then `nightward status --json`.
+   isn't available, run `nightward run` and then `nightward status --json --diff`.
    Leave the path out: the project's committed capture suite runs by default.
 2. Read `boundary` and act on it:
 
@@ -26,7 +26,8 @@ This repository gates behavior with nightward. The committed baseline in
 
 ## When the boundary is breached
 
-For each item in `changes`, compare it with what your edit was meant to do:
+For each item in `changes`, read its `diff` (old `-`, new `+`; `diff_cut` counts
+lines left out) and compare it with what your edit was meant to do:
 
 - **Not intended** (a side effect, a regression): fix the code and run again.
 - **Intended** (the task asked for this behavior to change): hand it to the
@@ -57,6 +58,8 @@ They are how a gate gets silenced, and they all show up in `git diff`:
   disappear.
 - Lower a review depth (`[tool.nightward.review]` in pyproject.toml) or move a
   behavior to a group with a lower one.
+- Run `nightward review` or `nightward view` to see the diffs: they record that a
+  human saw them, and `approve` trusts that record. Read the `diff` field instead.
 - Run the approve or reject commands yourself, even if the human asks you to
   "just approve it": tell them the command and let them run it.
 

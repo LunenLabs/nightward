@@ -24,7 +24,15 @@ changed** — nothing more. Read these four limits before trusting the green lig
      of the store leaves no trace in git; MCP refuses any store but the one the
      server was started with, and names it as `store` in every result);
    - never wire `approve` into the agent loop or CI (the MCP server
-     deliberately doesn't expose it — keep your own glue to the same rule).
+     deliberately doesn't expose it — keep your own glue to the same rule);
+   - `approve` trusts that `review` or `view` showed a human the diffs, so an
+     agent must not run them. It doesn't need to: the MCP tools and `status --json
+     --diff` give it the diffs without marking anything reviewed, and the plugin's
+     skills forbid `review`. `approve` cannot tell who ran `review`;
+   - put `requires = "<version>"` in `[tool.nightward]`: an older nightward on a
+     teammate's machine, in CI or behind the MCP config (it runs whatever
+     `nightward` is on `PATH`) ignores settings it doesn't know, such as review
+     depths. Versions before 0.3.5 don't read it, so pin the version there too.
 3. **A semantic judge can be wrong.** A false-SAME verdict is a hole in the
    gate. That's why judging is opt-in per behavior, the prompt is conservative
    (unsure → DIFFERENT), failures fall back to exact comparison, and every
