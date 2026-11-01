@@ -106,6 +106,9 @@ never write expected values. Use the `behavior` fixture or `@capture`.
 
 If `[tool.nightward] path` isn't set in `pyproject.toml`, tell the human to set it
 to the capture folder, so the agent loop runs these tests and not the whole suite.
+Suggest `requires = "<the installed nightward version>"` next to it too: an older
+nightward on a teammate's machine or CI would otherwise ignore settings it doesn't
+know, such as review depths.
 
 ## 5. Run twice
 
@@ -138,5 +141,7 @@ away.
 - Edit source code before the first capture.
 - Approve or reject, edit anything under `.nightward/`, or write a review depth
   into `pyproject.toml`.
+- Run `nightward review` or `nightward view`: they record that the human saw the
+  diffs. Read the captures in `.nightward/pending/`, or `nightward status --json --diff`.
 - Mark a rule as confirmed without an intent source you can point to.
 - Hard-code a captured value into a test.

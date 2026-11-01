@@ -8,6 +8,9 @@ judge the same way, and changing it shows up in a PR diff. `nightward run
     [tool.nightward]
     judge = "persona:editor"
     path = "tests/nightward"      # what pytest runs when no path is given
+    requires = "0.3.5"            # the lowest nightward that may read these settings
+
+A key nightward doesn't know is an error, never ignored.
 
 The setting belongs to the project that owns the store, so it is read from the
 pyproject.toml nearest the store directory - never from the test path, where a
@@ -15,9 +18,13 @@ subpackage's own pyproject could drop or swap the judge (R3-LLM-03, D22).
 """
 from __future__ import annotations
 
+import difflib
 import os
+import re
+import sys
 from pathlib import Path
 
+from . import __version__
 from .errors import NightwardError
 
 try:
@@ -50,7 +57,58 @@ def _settings(start: str | Path) -> tuple[dict, Path | None]:
     table = data.get("tool", {}).get("nightward", {})
     if not isinstance(table, dict):
         raise NightwardError(f"{path}: [tool.nightward] must be a table")
+    _check_version(table.get("requires"), path)
+    _check_keys(table, _KEYS, "[tool.nightward]", path)
+    review = table.get("review")
+    if isinstance(review, dict):
+        _check_keys(review, _REVIEW_KEYS, "[tool.nightward.review]", path,
+                    hint="group depths go under [tool.nightward.review.groups]")
     return table, path
+
+
+# Fail closed: an ignored key is a setting that silently does nothing - a typo'd
+# path, an exhaustive group written one table too high, or a key from a newer
+# nightward. `requires` makes the newer case an error on versions that know it.
+_KEYS = ("judge", "path", "review", "domain", "requires")
+_REVIEW_KEYS = ("default", "groups")
+
+
+def _check_keys(table: dict, known: tuple[str, ...], where: str, path: Path,
+                hint: str = "") -> None:
+    for key in table:
+        if key in known:
+            continue
+        close = difflib.get_close_matches(key, known, n=1)
+        guess = f" - did you mean {close[0]!r}?" if close else ""
+        raise NightwardError(
+            f"{path}: {where} unknown key {key!r}{guess} (known: {', '.join(known)}"
+            f"{'; ' + hint if hint else ''}). A key from a newer nightward needs that "
+            f"version: this is {__version__}")
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
+
+
+def _check_version(required, path: Path) -> None:
+    if required is None:
+        return
+    if not isinstance(required, str) or not re.fullmatch(r"\d+(\.\d+)*", required):
+        raise NightwardError(f'{path}: [tool.nightward] requires must be a version, the '
+                             f'lowest nightward this project runs with, e.g. requires = '
+                             f'"{__version__}" (got {required!r})')
+    running = re.match(r"\d+(\.\d+)*", __version__).group()
+    if _version_tuple(running) < _version_tuple(required):
+        raise NightwardError(
+            f"{path}: this project requires nightward >= {required}, but this is "
+            f"{__version__} ({sys.executable}) - an older nightward ignores settings it "
+            f"doesn't know, such as review depths. Upgrade: pip install -U nightward")
+
+
+def check_requires(start: str | Path = ".nightward") -> None:
+    """Refuse a nightward older than the project's `[tool.nightward] requires`, and
+    any key it doesn't know - for commands that read no setting themselves."""
+    _settings(start)
 
 
 def judge_setting(store_dir: str | Path = ".nightward") -> tuple[str | None, Path | None]:

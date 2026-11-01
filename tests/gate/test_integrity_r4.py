@@ -452,7 +452,8 @@ def test_help_into_a_closed_pipe_is_quiet(tmp_path, args):
         p = subprocess.Popen([sys.executable, "-m", "nightward", *args], cwd=tmp_path,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         p.stdout.close()                      # the reader (`head`) is already gone
-        err = p.stderr.read().decode("utf-8", "replace")
+        with p.stderr:
+            err = p.stderr.read().decode("utf-8", "replace")
         # Quiet either way: nightward's guard exits 0 (Windows reports EINVAL);
         # on POSIX Click itself catches EPIPE and exits 1 without output.
         assert p.wait(timeout=60) in (0, 1), err

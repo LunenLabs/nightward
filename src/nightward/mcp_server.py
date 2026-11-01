@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import capture_path, project_judge
+from .config import capture_path, check_requires, project_judge
 from .core.baseline import Store
 from .errors import NightwardError
 from .judge import parse_spec
@@ -30,6 +30,8 @@ _server_dir: Path | None = None
 def configure(judge: str | None = None, dir: str | None = None) -> None:
     """Set the server's judge spec and store; a bad spec fails at startup, not mid-loop."""
     global _server_judge, _server_dir
+    if dir:
+        check_requires(dir)   # refuse to start, not on the agent's first call
     if judge:
         parse_spec(judge)
     _server_judge = judge
@@ -60,6 +62,7 @@ def _check_store(dir: str) -> None:
     """The CLI's guard (R1-OPS-07) for the agent: a server started in a
     subdirectory must not create a second, empty store below the project's
     (R3-OPS-02) - every behavior would read NEW there, forever."""
+    check_requires(dir)
     store = Path(dir)
     if store.exists():
         return
@@ -89,7 +92,7 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
     report invalidated).
     Returns {boundary, unapproved, changes: [{name, kind, group, judged,
     judge_model, judge_reason, judge_replayed, rejected, rejected_by, depth,
-    ask_human}], judged_same,
+    ask_human, diff, diff_cut}], judged_same,
     not_run (approved behaviors whose test was deselected: not checked), narrowed,
     stale, incomplete, generated_at, judge, scrub_rules (custom scrub rules of the run
     and what they replaced), env_mismatch (changed behaviors approved on another OS or
@@ -111,6 +114,10 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
                    (see incomplete and pytest_output_tail): fix the tests;
       "stale"      the baseline, capture or rejections moved since the report: run again;
       "unknown"    no report yet: run.
+    diff is what moved (old "-", new "+"), cut to 40 lines (diff_cut: lines left out;
+    diff is null once 400 lines are shown): read it to tell an intended change
+    from a regression. Reading it marks nothing reviewed; don't run `nightward
+    review` or `nightward view` for the diffs - they record that a human saw them.
     Done means boundary == "intact" and stale is false. Behaviors approved with
     semantic=True are judged by the judge the humans committed
     ([tool.nightward] judge in pyproject.toml, or `nightward mcp --judge`);
@@ -124,7 +131,7 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
         path = path or capture_path(dir) or "."
     result = execute_run(path, dir, capture_output=True, timeout=timeout,
                          judge_spec=spec, command="nightward_run (MCP)")
-    payload = status_payload(result["report"])
+    payload = status_payload(result["report"], with_diff=True)
     payload["store"] = str(Path(dir).resolve())
     payload["path"] = path
     payload["warnings"] = {
@@ -147,8 +154,8 @@ def status_tool(dir: str | None = None) -> dict:
     """Read the boundary signal of the LAST nightward_run, without running tests.
 
     It does not see code edits made since that run: after changing code, call
-    nightward_run for a fresh verdict. Same shape as nightward_run, without
-    warnings. boundary is "intact" (done), "breached" (unapproved changes),
+    nightward_run for a fresh verdict. Same shape as nightward_run (diffs
+    included), without warnings. boundary is "intact" (done), "breached" (unapproved changes),
     "partial" (approved behaviors not checked: their test was deselected),
     "incomplete" (capture tests failed or errored; see incomplete), "stale"
     (the baseline, capture or rejections moved since that run, so its verdict can't be
@@ -160,7 +167,7 @@ def status_tool(dir: str | None = None) -> dict:
     _check_store(dir)
     store = Store(Path(dir))
     report = store.load_report()
-    payload = status_payload(report, stale=is_stale(store, report))
+    payload = status_payload(report, stale=is_stale(store, report), with_diff=True)
     payload["store"] = str(store.root.resolve())
     return payload
 
@@ -173,22 +180,23 @@ _TOOLS = {
 
 
 def build_server():
-    """Build the FastMCP server with only the read/execute tools registered."""
+    """Build the MCP server with only the read/execute tools registered."""
     try:
-        from mcp.server.fastmcp import FastMCP
-    except ImportError as exc:
-        # mcp 2.x renamed FastMCP, so "installed but wrong major" lands here too.
-        raise NightwardError(
-            "MCP support needs the mcp 1.x SDK - run: pip install 'nightward[mcp]' "
-            "(mcp 2.x is not supported yet)"
-        ) from exc
-    server = FastMCP("nightward")
+        from mcp.server.mcpserver import MCPServer  # mcp 2.x
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP as MCPServer  # mcp 1.x
+        except ImportError as exc:
+            raise NightwardError(
+                "MCP support needs the mcp SDK - run: pip install 'nightward[mcp]'"
+            ) from exc
+    server = MCPServer("nightward")
     for name, fn in _TOOLS.items():
         server.tool(name=name)(fn)
     return server
 
 
 def serve(judge: str | None = None, dir: str = ".nightward") -> None:
-    """Start the stdio MCP server (blocks). FastMCP defaults to stdio transport."""
+    """Start the stdio MCP server (blocks). Both SDK majors default to stdio transport."""
     configure(judge=judge, dir=dir)
     build_server().run()

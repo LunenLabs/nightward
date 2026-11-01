@@ -8,7 +8,7 @@ An agent loop needs a definition of "done" that it can check but not change.
 the agent **run** the gate and **read** its verdict. It can't approve anything.
 
 ```bash
-pip install "nightward[mcp]"                      # the mcp 1.x SDK (2.x is not supported yet)
+pip install "nightward[mcp]"                      # the mcp SDK (1.x or 2.x)
 claude mcp add nightward -- nightward mcp         # e.g. Claude Code; run it in the project root
 ```
 
@@ -34,7 +34,9 @@ Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`nam
 `kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
 `judge_replayed` when that ruling came from the ledger; `rejected`, `rejected_by` when
 the payload is a standing rejection; `depth` and `ask_human`, when to hand an intended
-change to a human: [review depth](review-depth.md)), `not_run` (`{name, group}` of approved behaviors
+change to a human: [review depth](review-depth.md); `diff`, what moved, cut to 40 lines
+per change and 400 per call, and `diff_cut`, the lines left out - reading it marks
+nothing reviewed, unlike `nightward review`), `not_run` (`{name, group}` of approved behaviors
 whose test was deselected) and `narrowed`, `judged_same`, `stale`, `incomplete`
 (`{"failed": n, "errors": m}` or null), `generated_at`, `judge`, `scrub_rules` (the
 custom scrub rules of the last run and what they replaced), `env_mismatch`
