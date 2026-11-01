@@ -4,6 +4,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape
 
+from .. import shellquote
 from ..config import review_depths
 from ..core.baseline import Store, change_token
 from ..core.diff import NOT_RUN, REMOVED, UNCHANGED
@@ -66,7 +67,8 @@ _EXPLICIT_REMOVAL = ("drop intended ones with `nightward approve --remove NAME..
                      "`nightward approve --remove-group G` after `nightward review`")
 
 
-def _print_kept_removals(held: list[str], baseline, meta: dict) -> None:
+def _print_kept_removals(held: list[str], baseline, meta: dict,
+                         renamed: dict[str, list[str]] | None = None) -> None:
     console.print(f"[yellow]kept[/yellow] {len(held)} REMOVED behavior(s) in the baseline - "
                   f"dropping one is always your explicit decision:", soft_wrap=True)
     by_reason: dict[str, list[str]] = {}
@@ -74,6 +76,14 @@ def _print_kept_removals(held: list[str], baseline, meta: dict) -> None:
         by_reason.setdefault(_why_removed(baseline[n], meta), []).append(n)
     for why, which in by_reason.items():
         console.print(f"  - {escape(', '.join(which))}: {escape(why)}", soft_wrap=True)
+    for n in held:
+        # A hint, never an authorization (D29): the human still runs the removal.
+        other = (renamed or {}).get(n)
+        if other:
+            cmd = shellquote.command("approve --remove", [n])
+            then = f"; if it is a rename: {cmd}" if cmd else ""
+            console.print(f"  - {escape(n)}: its same payload is now captured as "
+                          f"{escape(', '.join(other[:3]))}{escape(then)}", soft_wrap=True)
     gaps = _run_gaps(meta)
     if gaps:
         console.print(f"  the last run left tests out: {escape('; '.join(gaps))}",
@@ -321,7 +331,8 @@ def _approve(store: Store, dir: str, names: list[str] | None, all_: bool,
                       f"  approve each by name after reading it: `nightward approve <name>`.",
                       soft_wrap=True)
     if held:
-        _print_kept_removals(held, baseline, store.load_run_meta())
+        _print_kept_removals(held, baseline, store.load_run_meta(),
+                             {it["name"]: it.get("same_as") for it in _report_items(report)})
     _print_summary(recompute(store, judge=judge))
 
 

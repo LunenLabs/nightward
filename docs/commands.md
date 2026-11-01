@@ -38,6 +38,10 @@ nightward approve promote pending behavior(s) into the baseline
                   for groups too big to list on one command line; `approve --remove
                   NAME...` and `--remove-group G` drop exactly those REMOVED behaviors -
                   removal is always this explicit human act on what review showed).
+                  A REMOVED behavior whose payload this run captured under another
+                  name reads `(its payload is captured as NEW_NAME now: renamed?)`,
+                  and the kept list prints its `approve --remove` command - a hint,
+                  never a removal
                   `--all` and `--group` leave behaviors of an `exhaustive` group
                   (review-depth.md) and name them: approve those one name at a time.
                   It promotes only changes a human was shown, exactly as shown,

@@ -5,6 +5,19 @@ All notable changes to nightward are recorded here. The format follows
 [Semantic Versioning](https://semver.org/) (pre-1.0: a minor version may change
 behavior; every such change is listed under "Upgrading").
 
+## [Unreleased]
+
+### Added
+
+- **A rename says so.** Renaming a behavior reads as a REMOVED and a NEW one with
+  the same payload, which a human had to diff side by side. Each now names the
+  other: `run` and `review` print `(same payload as REMOVED checkout_total:
+  renamed?)`, and the report, `status --json` and MCP carry `same_as`. A REMOVED
+  behavior keeps the hint after its new name is approved, and the "kept" list of
+  `approve --all` prints the `nightward approve --remove` command for it. It is a
+  hint only: no bulk approval drops a REMOVED behavior, and `same_as` is in no
+  token or verdict.
+
 ## [0.3.5] - 2026-11-02
 
 From a functional-gap review: the agent's view of a breach, settings that silently

@@ -19,6 +19,7 @@ from ._common import (
     _print_scrub_rules,
     _rejected_note,
     _require_report,
+    _same_as_note,
     _shown,
     app,
     console,
@@ -207,7 +208,7 @@ def review(names: list[str] | None = NAMES_ARG,
                 continue
             tag = "" if d == "standard" else f" [dim]({d})[/dim]"
             console.print(f"\n[bold][[cyan]{it['kind']}[/cyan]] {escape(it['name'])}[/bold]"
-                          f"{tag}{_rejected_note(it)}")
+                          f"{tag}{_rejected_note(it)}{_same_as_note(it)}", soft_wrap=True)
             if it.get("rejected"):
                 console.print("[dim]this exact payload is a standing rejection "
                               "(.nightward/rejected/); approving it overrides that "
