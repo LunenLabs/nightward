@@ -246,8 +246,8 @@ intended changes are approved locally (`nightward review`, `nightward approve`)
 and arrive in the PR as a baseline diff.
 
 ```yaml
-- uses: actions/checkout@v4
-- uses: actions/setup-python@v5
+- uses: actions/checkout@v7
+- uses: actions/setup-python@v7
   with:
     python-version: "3.12"
 - run: pip install -e .          # your project and its test dependencies
