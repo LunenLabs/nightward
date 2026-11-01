@@ -50,6 +50,7 @@ judge = "persona:editor"
 path = "tests"
 domain = "docs/nightward-domain"
 requires = "{__version__}"
+coverage = "."
 
 [tool.nightward.review]
 default = "standard"

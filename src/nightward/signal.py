@@ -38,7 +38,7 @@ def status_payload(report: dict | None, *, stale: bool = False,
         return {"boundary": "unknown", "unapproved": 0, "changes": [], "judged_same": [],
                 "not_run": [], "narrowed": False, "stale": False, "incomplete": None,
                 "generated_at": None, "judge": None, "scrub_rules": [],
-                "env_mismatch": None}
+                "env_mismatch": None, "capture_coverage": None}
 
     # Every field of a change except its (possibly large) diff and its review
     # token, so judged rulings (judged / judge_model / judge_reason) and
@@ -79,4 +79,7 @@ def status_payload(report: dict | None, *, stale: bool = False,
         # {"capture": env, "behaviors": {name: env}} or None - suspect the
         # environment before the code
         "env_mismatch": report.get("env_mismatch"),
+        # [tool.nightward] coverage: {roots, functions, executed, uncovered,
+        # unreadable} or None - what no capture test ran; never part of boundary
+        "capture_coverage": report.get("capture_coverage"),
     }

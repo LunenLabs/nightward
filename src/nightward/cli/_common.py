@@ -359,6 +359,27 @@ def _print_not_run(report: dict) -> None:
                       f"without the selection checks them", soft_wrap=True)
 
 
+def _print_coverage(cov: dict | None) -> None:
+    """What the gate can't see ([tool.nightward] coverage). Information only:
+    "ran in a capture test" is not "protected", and it never moves the verdict."""
+    if not cov:
+        return
+    roots = escape(", ".join(cov["roots"]))
+    missing = cov["functions"] - cov["executed"]
+    console.print(f"capture coverage: {cov['executed']} of {cov['functions']} public "
+                  f"functions in {roots} ran in a capture test", soft_wrap=True)
+    if missing:
+        shown = cov["uncovered"][:8]   # the list is capped; the count is exact
+        more = f" and {missing - len(shown)} more" if missing > len(shown) else ""
+        console.print(f"  not run by any capture test ({missing}): "
+                      f"{escape(', '.join(shown))}{more} - a change there can't "
+                      f"breach the gate (`nightward status --json` lists them)",
+                      soft_wrap=True)
+    for path in cov.get("unreadable") or ():
+        err_console.print(f"[yellow]note:[/yellow] capture coverage could not parse "
+                          f"{escape(path)}", soft_wrap=True)
+
+
 def _print_env_mismatch(report: dict) -> None:
     """Say when changed behaviors were approved on another OS or Python (a hint,
     never a verdict: the boundary stays what the fingerprints say)."""

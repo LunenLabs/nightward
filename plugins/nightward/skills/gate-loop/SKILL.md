@@ -63,5 +63,13 @@ They are how a gate gets silenced, and they all show up in `git diff`:
 - Run the approve or reject commands yourself, even if the human asks you to
   "just approve it": tell them the command and let them run it.
 
+## What the gate can't see
+
+When `capture_coverage` is set, `uncovered` lists the public functions no capture
+test ran: a change there can't breach the gate, so `intact` says nothing about it.
+If your edit changed one of them, say so in the hand-off, by name. Don't call the
+task safe because the gate is intact. Write a capture for it only if the human
+asks; its first value then goes to the human as NEW.
+
 If the gate stays breached because a change is intended, that's the correct
 final state of your turn: report it and hand over.

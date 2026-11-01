@@ -9,6 +9,13 @@ behavior; every such change is listed under "Upgrading").
 
 ### Added
 
+- **Capture coverage: what the gate can't see.** With `[tool.nightward] coverage =
+  "src/app"`, every run (CLI, `gate --run`, MCP) lists the public functions under it
+  that no capture test ran. A change there can't breach the gate. `status --json`
+  and the MCP tools carry it as `capture_coverage`, and the gate-loop skill tells
+  the agent to name such functions in its hand-off. It never changes the verdict,
+  and "ran in a capture test" doesn't mean protected. It uses `sys.setprofile` (no
+  new dependency) and makes a run slower.
 - **The agent sees what moved without taking the human's review.** `nightward_run`
   and `nightward_status` return each change's `diff`, cut to 40 lines (400 per call),
   with `diff_cut` counting the lines left out; `nightward status --json --diff` is

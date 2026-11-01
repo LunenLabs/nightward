@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from .config import ASK_HUMAN, review_depths
+from .config import ASK_HUMAN, coverage_roots, review_depths
 from .core.baseline import Store, change_token, digest
 from .core.behavior import capture_env
 from .core.blast import aggregate
@@ -141,6 +141,9 @@ def recompute(store: Store, judge=None, *, baseline=None, pending=None) -> dict:
         {k: r.get(k) for k in ("rule", "values", "behaviors", "placeholder")}
         for r in meta.get("scrub_rules") or [] if isinstance(r, dict)]
     report["env_mismatch"] = env_mismatch(changes, baseline, pending)
+    # Public functions no capture test ran ([tool.nightward] coverage): shown to
+    # humans and agents, outside every digest and the boundary.
+    report["capture_coverage"] = meta.get("coverage")
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
     report["baseline_digest"] = digest(baseline)
@@ -348,6 +351,12 @@ def _execute_run(path: str, dir: str, *, capture_output: bool, judge_spec: str |
     # Build (= validate) the judge before pytest: a typo'd spec or a corrupt
     # ledger must fail in a second, not after the whole suite (R1-LLM-06).
     judge = make_judge(spec, store)
+    coverage = coverage_roots(dir)
+    if coverage:
+        base, roots = coverage
+        extra += ["--nightward-coverage-base", base]
+        for root in roots:
+            extra += ["--nightward-coverage", root]
     # One writer per store (D11): the pytest child flushes under this lock (it
     # recognizes the run id), and the recompute below stays inside it too.
     with store_lock(store.root, command, token=run_id):

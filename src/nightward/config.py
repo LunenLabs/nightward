@@ -69,7 +69,7 @@ def _settings(start: str | Path) -> tuple[dict, Path | None]:
 # Fail closed: an ignored key is a setting that silently does nothing - a typo'd
 # path, an exhaustive group written one table too high, or a key from a newer
 # nightward. `requires` makes the newer case an error on versions that know it.
-_KEYS = ("judge", "path", "review", "domain", "requires")
+_KEYS = ("judge", "path", "review", "domain", "requires", "coverage")
 _REVIEW_KEYS = ("default", "groups")
 
 
@@ -151,6 +151,31 @@ def capture_path(store_dir: str | Path = ".nightward") -> str | None:
         return os.path.relpath(full)
     except ValueError:   # Windows: another drive has no relative path
         return str(full)
+
+
+def coverage_roots(store_dir: str | Path = ".nightward") -> tuple[str, list[str]] | None:
+    """The source the captures should cover (`[tool.nightward] coverage`: a path or a
+    list, relative to its pyproject.toml like `path`): (the pyproject's folder,
+    absolute roots), or None when capture coverage is off. Information only:
+    never part of a verdict."""
+    table, path = _settings(store_dir)
+    value = table.get("coverage")
+    if value is None:
+        return None
+    values = [value] if isinstance(value, str) else value
+    usage = (f'{path}: [tool.nightward] coverage must be a source path or a list of '
+             f'them, e.g. coverage = "src/app"')
+    if (not isinstance(values, list) or not values
+            or not all(isinstance(v, str) and v.strip() for v in values)):
+        raise NightwardError(usage)
+    roots = []
+    for v in values:
+        full = (path.parent / v).resolve()
+        if not full.exists():
+            raise NightwardError(f"{path}: [tool.nightward] coverage: {v!r} does not exist "
+                                 f"(relative to {path.parent})")
+        roots.append(str(full))
+    return str(path.parent.resolve()), roots
 
 
 def project_judge(store_dir: str | Path = ".nightward") -> str | None:

@@ -97,7 +97,9 @@ def run_tool(path: str | None = None, dir: str | None = None, timeout: int = 600
     stale, incomplete, generated_at, judge, scrub_rules (custom scrub rules of the run
     and what they replaced), env_mismatch (changed behaviors approved on another OS or
     Python than this run, or null: tell the human - it never makes a breach
-    acceptable), store (absolute path of the gated
+    acceptable), capture_coverage ({roots, functions, executed, uncovered}: public functions
+    no capture test ran, when [tool.nightward] coverage is set, else null - a change
+    there can't breach the gate; never part of boundary), store (absolute path of the gated
     store), path (what pytest ran), warnings: {skipped, failed, errors, deselected,
     xfailed, scrubbed,
     scrub_unmatched (custom scrub rules that matched nothing), scrub_rules (per custom

@@ -10,6 +10,9 @@ changed** — nothing more. Read these four limits before trusting the green lig
    calls capture. An agent can break an uncaptured code path and the boundary
    stays intact. Instrument the behaviors you actually care about, and treat
    the gate as a tripwire on those — not as proof that "nothing broke."
+   `[tool.nightward] coverage` lists the public functions no capture test ran
+   ([commands](commands.md#capture-coverage)); one that ran still isn't proof
+   that its result was captured.
 2. **The gate is a convention, not a sandbox.** An agent with shell access can
    run `nightward approve`, copy `pending/` into `baseline/`, delete `behavior()`
    calls, or add scrub rules that mask a change. nightward does not try to

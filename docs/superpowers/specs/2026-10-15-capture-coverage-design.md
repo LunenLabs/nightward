@@ -1,6 +1,6 @@
 # Capture coverage: showing what the gate can't see
 
-Status: **proposal, not decided.** Pick an option before any code.
+Status: **decided** (2026-11-02): option A. See [Decisions](#decisions-2026-11-02).
 
 ## Problem
 
@@ -77,3 +77,29 @@ question.
 2. Does coverage belong in the gate verdict? Proposal: **no**, it's information.
    A threshold would be a policy engine, which the scope excludes.
 3. Where it shows: `run` summary line, `status --json`, dashboard panel.
+
+## Decisions (2026-11-02)
+
+Option A, with the proposals above:
+
+1. **Unit: public functions** - module-level functions and methods of module-level
+   classes whose names don't start with `_`. Lines are left for later.
+2. **Not in the verdict.** Coverage never changes `boundary`, `gate`'s exit code, a
+   fingerprint or a digest. No threshold.
+3. **Where:** a `run` line, `capture_coverage` in `status --json` and both MCP tools.
+   The dashboard panel is a follow-up.
+
+How it works:
+
+- `[tool.nightward] coverage = "src/app"` (a path or a list, relative to the
+  pyproject.toml, like `path`) turns it on for every run: CLI, `gate --run` and MCP.
+  It is a committed setting, so the agent's runs measure the same thing.
+- Executed means called while a capture test ran (setup, call and teardown of a test
+  that uses `behavior` or `@capture`): a test that calls a function without
+  capturing anything doesn't count. Measured with `sys.setprofile` (no dependency;
+  coverage.py and pytest-cov use the tracer, so they still work alongside).
+  A run is slower while it is on.
+- A function is matched by file, name and first line (the first decorator's line
+  for a decorated one). Test modules and `conftest.py` are not counted.
+- The wording is "ran in a capture test", never "protected": a function can run
+  without its result reaching any payload.
