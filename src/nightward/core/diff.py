@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .behavior import Behavior, canonical_json
@@ -33,6 +33,9 @@ class Change:
     rejected: bool = False    # the current state is a standing rejection (rejected/)
     rejected_by: str = ""
     token: str = ""           # identity of this change (see baseline.change_token)
+    # NEW <-> REMOVED behaviors with the same payload: a rename, probably. Display
+    # only - never in a token, a verdict or an approval (D29).
+    same_as: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = {"name": self.name, "kind": self.kind, "group": self.group}
@@ -45,6 +48,8 @@ class Change:
             d |= {"rejected": True, "rejected_by": self.rejected_by}
         if self.token:
             d["token"] = self.token
+        if self.same_as:
+            d["same_as"] = self.same_as
         return d
 
 

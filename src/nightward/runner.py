@@ -20,7 +20,7 @@ from .config import ASK_HUMAN, coverage_roots, review_depths
 from .core.baseline import Store, change_token, digest
 from .core.behavior import capture_env
 from .core.blast import aggregate
-from .core.diff import CHANGED, NOT_RUN, REMOVED, UNCHANGED, compare
+from .core.diff import CHANGED, NEW, NOT_RUN, REMOVED, UNCHANGED, compare
 from .core.lock import store_lock
 from .errors import NightwardError
 
@@ -104,7 +104,30 @@ def classify(store: Store, baseline, pending, judge=None, *, with_diff: bool = T
                    f"name to clear the rejection")
         c.kind = CHANGED
         c.diff_text = why + ("\n" + c.diff_text if c.diff_text else "")
+    _pair_renames(changes, baseline, pending)
     return changes
+
+
+def _pair_renames(changes, baseline, pending) -> None:
+    """A rename reads as two unrelated changes, REMOVED and NEW. Point a REMOVED
+    behavior at every behavior captured with its payload this run (still NEW, or
+    approved since), and a NEW one at the REMOVED ones it matches. A hint for
+    the human only - removal stays `approve --remove` (D29)."""
+    removed = [c for c in changes if c.kind == REMOVED]
+    if not removed:
+        return
+    captured: dict[str, list[str]] = {}
+    for name, b in pending.items():
+        captured.setdefault(b.fingerprint(), []).append(name)
+    gone: dict[str, list[str]] = {}
+    for c in removed:
+        fp = baseline[c.name].fingerprint()
+        if fp in captured:
+            c.same_as = sorted(captured[fp])
+            gone.setdefault(fp, []).append(c.name)
+    for c in changes:
+        if c.kind == NEW:
+            c.same_as = sorted(gone.get(pending[c.name].fingerprint(), []))
 
 
 NO_JUDGE = ("no judge configured - set [tool.nightward] judge in the project's "

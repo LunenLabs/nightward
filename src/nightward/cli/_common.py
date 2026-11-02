@@ -359,6 +359,18 @@ def _print_not_run(report: dict) -> None:
                       f"without the selection checks them", soft_wrap=True)
 
 
+def _same_as_note(it: dict) -> str:
+    """A NEW and a REMOVED behavior with the same payload: probably a rename.
+    A hint for the reviewer, never a decision (removal stays explicit, D29)."""
+    other = it.get("same_as")
+    if not other:
+        return ""
+    names = escape(_names_text(other, 3))
+    if it.get("kind") == "NEW":
+        return f" [dim](same payload as REMOVED {names}: renamed?)[/dim]"
+    return f" [dim](its payload is captured as {names} now: renamed?)[/dim]"
+
+
 def _print_coverage(cov: dict | None) -> None:
     """What the gate can't see ([tool.nightward] coverage). Information only:
     "ran in a capture test" is not "protected", and it never moves the verdict."""
@@ -454,6 +466,6 @@ def _print_summary(report: dict) -> None:
             judged = (f" [dim](judged DIFFERENT by {escape(it['judge_model'])})[/dim]"
                       if it.get("judged") else "")
             console.print(f"  - [[cyan]{it['kind']}[/cyan]] {escape(it['name'])}{judged}"
-                          f"{_rejected_note(it)}")
+                          f"{_rejected_note(it)}{_same_as_note(it)}", soft_wrap=True)
     _print_env_mismatch(report)
 

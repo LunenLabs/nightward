@@ -34,7 +34,9 @@ Both return the `status --json` shape: `boundary`, `unapproved`, `changes` (`nam
 `kind`, `group`, plus `judged`, `judge_model`, `judge_reason` when a judge ruled, and
 `judge_replayed` when that ruling came from the ledger; `rejected`, `rejected_by` when
 the payload is a standing rejection; `depth` and `ask_human`, when to hand an intended
-change to a human: [review depth](review-depth.md); `diff`, what moved, cut to 40 lines
+change to a human: [review depth](review-depth.md); `same_as`, the behaviors with the same payload on
+the other side of a probable rename (a REMOVED one names what captured its payload,
+a NEW one the REMOVED ones it matches); `diff`, what moved, cut to 40 lines
 per change and 400 per call, and `diff_cut`, the lines left out - reading it marks
 nothing reviewed, unlike `nightward review`), `not_run` (`{name, group}` of approved behaviors
 whose test was deselected) and `narrowed`, `judged_same`, `stale`, `incomplete`
