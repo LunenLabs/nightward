@@ -464,6 +464,8 @@ function renderCard(it) {
   head.appendChild(el("span", { cls: "card-name", text: it.name }));
   card.appendChild(head);
 
+  const renamed = sameAsNote(it);
+  if (renamed) card.appendChild(el("p", { cls: "rename-note", text: renamed }));
   if (it.judged) card.appendChild(judgeNote(it, "ruled DIFFERENT"));
 
   renderDiff(card, it.diff);
@@ -472,6 +474,21 @@ function renderCard(it) {
   cardCommands(it).forEach(function (c) { actions.appendChild(copyChip(c[0], c[1])); });
   card.appendChild(actions);
   return card;
+}
+
+function namesText(names, limit) {
+  return names.slice(0, limit).join(", ") +
+    (names.length > limit ? " and " + (names.length - limit) + " more" : "");
+}
+
+// A NEW and a REMOVED behavior with the same payload: probably a rename. A hint
+// for the reviewer, never a decision - the REMOVED card still drops it by name (D29).
+function sameAsNote(it) {
+  const other = it && it.same_as;
+  if (!other || !other.length) return null;
+  const names = namesText(other, 3);
+  return it.kind === "NEW" ? "same payload as REMOVED " + names + ": renamed?"
+    : "its payload is captured as " + names + " now: renamed?";
 }
 
 // [label, command] chips of one card. Dropping a REMOVED behavior is always an
@@ -587,6 +604,38 @@ function renderJudgedSame(report) {
   box.appendChild(details);
 }
 
+// What the gate can't see ([tool.nightward] coverage): {headline, missing,
+// unreadable}, null without coverage. Information only - "ran in a capture
+// test" is not "protected", and it never moves the verdict.
+function coverageLines(cov) {
+  if (!cov) return null;
+  const missing = cov.functions - cov.executed;
+  const shown = (cov.uncovered || []).slice(0, 8);   // the list is capped; the count is exact
+  return {
+    headline: cov.executed + " of " + cov.functions + " public functions in " +
+      (cov.roots || []).join(", ") + " ran in a capture test",
+    missing: missing > 0 ? "not run by any capture test (" + missing + "): " + shown.join(", ") +
+      (missing > shown.length ? " and " + (missing - shown.length) + " more" : "") +
+      " - a change there can't breach the gate" : null,
+    unreadable: (cov.unreadable || []).length ? "could not parse: " + cov.unreadable.join(", ") : null,
+  };
+}
+
+function renderCoverage(report) {
+  const box = $("coverage");
+  clear(box);
+  const lines = coverageLines(report && report.capture_coverage);
+  box.hidden = !lines;
+  if (!lines) return;
+  const info = el("div", { cls: "warn warn-info" });
+  info.appendChild(el("strong", { text: "Capture coverage " }));
+  info.appendChild(document.createTextNode(lines.headline));
+  for (const line of [lines.missing, lines.unreadable]) {
+    if (line) info.appendChild(el("p", { cls: "coverage-line", text: line }));
+  }
+  box.appendChild(info);
+}
+
 // ---- entry ----------------------------------------------------------------
 function render(data) {
   setQuoting(data.quoted);
@@ -609,6 +658,7 @@ function render(data) {
       runCommand(data.meta));
     return;
   }
+  renderCoverage(report);
 
   const changes = allChanges(report);
 

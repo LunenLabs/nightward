@@ -149,6 +149,7 @@ code { font-family: var(--mono); }
 .warn-info { border-left: 3px solid var(--blue); }
 .warn-alert { border-left: 3px solid var(--amber); }
 .warn-alert strong { color: var(--amber); }
+.coverage-line { margin: 6px 0 0; overflow-wrap: anywhere; }
 
 /* ---- empty states ---- */
 .empty {
@@ -275,6 +276,9 @@ code { font-family: var(--mono); }
   border-radius: var(--radius-sm); padding: 8px 12px;
 }
 .judge-note strong { color: var(--blue); font-family: var(--mono); font-weight: 600; }
+
+/* rename hint: a NEW and a REMOVED with the same payload (display only) */
+.rename-note { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 
 /* ---- diff ---- */
 .diff {

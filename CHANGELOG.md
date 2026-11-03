@@ -17,6 +17,11 @@ behavior; every such change is listed under "Upgrading").
   `approve --all` prints the `nightward approve --remove` command for it. It is a
   hint only: no bulk approval drops a REMOVED behavior, and `same_as` is in no
   token or verdict.
+- **The dashboard shows rename hints and capture coverage.** `nightward view`
+  prints the rename hint on both cards (the REMOVED card still drops it only by
+  its own `approve --remove` command) and, with `[tool.nightward] coverage` set,
+  a panel above the counts: how many public functions ran in a capture test and
+  the first ones that didn't. Both are information only.
 
 ## [0.3.5] - 2026-11-02
 
