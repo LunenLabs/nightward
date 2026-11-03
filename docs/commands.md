@@ -41,7 +41,7 @@ nightward approve promote pending behavior(s) into the baseline
                   A REMOVED behavior whose payload this run captured under another
                   name reads `(its payload is captured as NEW_NAME now: renamed?)`,
                   and the kept list prints its `approve --remove` command - a hint,
-                  never a removal
+                  never a removal (the dashboard shows it on both cards)
                   `--all` and `--group` leave behaviors of an `exhaustive` group
                   (review-depth.md) and name them: approve those one name at a time.
                   It promotes only changes a human was shown, exactly as shown,
@@ -108,7 +108,8 @@ capture coverage: 31 of 40 public functions in src/app ran in a capture test
 ```
 
 `status --json` and both MCP tools carry it as `capture_coverage` (`roots`,
-`functions`, `executed`, `uncovered`: at most 200 names, the counts are exact).
+`functions`, `executed`, `uncovered`: at most 200 names, the counts are exact), and
+`nightward view` shows the same lines above the counts.
 A public function is a module-level function, or a method of a module-level class,
 whose name doesn't start with `_`. Test modules and `conftest.py` don't count.
 "Ran" means called while a test that uses `behavior` or `@capture` ran (setup, call,
